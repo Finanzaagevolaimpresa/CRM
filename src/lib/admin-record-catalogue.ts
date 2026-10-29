@@ -18,7 +18,7 @@ export const adminRecordCatalogue = [
     'source leadSource interest declaredInvestment requestedAmount availableBudget commercialStatus notes commercialProposal',
     { href: '/leads/{id}', guidance: 'Contatti, assegnazione, conversione, archivio e cestino sono gestiti nella scheda lead e nella inbox, conservando identità e SLA.' }),
   item('Client', 'Clienti', 'Clienti e anagrafiche', 'client.write', 'displayName type status notes',
-    { trash: 'soft', href: '/clients/{id}', guidance: 'Il collegamento di origine al lead rimane una prova della conversione. I responsabili si gestiscono dalla scheda cliente.' }),
+    { create: true, trash: 'soft', href: '/clients/{id}', guidance: 'Se il cliente proviene da un lead esistente, usa la conversione dalla scheda lead per conservarne il collegamento. Una nuova anagrafica manuale non inventa una conversione. I responsabili si gestiscono dalla scheda cliente.' }),
   item('Company', 'Aziende', 'Clienti e anagrafiche', 'company.write',
     'clientId name vatNumber taxCode rea pec legalAddress operatingAddress region province city legalForm atecoCode atecoDescription incorporationDate activityStartDate activityStatus employees annualRevenue durcStatus taxRegime notes',
     { create: true, trash: 'soft', href: '/companies/{id}' }),

@@ -136,10 +136,20 @@ test('new proof version after preview is rejected with no financial update', asy
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('La prova non è disponibile'); await unpaid();
 });
-test('missing personal step-up redirects without recording collection', async ({ page }) => {
+test('missing personal step-up preserves the exact collection preview and resumes once after confirmation', async ({ page }) => {
   await login(page, f.admin.email, false); await prepare(page);
+  const date = await page.getByLabel('Data e ora effettive dell’incasso', { exact: true }).inputValue();
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
-  await expect(page).toHaveURL(/\/settings\/security/); await unpaid();
+  await expect(page.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible(); await unpaid();
+  await expect(page.getByLabel('Data e ora effettive dell’incasso', { exact: true })).toHaveValue(date);
+  await expect(page.getByLabel('Prova dell’incasso', { exact: true })).toHaveValue(f.command.documentVersionId);
+  await expect(page.getByRole('checkbox')).toBeChecked();
+  await page.getByLabel('Password corrente', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible(); await unpaid();
+  await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Incasso registrato', exact: true })).toBeVisible();
+  expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(1);
 });
 test('unavailable session storage prevents an unrecoverable submission', async ({ page }) => {
   await login(page); await prepare(page);

@@ -11,6 +11,10 @@ import type { Permission } from './permissions';
 import { isSensitiveDocument } from './access-control';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { ordinaryDocumentVisibilityAllows } from './technical-document-visibility';
+import { loadActivePrivilegedStepUpKey, lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
+import { loadTechnicalPrivateItemRecord } from './technical-private-item-persistence';
+import { lockTechnicalAssignmentContext } from './technical-assignment-context';
+import { admitsTechnicalAssignmentManager } from './technical-assignment-permissions';
 
 type Tx = Prisma.TransactionClient;
 async function withSerializableTransaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
@@ -133,6 +137,25 @@ function admittedRow(actor: Awaited<ReturnType<typeof updateActor>>['actor'], ro
 }
 
 type Actor = Awaited<ReturnType<typeof updateActor>>['actor'];
+const privateFields: Record<string, string[]> = {
+  Task: ['title', 'description', 'priority', 'dueAt', 'status'],
+  DocumentChecklistItem: ['title', 'notes', 'status', 'active'],
+};
+async function admitPrivateItem(tx: Tx, actor: Actor, model: string, row: Row) {
+  const [authority] = await tx.$queryRaw<Array<{ userId: string; enabled: boolean }>>`
+    SELECT "userId",enabled FROM "TechnicalAssignmentAuthority" WHERE id='technical-assignment' FOR SHARE`;
+  if (!authority?.enabled || authority.userId !== actor.id || !recordUpdatePermission(actor, 'service.write')) fail('DENIED');
+  const key = await loadActivePrivilegedStepUpKey(tx);
+  if (!key || !await lockRegisteredPrivilegedStepUpKey(tx, key)) fail('DENIED');
+  const origin = await tx.technicalPrivateItemOrigin.findUnique({ where: { kind_itemId: {
+    kind: model === 'Task' ? 'Task' : 'ChecklistItem', itemId: row.id } }, select: { commandId: true } });
+  const saved = origin ? await loadTechnicalPrivateItemRecord(tx, { key }, origin.commandId) : null;
+  if (!saved || !admitsTechnicalAssignmentManager(actor, saved.command.target.kind)) fail('DENIED');
+  const context = await lockTechnicalAssignmentContext(tx, saved.command.target);
+  if (!context?.operational || context.clientId !== saved.origin.clientId || context.projectId !== saved.origin.projectId
+    || context.clientServiceId !== saved.origin.serviceId) fail('CONTEXT');
+  return saved.command.target;
+}
 /** Walk ordinary parent links before exposing or changing a child. A child
  * without clientId must not bypass an exclusion on its project or document. */
 async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Row, seen = new Set<string>()) {
@@ -142,7 +165,7 @@ async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Ro
   if (!admittedRow(actor, row)) fail('DENIED');
   const policy = adminRecordCatalogue.find(item => item.model === model);
   if (policy && !recordUpdatePermission(actor, readPermission(policy))) fail('DENIED');
-  if (['Task', 'DocumentChecklistItem'].includes(model) && row.technicalPrivate === true) fail('DENIED');
+  if (privateFields[model] && row.technicalPrivate === true) await admitPrivateItem(tx, actor, model, row);
   if (model === 'Document') {
     if (!ordinaryDocumentVisibilityAllows(row.visibilityLevel)
       || !await canAccessFinancialDocument(tx, actor, row as FinancialDocumentMetadata & { id: string })
@@ -202,7 +225,7 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
     if (!targetPolicy || !after.entityId) fail('CONTEXT');
     await lock(tx, targetPolicy.model, String(after.entityId));
     const target = await delegate(tx, targetPolicy.model).findUnique({ where: { id: String(after.entityId) } });
-    if (!target || target.deletedAt) fail('CONTEXT');
+    if (!target || target.deletedAt || target.technicalPrivate === true) fail('CONTEXT');
     await assertContextVisible(tx, actor, targetPolicy.model, target);
   }
   if (before && ['Client', 'Company', 'Project', 'TechnicalPractice', 'ClientService', 'GrantAssessment', 'Document'].includes(policy.model)
@@ -220,6 +243,8 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
 }
 
 async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, changed: string[]) {
+  if (before.technicalPrivate === true && privateFields[policy.model]
+    && changed.some(name => !privateFields[policy.model].includes(name))) fail('HISTORY');
   if (archives[policy.model] && changed.every(key => key === 'status')) return;
   if (policy.model === 'CommercialLeadSlaPolicyVersion') fail('HISTORY');
   if (policy.model === 'CommercialOffer' && changed.some(key => !['notes', 'followUpAt', 'followUpNote', 'outcomeNote'].includes(key))
@@ -292,6 +317,7 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       }
       if (policy.model === 'Document' && before && isFinancialDocument(before as FinancialDocumentMetadata)
         && !isFinancialDocument({ ...before, ...values } as FinancialDocumentMetadata)) fail('HISTORY');
+      if (policy.model === 'Document' && values.status === 'archiviato' && before?.status !== 'archiviato') fail('INVALID');
       if (!admittedRow(current.actor, { ...(before ?? { id: command.id }), ...values })) fail('DENIED');
       if (Object.hasOwn(values, 'assignedToId') && values.assignedToId !== before?.assignedToId
         && !recordUpdatePermission(current.actor, 'service.assign')) fail('DENIED');
@@ -404,6 +430,7 @@ async function referenceRows(tx: Tx, actor: Actor, model: string, query = '', pa
   const names = fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'email', 'contractNumber', 'code'].includes(field.name));
   const rows = await delegate(tx, model).findMany({ take: 51, skip: (page - 1) * 50, orderBy: { id: 'asc' },
     where: { ...(fields.some(field => field.name === 'deletedAt') ? { deletedAt: null } : {}),
+      ...(fields.some(field => field.name === 'technicalPrivate') ? { technicalPrivate: false } : {}),
       ...(fields.some(field => field.name === 'active') ? { active: true } : {}),
       ...(query ? { OR: [{ id: query }, ...names.map(field => ({ [field.name]: { contains: query, mode: 'insensitive' } }))] } : {}) },
     ...(model === 'User' ? { select: { id: true, name: true, email: true, active: true } } : {}) });
@@ -433,6 +460,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
   const values: Record<string, string> = {}, result: AdminField[] = [];
   let editable = [...policy.fields];
   if (row) {
+    if (row.technicalPrivate === true && privateFields[policy.model]) editable = privateFields[policy.model];
     if ((policy.model === 'PreAnalysis' && !['da_avviare', 'raccolta_dati', 'bozza_generata'].includes(String(row.status)))
       || (policy.model === 'Dossier' && !['bozza_ai', 'bozza_consulente'].includes(String(row.status)))
       || (policy.model === 'ClientDossier' && (row.currentVersionId || row.approvedVersionId || row.status !== 'bozza'))
@@ -481,7 +509,9 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
       descriptor.help = 'L’archiviazione conserva contenuto, autori e approvazioni. Il ripristino è ammesso solo allo stato registrato prima dell’archiviazione, senza altre modifiche.';
     } else if (field.kind === 'enum') {
       descriptor.type = 'select'; descriptor.options = Prisma.dmmf.datamodel.enums.find(item => item.name === field.type)!.values
-        .filter(item => policy.model !== 'Project' || item.name !== 'archiviato').map(item => ({ value: item.name, label: item.name.replaceAll('_', ' ') }));
+        .filter(item => (policy.model !== 'Project' || item.name !== 'archiviato')
+          && (policy.model !== 'Document' || name !== 'status' || item.name !== 'archiviato' || row?.status === 'archiviato')).map(item => ({ value: item.name, label: item.name.replaceAll('_', ' ') }));
+      if (policy.model === 'Document' && name === 'status') descriptor.help = 'Lo stato descrive la verifica del documento. Per sospendere l’accesso usa «Sposta nel cestino recuperabile», poi «Ripristina» quando necessario.';
     } else if (name === 'priority') {
       descriptor.type = 'select'; descriptor.options = ['bassa', 'media', 'alta', 'urgente'].map(value => ({ value, label: value }));
     } else if (policy.model === 'Client' && name === 'status') {
@@ -504,6 +534,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     const row = existing ?? (removed?.before as unknown as Row | undefined) ?? null;
     if (creating ? !policy.create || Boolean(row) : !row) fail('DENIED');
     if (row) await assertContextVisible(tx, current.actor, model, row);
+    const privateTarget = row?.technicalPrivate === true && privateFields[model] ? await admitPrivateItem(tx, current.actor, model, row) : null;
     const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
       select: { commandId: true, operation: true, createdAt: true, reason: true, actor: { select: { name: true, email: true } } } });
     const memberships = model === 'Person' ? await tx.companyPerson.findMany({ where: { personId: id } }) : [];
@@ -527,7 +558,8 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     await current.finish();
     return { model, id, version: adminRecordVersion(row), label: creating ? `Nuovo · ${policy.label}` : label(row!),
       ...form, create: creating, trash: Boolean(policy.trash), deleted: Boolean(row?.deletedAt || removed),
-      guidance: policy.guidance ?? null, href: policy.href.replace('{id}', id), relationships, restoringRevision: revisionId ?? null,
+      guidance: privateTarget ? 'Elemento tecnico privato: puoi correggere il contenuto, archiviare e ripristinare entro la tua autorità personale. Origine e collegamenti restano conservati. I cambi di stato e lifecycle invalidano i perimetri precedenti: dopo il ripristino verifica e conferma di nuovo gli incarichi necessari.' : policy.guidance ?? null,
+      href: privateTarget ? privateTarget.kind === 'Project' ? `/projects/${privateTarget.targetId}/assignments` : `/technical-office/practices/${privateTarget.targetId}/assignments` : policy.href.replace('{id}', id), relationships, restoringRevision: revisionId ?? null,
       history: history.map(item => ({ id: item.commandId, action: item.operation, at: item.createdAt.toISOString(), reason: item.reason,
         actor: `${item.actor.name} · ${item.actor.email}`, canRestore: !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
   });

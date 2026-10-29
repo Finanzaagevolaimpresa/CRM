@@ -36,10 +36,12 @@ test('native lead, standalone client and internal composition preserve context, 
   await draft(leadForm,f.box.id,f.box.address,'Native lead message');
   const leadMessage=await leadForm.locator('input[name="messageId"]').inputValue();
   await leadForm.getByRole('button',{name:'Salva bozza',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('result=RECORDED&focus='+leadMessage));
   await expect.poll(()=>db.approvedCommunication.count({where:{id:leadMessage,leadId:lead.id,contextKind:'LEAD',clientId:null}})).toBe(1);
   await page.goto('/clients/'+f.client.id);await page.getByRole('link',{name:'Scrivi email',exact:true}).click();
   const clientForm=freshDraft();await draft(clientForm,f.box.id,f.box.address,'Native client message');await clientForm.locator('input[name="to"]').fill('client-native@invalid.test');
   const clientMessage=await clientForm.locator('input[name="messageId"]').inputValue();await clientForm.getByRole('button',{name:'Salva bozza',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('result=RECORDED&focus='+clientMessage));
   await expect.poll(()=>db.approvedCommunication.count({where:{id:clientMessage,contextKind:'CLIENT',clientId:f.client.id,technicalPracticeId:null,readinessId:null}})).toBe(1);
 
   await page.goto('/communications');await page.getByLabel('Titolo della comunicazione interna').fill('Native private conversation');
@@ -69,6 +71,7 @@ test('native lead, standalone client and internal composition preserve context, 
   await internalForm.locator('input[name="contextFileId"][value="'+file.id+'"]').check();
   const internalMessage=await internalForm.locator('input[name="messageId"]').inputValue();
   await internalForm.getByRole('button',{name:'Salva bozza',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('result=RECORDED&focus='+internalMessage));
   await expect.poll(()=>db.approvedCommunication.count({where:{id:internalMessage,internalThreadId:threadId,clientId:null}})).toBe(1);
   const snapshot=(await db.communicationVersion.findUniqueOrThrow({where:{messageId_revision:{messageId:internalMessage,revision:1}}})).snapshot as {schema:string;to:string[];attachments:Array<{source:string;sha256:string}>};
   expect(snapshot.schema).toBe('fai.approved-email.v2');expect(snapshot.to).toEqual([member.email]);expect(snapshot.attachments).toMatchObject([{source:'CONTEXT_FILE',sha256}]);

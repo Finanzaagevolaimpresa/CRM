@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { previewPaymentCollectionAction, confirmPaymentCollectionAction, verifyPaymentCollectionAction } from '@/lib/payment-collection-actions';
 import type { PaymentCollectionCommand, PaymentCollectionPreview } from '@/lib/payment-collection-contract';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 type Setup = { clientId: string; paymentId: string; client: string; contract: string; amount: string;
   reconciliationOnly: boolean; documents: Array<{ id: string; title: string; version: number }> };
@@ -22,6 +23,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
   const [confirmed, setConfirmed] = useState(false), [pending, setPending] = useState(false);
   const [uncertainResponse, setUncertain] = useState(false), [message, setMessage] = useState('');
   const [result, setResult] = useState<{ clientId: string; paymentId: string } | null>(null);
+  const [needsStepUp, setNeedsStepUp] = useState(false);
   const busy = useRef(false), commandId = useRef<string | null>(null);
   const key = `fai-payment-collection:${setup.clientId}:${setup.paymentId}`;
   const saved = useSyncExternalStore(subscribe, () => {
@@ -57,6 +59,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     try {
       const response = await confirmPaymentCollectionAction(command, preview.digest);
       if (response.ok) { setResult(response.result); clear(); }
+      else if ('stepUpRequired' in response && response.stepUpRequired) { clear(); setNeedsStepUp(true); setMessage(response.message); }
       else { setMessage(response.message); setUncertain(response.uncertain); if (!response.uncertain) { clear(); changed(); setMessage(response.message); } }
     } catch { setUncertain(true); setMessage('La risposta non è arrivata. Verifica l’esito prima di ripetere la conferma.'); }
     finally { busy.current = false; setPending(false); }
@@ -79,6 +82,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     <Link className={button} href={`/clients/${result.clientId}#servizi-acquistati`}>Apri servizi acquistati</Link>
   </section>;
   return <div className="grid min-w-0 gap-5" data-testid="payment-collection-form" data-interactive-ready={ready}>
+    {needsStepUp && <InlinePrivilegedConfirmation />}
     {message && <p role="status" className="rounded-xl bg-amber-50 p-4">{message}</p>}
     {uncertain && <div className="grid gap-3"><p>Una conferma precedente è da verificare.</p><button className={button} disabled={pending} onClick={verify}>Verifica esito</button></div>}
     {setup.reconciliationOnly && <p className="rounded-xl bg-blue-50 p-4">Questa rata non è disponibile per una nuova conferma. Puoi verificare l’esito di una richiesta in sospeso oppure tornare all’elenco dei pagamenti.</p>}

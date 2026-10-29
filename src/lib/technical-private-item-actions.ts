@@ -5,7 +5,7 @@ import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation, PrivilegedAdmissionRequired } from './privileged-access';
 import { TechnicalAssignmentError } from './technical-assignment-transaction';
 import { technicalTargetReference, technicalManagementPath } from './technical-assignment-display';
 import { previewPrivateTechnicalItem, confirmPrivateTechnicalItem, readPrivateTechnicalItemOutcome } from './technical-private-item-service';
@@ -29,21 +29,27 @@ async function proof() {
 }
 export async function preparePrivateTechnicalItem(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
   const session = await requireSession();
-  await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE');
   try { await origin();
+    await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true });
     const preview = await previewPrivateTechnicalItem(prisma, session, await proof(), json(form, 'command'));
     return { ok: true, message: 'Controlla il contenuto prima di creare l’elemento privato.', preview };
-  } catch { return { ok: false, message: 'Riepilogo non disponibile. Verifica i dati e ricarica per controllare sessione, contesto e permessi.' }; }
+  } catch (error) {
+    if (error instanceof PrivilegedAdmissionRequired) return error.formState;
+    return { ok: false, message: 'Riepilogo non disponibile. Verifica i dati e ricarica per controllare sessione, contesto e permessi.' };
+  }
 }
 export async function savePrivateTechnicalItem(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
   const session = await requireSession();
-  await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE');
   try { await origin();
+    await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true });
     const receipt = await confirmPrivateTechnicalItem(prisma, session, await proof(), json(form, 'command'),
       String(form.get('token') ?? ''), form.get('confirmed') === 'on');
     revalidatePath(technicalManagementPath(receipt.target));
     return { ok: true, message: 'Elemento privato creato. Puoi ora scegliere separatamente chi potrà utilizzarlo.', outcome: { status: 'RECORDED', receipt } };
-  } catch { return { ok: false, uncertain: true, message: 'Esito non confermato. Verifica la ricevuta prima di creare un altro elemento.' }; }
+  } catch (error) {
+    if (error instanceof PrivilegedAdmissionRequired) return error.formState;
+    return { ok: false, uncertain: true, message: 'Esito non confermato. Verifica la ricevuta prima di creare un altro elemento.' };
+  }
 }
 export async function checkPrivateTechnicalItem(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
   const session = await requireSession();

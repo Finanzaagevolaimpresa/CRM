@@ -53,6 +53,7 @@ test('reference search reaches records beyond the initial window and retains ord
   await db.technicalAssignmentAuthority.create({ data: { id: 'technical-assignment', userId: admin.user.id, enabled: true, revision: 1 } });
   const target = technicalTarget(await technicalFixture(db, admin));
   const context = await loadTechnicalPrivateItemCreationContext(db, admin.session, target);
+  const unrelatedAdmin = await syntheticPerson(db, 'Altro Admin privo di autorità tecnica', 'admin');
   for (const kind of ['Task', 'DocumentChecklistItem'] as const) {
     const common = { commandId: randomUUID(), itemId: randomUUID(), target, expectedContextSha256: context.contextSha256 };
     const command: TechnicalPrivateItemCommand = kind === 'Task' ? { ...common, kind, values: { title: `${prefix} private`, description: null, priority: 'media', dueAt: null } }
@@ -60,7 +61,25 @@ test('reference search reaches records beyond the initial window and retains ord
     const preview = await previewPrivateTechnicalItem(db, admin.session, proof(), command);
     await confirmPrivateTechnicalItem(db, admin.session, proof(), command, preview.token, true);
     if (kind === 'Task') assert.equal((await searchAdminRecordReferences(db, admin.session, { model: 'Deadline', field: 'entityId', entityType: 'Task', query: command.itemId, page: 1 })).options.length, 0);
-    await assert.rejects(loadAdminRecord(db, admin.session, kind, command.itemId), /DENIED/);
+    await assert.rejects(loadAdminRecord(db, unrelatedAdmin.session, kind, command.itemId), /DENIED/);
+    const original = await db.technicalPrivateItemOrigin.findUniqueOrThrow({ where: { commandId: command.commandId } });
+    const beforeScope = await db.technicalWorkItemGeneration.findUniqueOrThrow({ where: { kind_itemId: { kind: command.kind, itemId: command.itemId } } });
+    const loaded = await loadAdminRecord(db, admin.session, kind, command.itemId);
+    assert(loaded.fields.find(field => field.name === 'clientId')?.readOnly);
+    const patch = { commandId: randomUUID(), model: kind, id: command.itemId, expectedVersion: loaded.version, operation: 'UPDATE' as const,
+      reason: 'Correzione privata sintetica del titolare', values: { ...loaded.values, title: 'Titolo privato corretto' } };
+    await save(patch);
+    const updated = await loadAdminRecord(db, admin.session, kind, command.itemId);
+    await assert.rejects(save({ ...patch, commandId: randomUUID(), expectedVersion: updated.version, values: { ...updated.values, clientId: ids[0] } }), /HISTORY/);
+    assert.equal(updated.values.title, 'Titolo privato corretto');
+    await save({ ...patch, commandId: randomUUID(), expectedVersion: updated.version, operation: 'TRASH', values: {} });
+    const archived = await loadAdminRecord(db, admin.session, kind, command.itemId);
+    assert.equal(archived.deleted, true);
+    await save({ ...patch, commandId: randomUUID(), expectedVersion: archived.version, operation: 'RESTORE', values: {} });
+    assert.equal((await loadAdminRecord(db, admin.session, kind, command.itemId)).deleted, false);
+    const afterScope = await db.technicalWorkItemGeneration.findUniqueOrThrow({ where: { kind_itemId: { kind: command.kind, itemId: command.itemId } } });
+    assert(afterScope.scopeGeneration >= beforeScope.scopeGeneration + 2);
+    assert.deepEqual(await db.technicalPrivateItemOrigin.findUniqueOrThrow({ where: { commandId: command.commandId } }), original);
   }
 });
 
@@ -325,4 +344,24 @@ test('the database rejects revision tampering and unauthorized journal writers',
   await assert.rejects(db.adminRecordRevision.create({ data: { commandId: randomUUID(), actorId: technician.user.id, sessionId: technician.session.sessionId!,
     model: 'Project', recordId: f.project.id, operation: 'RECTIFY', requestHash: 'a'.repeat(64), beforeHash: 'a'.repeat(64), afterHash: 'a'.repeat(64),
     before: Prisma.JsonNull, after: Prisma.JsonNull, reason: 'Non consentito' } }));
+});
+
+test('document corrections and recoverable deletion preserve the exact original file and all versions', options, async () => {
+  const f = await fixture();
+  const doc = await db.document.create({ data: { clientId: f.client.id, projectId: f.project.id, type: 'altro', title: 'Documento sintetico',
+    fileName: 'synthetic.txt', mimeType: 'text/plain', sizeBytes: 10, checksum: 'a'.repeat(64), storagePath: 'synthetic/not-read.txt', uploadedById: admin.user.id } });
+  const version = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum: doc.checksum!, storagePath: doc.storagePath } });
+  await save(await command('Document', doc.id, { title: 'Titolo corretto', status: 'da_verificare', validUntil: '2030-10-29T12:00:00.000Z' }));
+  assert.equal((await loadAdminRecord(db, admin.session, 'Document', doc.id)).values.status, 'da_verificare');
+  await save(await command('Document', doc.id, {}, 'TRASH'));
+  assert.equal((await listAdminRecords(db, admin.session, 'Document', doc.id)).rows.length, 0);
+  assert.equal((await listAdminRecords(db, admin.session, 'Document', doc.id, 1, true)).rows.length, 1);
+  await save(await command('Document', doc.id, {}, 'RESTORE'));
+  const restored = await db.document.findUniqueOrThrow({ where: { id: doc.id } });
+  assert.equal(restored.deletedAt, null); assert.equal(restored.title, 'Titolo corretto'); assert.equal(restored.status, 'da_verificare');
+  assert.equal(restored.checksum, doc.checksum); assert.equal(restored.storagePath, doc.storagePath); assert.equal(restored.uploadedById, doc.uploadedById);
+  assert.deepEqual(await db.documentVersion.findUniqueOrThrow({ where: { id: version.id } }), version);
+  const manual = await command('Client', randomUUID(), { displayName: 'Anagrafica manuale sintetica', type: 'societa', status: 'attivo' }, 'CREATE');
+  await save(manual); const client = await db.client.findUniqueOrThrow({ where: { id: manual.id } });
+  assert.equal(client.leadId, null); assert.equal(client.salesOwnerId, null); assert.equal(client.consultantId, null);
 });

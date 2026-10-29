@@ -69,7 +69,19 @@ test('native preview creates nothing; exact private task and checklist save with
     const title = kind === 'Task' ? 'Relazione tecnica privata' : 'Documenti tecnici da preparare';
     const command = await preview(page, row, kind, title);
     expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
-    await screenshot(page, kind.toLowerCase() + '-creation-preview'); await save(page);
+    await screenshot(page, kind.toLowerCase() + '-creation-preview');
+    if (kind === 'Task') {
+      await page.context().clearCookies({ name: 'fai_crm_privileged_step_up' });
+      await page.getByRole('button', { name: 'Crea elemento privato', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+      expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
+      await expect(page.getByLabel('Confermo il contenuto e la creazione privata.', { exact: true })).toBeChecked();
+      await page.getByLabel('Password corrente', { exact: true }).fill(password);
+      await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+      await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+      expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
+    }
+    await save(page);
     expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(1);
     expect(await db.auditLog.count({ where: { id: command.commandId } })).toBe(1);
     await screenshot(page, kind.toLowerCase() + '-creation-receipt');

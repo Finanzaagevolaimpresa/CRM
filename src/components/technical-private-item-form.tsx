@@ -5,6 +5,7 @@ import type { TechnicalPrivateItemCommand } from '@/lib/technical-private-item-c
 import type { TechnicalPrivateItemAction, TechnicalPrivateItemState } from '@/lib/technical-private-item-ui-state';
 import { RomeDateTimeInput } from './rome-date-time-input';
 import { operationalRomeTime } from '@/lib/operational-time';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 const initial: TechnicalPrivateItemState = { ok: false, message: '' };
 const subscribe = () => () => {}, client = () => true, server = () => false;
@@ -24,7 +25,7 @@ export function TechnicalPrivateItemRecovery({ target, commandId, action }: {
 function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<TechnicalPrivateItemState['preview']>;
   action: TechnicalPrivateItemAction; recovery: TechnicalPrivateItemAction; edit: () => void }) {
   const ready = useSyncExternalStore(subscribe, client, server), [state, submit, pending] = useActionState(action, initial);
-  const [sent, setSent] = useState(false), locked = !ready || sent || pending, c = preview.command;
+  const [sent, setSent] = useState(false), locked = !ready || (sent && !state.stepUpRequired) || pending, c = preview.command;
   return <section aria-label="Riepilogo creazione privata" className="min-w-0 space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4">
     <h2 className="text-xl font-bold">Conferma la creazione privata</h2>
     <dl className="min-w-0 space-y-2"><dt className="font-semibold">Tipo</dt><dd>{c.kind === 'Task' ? 'Attività' : 'Voce checklist'}</dd>
@@ -33,12 +34,14 @@ function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<Tec
       {c.kind === 'Task' && <><dt className="font-semibold">Priorità</dt><dd>{c.values.priority}</dd><dt className="font-semibold">Scadenza</dt><dd>{operationalRomeTime(c.values.dueAt)}</dd></>}
     </dl><p>L’elemento appartiene solo a questo progetto o pratica. La scelta di persone e permessi avviene separatamente.</p>
     <button type="button" disabled={locked} className="font-semibold underline disabled:opacity-50" onClick={edit}>Rivedi il contenuto</button>
-    <form action={submit} className="space-y-3" onSubmit={() => { const url = new URL(window.location.href);
+    <form action={submit} className="space-y-3" onReset={event => event.preventDefault()} onSubmit={() => { const url = new URL(window.location.href);
       url.searchParams.set('privateItemDecision', c.commandId); window.history.replaceState(window.history.state, '', url); setSent(true); }}>
       <input type="hidden" name="command" value={JSON.stringify(c)} /><input type="hidden" name="token" value={preview.token} />
       <label className="flex items-start gap-2"><input type="checkbox" name="confirmed" required />Confermo il contenuto e la creazione privata.</label>
       <button className={button} disabled={locked}>Crea elemento privato</button></form><p role="status">{state.message}</p>
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}
     {state.outcome?.status === 'RECORDED' && <a className="font-semibold underline" href={technicalManagementPath(c.target)}>Scegli persone e perimetri</a>}
+    {state.outcome?.status === 'RECORDED' && <a className="font-semibold underline" href={`/admin/records/${c.kind === 'Task' ? 'Task' : 'DocumentChecklistItem'}/${c.itemId}`}>Riapri elemento e correzioni Admin</a>}
     {state.uncertain && <TechnicalPrivateItemRecovery target={c.target} commandId={c.commandId} action={recovery} />}
   </section>;
 }
@@ -66,7 +69,7 @@ export function TechnicalPrivateItemForm({ target, contextSha256, initialCommand
         onChange={e => setPriority(e.target.value as typeof priority)}>{['bassa', 'media', 'alta', 'urgente'].map(p => <option key={p} value={p}>{p}</option>)}</select></label>
         <RomeDateTimeInput label="Scadenza facoltativa" className={control} value={dueAt} disabled={locked} onChange={setDueAt} /></div>}
       <button className={button} disabled={locked || !title.trim() || (kind === 'Task' && invalidDate)}>Prepara riepilogo</button><p role="status">{state.message}</p>
-    </form>{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction}
+    </form>{state.stepUpRequired && <InlinePrivilegedConfirmation />}{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction}
       edit={() => setIdentity({ commandId: crypto.randomUUID(), itemId: crypto.randomUUID() })} />}
   </section>;
 }
