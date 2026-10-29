@@ -4,5 +4,6 @@ export function DocumentFileLinks({ id }: { id: string }) {
   return <span className="flex flex-wrap items-center gap-3 font-semibold text-fai-blue">
     <a href={`${base}/view`} target="_blank" rel="noopener noreferrer" className="underline">Visualizza</a>
     <a href={`${base}/download`} className="underline">Scarica</a>
+    <a href={`${base}/versions`} className="underline">Versioni</a>
   </span>;
 }
