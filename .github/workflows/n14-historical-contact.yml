@@ -70,6 +70,10 @@ jobs:
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
       - name: Qualify SQL70 preservation and atomic failure
         run: bash scripts/n14-historical/qualify-migration.sh
+      - name: Apply the current schema71 after the pinned SQL70 qualification
+        run: |
+          npm run prisma:migrate:deploy
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
       - name: Qualify historical contact and exact conversion persistence
         shell: bash
         run: |

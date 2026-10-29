@@ -150,7 +150,8 @@ async function migrationChain(upgrade: boolean) {
   const allNames = readdirSync("prisma/migrations")
     .filter((name) => /^\d/.test(name))
     .sort();
-  assert.equal(allNames.length, 70, "the current candidate must contain exactly 70 migrations");
+  assert.equal(allNames.length, 71, "the current candidate must contain exactly 71 migrations");
+  assert.equal(allNames[70], "20261028180000_record_deadline_reminders_v1");
   assert.equal(allNames[45], "20260914130000_practice_engagement_readiness_v1");
   assert.equal(allNames[47], "20260924100000_admin_client_read_perimeters_v1");
   const names = allNames.slice(0, 33);

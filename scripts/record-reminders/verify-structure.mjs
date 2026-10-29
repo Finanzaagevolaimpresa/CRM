@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const s = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+assert.equal(s.tables.length, 2); assert(s.tables.every(t => t.ownerMatches && t.kind === 'r' && t.persistence === 'p'));
+assert.equal(s.columns.length, 15);
+assert.equal(s.triggers.length, 13); assert(s.triggers.every(t => t.enabled === 'O' && t.functionSchema === 'public'));
+assert.equal(s.triggers.filter(t => t.deferrable && t.initiallyDeferred).length, 7);
+assert.equal(s.functions.length, 3); assert(s.functions.every(f => f.ownerMatches && !f.securityDefiner && f.language === 'plpgsql' && /^[a-f0-9]{64}$/.test(f.bodySha256)));
+assert(s.constraints.every(c => c.validated)); assert.equal(s.constraints.filter(c => c.type === 'f').length, 7);
+assert.equal(s.indexes.length, 8);
+console.log('SCHEMA71_STRUCTURE_JSON=' + JSON.stringify(s));
