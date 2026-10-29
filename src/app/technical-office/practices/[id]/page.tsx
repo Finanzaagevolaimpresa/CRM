@@ -9,7 +9,7 @@ import { operationalRomeTime as formatDateTime } from '@/lib/operational-time';
 import { DocumentFileLinks } from '@/components/document-file-links';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { canViewChecklistItem, canViewDocument, canViewTask, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
+import { canEditClient, canEditProject, canEditService, canViewChecklistItem, canViewDocument, canViewTask, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { archivePracticeCommunicationAndRefresh, archiveTechnicalPracticeAndRefresh, approvePracticeCommunicationDraftAndRefresh, assignTechnicalPracticeAndRefresh, createPracticeCommunicationDraftAndRefresh, markPracticeCommunicationAsUsedAndRefresh, updateTechnicalPracticeAndRefresh, updateTechnicalPracticeStatusAndRefresh } from '@/lib/form-actions';
 import { practiceCommunicationTemplates } from '@/lib/practice-communication-templates';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
@@ -55,6 +55,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const sharingAvailable = await mayManagePracticeSharing(prisma, session);
   const purchasedHandoff = service ? await prisma.auditLog.findFirst({ where: { entityType: 'TechnicalPractice', entityId: practice.id, event: 'purchased_service_handoff' }, select: { id: true } }) : null;
   const canViewDocuments = hasPermission(session, 'document.download');
+  const uploadProject = project && canEditProject(session, { ...project, client }) ? project.id : null;
+  const uploadService = service && canEditService(session, { ...service, client, project: serviceProject ? { ...serviceProject, client } : null }) ? service.id : null;
+  const canUploadHere = hasPermission(session, 'document.upload') && (canEditClient(session, client) || uploadProject || uploadService);
+  const uploadQuery = new URLSearchParams({ clientId: client.id, ...(uploadProject ? { projectId: uploadProject } : {}), ...(uploadService ? { clientServiceId: uploadService } : {}) });
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
   const canCommRead = hasPermission(session, 'practice_communications.read');
   const [users, documentRows, taskRows, checklistRows, communications, audits, documentProjects, documentServices] = await Promise.all([
@@ -164,7 +168,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     </Card>
     {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={false} placeholderContext={templatePlaceholderContext} /></Card> : null}
 
-    <Card title="Documenti collegati / fascicolo"><p className="mb-3 text-sm">Sono disponibili i documenti ammessi dai tuoi permessi sul documento e sul contesto. Non serve una seconda concessione per quelli già accessibili. Un incarico selettivo, invece, ammette solo le versioni scelte dall’Admin.</p>{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Documento privato']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <DocumentFileLinks key="c" id={d.id} />])} />}</Card>
+    <Card title="Documenti collegati / fascicolo"><p className="mb-3 text-sm">Sono disponibili i documenti ammessi dai tuoi permessi sul documento e sul contesto. Non serve una seconda concessione per quelli già accessibili. Un incarico selettivo, invece, ammette solo le versioni scelte dall’Admin.</p>
+      <div className="mb-4 flex flex-wrap gap-3">{canUploadHere && <SecondaryLink href={`/documents/new?${uploadQuery}`}>Carica documenti per questa pratica</SecondaryLink>}
+        {session.role === 'admin' && <SecondaryLink href={`/technical-office/practices/${practice.id}/assignments`}>Scegli versioni e operazioni per i tecnici</SecondaryLink>}</div>
+      {documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Documento privato']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <DocumentFileLinks key="c" id={d.id} />])} />}</Card>
     <Card title="Task e scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task collegato" /> : <Table headers={['Task','Stato','Priorità','Scadenza','Assegnatario']} rows={tasks.map(t => [t.title, <StatusBadge key="s" status={t.status}/>, <StatusBadge key="p" status={t.priority}/>, formatDateTime(t.dueAt), userOf(t.assignedToId)])} />}</Card>
     <Card title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/technical-office/practices/${practice.id}?timelineFilter=${value}`}>{label}</Link>)}</div>}><p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Aggrega eventi già presenti nel CRM per questa pratica: stati, comunicazioni, documenti, task/scadenze e audit log autorizzati.</p><ActivityTimeline events={timeline} timeZone="Europe/Rome" /></Card>
   </div>;

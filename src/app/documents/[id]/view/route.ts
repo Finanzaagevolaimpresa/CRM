@@ -1,15 +1,17 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requirePermission } from '@/lib/auth';
+import { getSession, hasPermission } from '@/lib/auth';
 import { DocumentDownloadError, readOrdinaryDocument } from '@/lib/ordinary-document-download';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const session = await requirePermission('document.download'), { id } = await params;
   const headers = { 'Cache-Control': 'private, no-store, max-age=0', 'Pragma': 'no-cache',
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'" };
+  const session = await getSession();
+  if (!session || !hasPermission(session, 'document.download')) return new NextResponse('Documento non disponibile', { status: 403, headers });
+  const { id } = await params;
   try {
     const file = await readOrdinaryDocument(prisma, session, id, new URL(request.url).searchParams.get('versionId'), { intent: 'view' });
     return new NextResponse(file.bytes, { headers: { ...headers,

@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requirePermission } from '@/lib/auth';
+import { getSession, hasPermission } from '@/lib/auth';
 import { DocumentDownloadError, readOrdinaryDocument } from '@/lib/ordinary-document-download';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const session = await requirePermission('document.download');
+  const session = await getSession();
+  if (!session || !hasPermission(session, 'document.download')) return new NextResponse('Documento non disponibile', {
+    status: 403, headers: { 'Cache-Control': 'private, no-store' },
+  });
   const { id } = await params;
   try {
     const file = await readOrdinaryDocument(prisma, session, id, new URL(request.url).searchParams.get('versionId'));

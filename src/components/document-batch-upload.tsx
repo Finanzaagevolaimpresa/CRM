@@ -24,15 +24,24 @@ export function DocumentBatchUpload({ children, className, submitLabel = 'Carica
     busyRef.current = true;
     setBusy(true);
     setAttempted(true);
-    try { await uploadSelection(files, form, uploadDocumentForBatch, ({ index, result }) => setResults(previous => ({ ...previous, [index]: result }))); }
-    finally { busyRef.current = false; setBusy(false); router.refresh(); }
+    let allSucceeded = true;
+    try { await uploadSelection(files, form, uploadDocumentForBatch, ({ index, result }) => {
+      allSucceeded = allSucceeded && result.ok;
+      setResults(previous => ({ ...previous, [index]: result }));
+    }); }
+    finally {
+      busyRef.current = false; setBusy(false);
+      // A refresh after a revocation can unmount this form and hide its result.
+      // Keep rejected and uncertain outcomes visible without resending files.
+      if (allSucceeded) router.refresh();
+    }
   }
-  return <form action={submit} className={className}>
+  return <form action={submit} className={`min-w-0 ${className ?? ''} [&_input:not([type=checkbox])]:min-w-0 [&_input:not([type=checkbox])]:w-full [&_select]:min-w-0 [&_select]:w-full [&_label]:min-w-0 [&_p]:min-w-0 [&_button]:min-w-0`}>
     <InteractiveReadyMarker />
     <fieldset disabled={busy} className="contents">
       {children}
-      <label className="grid gap-1 text-sm font-bold">Documenti da caricare
-        <input type="file" name="file" multiple required accept={documentUploadExtensions.join(',')} className="rounded-xl border p-3" onChange={event => {
+      <label className="grid min-w-0 gap-1 text-sm font-bold">Documenti da caricare
+        <input type="file" name="file" multiple required accept={documentUploadExtensions.join(',')} className="min-w-0 max-w-full rounded-xl border p-3" onChange={event => {
           setFiles(Array.from(event.target.files ?? [])); setResults({}); setAttempted(false); setError(null);
         }} />
       </label>

@@ -11,7 +11,7 @@ import { assertNoSelectiveProjectMutation } from './selective-project-scope';
 import { authorizeManualAssignment } from './manual-assignment-guard';
 import { appendResponsibilityDecision } from './responsibility';
 import { withSerializableTransaction } from './serializable';
-import { projectHandoffInput, projectHandoffPreview, projectHandoffReceipt, ProjectHandoffError,
+import { projectHandoffInput, projectHandoffPreview, projectHandoffReceiptV2, storedProjectHandoffReceipt, ProjectHandoffError,
   handoffProof, verifyHandoffProof, type ProjectHandoffInput } from './project-handoff-contract';
 
 type Tx = Prisma.TransactionClient;
@@ -45,7 +45,7 @@ async function context(tx: Tx, claimed: AuthSession, projectId: string, write: b
 export async function readProjectHandoff(db: PrismaClient, claimed: AuthSession, projectId: string) {
   return withSerializableTransaction(db, async tx => {
     const c = await context(tx, claimed, projectId, false);
-    return { projectId, projectTitle: c.project.title, clientName: c.client.displayName, expectedHash: c.expectedHash,
+    return { projectId, projectTitle: c.project.title, clientId: c.client.id, clientName: c.client.displayName, expectedHash: c.expectedHash,
       practices: c.practices.map(p => ({ id: p.id, title: p.title, status: p.status, available: !p.deletedAt && p.status !== 'archiviata' })),
       commercialPeople: c.people.filter(p => commercialRoles.includes(p.role)).map(p => ({ id: p.id, name: p.name })),
       technicalPeople: c.people.filter(p => technicalRoles.includes(p.role)).map(p => ({ id: p.id, name: p.name })),
@@ -77,9 +77,10 @@ export async function previewProjectHandoff(db: PrismaClient, claimed: AuthSessi
 async function receipt(tx: Tx, claimed: AuthSession, commandId: string, projectId: string, fingerprint?: string) {
   const row = await tx.auditLog.findUnique({ where: { id: commandId } });
   if (!row) return null;
-  const r = projectHandoffReceipt.parse(row.after);
+  const r = storedProjectHandoffReceipt.parse(row.after);
+  const sameSession = r.version === 2 ? r.sessionHash === canonicalSha256(claimed.sessionId) : r.sessionId === claimed.sessionId;
   if (row.event !== event || row.entityType !== 'Project' || row.entityId !== projectId || row.actorId !== claimed.userId
-    || r.sessionId !== claimed.sessionId || r.projectId !== projectId || (fingerprint && r.fingerprint !== fingerprint)) deny();
+    || !sameSession || r.projectId !== projectId || (fingerprint && r.fingerprint !== fingerprint)) deny();
   const practice = await tx.technicalPractice.findUnique({ where: { id: r.technicalPracticeId } });
   if (!practice || practice.deletedAt || practice.status === 'archiviata' || practice.projectId !== projectId || practice.clientId !== r.clientId) deny();
   return { confirmed: true as const, practiceId: practice.id };
@@ -108,11 +109,11 @@ export async function confirmProjectHandoff(db: PrismaClient, claimed: AuthSessi
       reason: 'Preparazione dal progetto: responsabilità iniziale, nessuna presa in carico o avvio del servizio',
       state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: null,
         commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
-    const after = projectHandoffReceipt.parse({ type: 'PROJECT_PRACTICE_PREPARATION_V1', version: 1,
-      sessionId: p.auth.registry.id, clientId: p.client.id, projectId: input.projectId,
+    const after = projectHandoffReceiptV2.parse({ type: 'PROJECT_PRACTICE_PREPARATION_V2', version: 2,
+      sessionHash: canonicalSha256(p.auth.registry.id), clientId: p.client.id, projectId: input.projectId,
       technicalPracticeId: practice.id, decisionId: decision.id, fingerprint });
     const saved = await tx.auditLog.create({ data: { id: input.commandId, actorId: claimed.userId, event, entityType: 'Project', entityId: input.projectId, after } });
-    if (canonicalSha256(projectHandoffReceipt.parse(saved.after)) !== canonicalSha256(after)) deny();
+    if (canonicalSha256(projectHandoffReceiptV2.parse(saved.after)) !== canonicalSha256(after)) deny();
     await p.auth.finish();
     return { confirmed: true as const, practiceId: practice.id };
   });

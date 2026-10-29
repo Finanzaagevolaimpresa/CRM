@@ -7,6 +7,16 @@ import { savePrivateDocumentFile } from '../../src/lib/storage';
 const db = new PrismaClient(), root = process.env.FINANCIAL_PRIVACY_EVIDENCE!, password = process.env.FINANCIAL_PRIVACY_BROWSER_PASSWORD!;
 type Fixture = { role: string; key: string; denied: string | null; userId: string; clientId: string; projectId: string; serviceId: string; contractId: string; paymentId: string; docs: { kind: string; id: string; versionId: string; title: string }[] };
 const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as { synthetic: boolean; fixtures: Fixture[]; overrideDelegationDenied: boolean; blockedDelegationRoles: string[] };
+async function documentContextScreens(page: Page, name: string) {
+  for (const [suffix, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    expect(await page.locator('form input:not([type=hidden]), form select, form button').evaluateAll(nodes => nodes.every(node => {
+      const r = node.getBoundingClientRect(); return !r.width || (r.left >= 0 && r.right <= innerWidth + 1);
+    }))).toBe(true);
+    await page.screenshot({ path: join(root, `${name}-${suffix}.png`), fullPage: true, caret: 'initial' });
+  }
+}
 async function login(page: Page, role: string) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(`privacy-${role}@example.test`);
@@ -260,6 +270,106 @@ test('an excluded role cannot upload an archive even with document.upload and it
   await form.getByRole('button', { name: 'Carica in storage privato' }).click();
   await expect(page.getByRole('list', { name: 'Esito caricamenti' })).toContainText('Risorsa non disponibile');
   expect(await db.document.count({ where: { clientId: f.clientId, fileName: 'denied-archive.zip' } })).toBe(0);
+});
+
+test('practice upload retains exact context and ordinary technician opens the file without a selective grant; revocation wins', async ({ browser }) => {
+  const admin = fixture.fixtures.find(f => f.role === 'admin' && !f.denied)!;
+  const tech = fixture.fixtures.find(f => f.role === 'consulente' && !f.denied)!;
+  const ac = await browser.newContext(), tc = await browser.newContext(), other = await browser.newContext();
+  const a = await ac.newPage(), t = await tc.newPage(), o = await other.newPage();
+  const practice = await db.technicalPractice.create({ data: { clientId: tech.clientId, projectId: tech.projectId,
+    clientServiceId: tech.serviceId, title: 'Contesto documentale sintetico', practiceType: 'synthetic', targetEntity: 'synthetic',
+    technicalOwnerId: tech.userId, createdById: admin.userId } });
+  try {
+    await login(a, admin.key); await login(t, tech.key); await login(o, 'backoffice');
+    await a.goto(`/projects/${tech.projectId}/technical-handoff`);
+    await expect(a.getByRole('heading', { name: 'Documenti per il lavoro tecnico', exact: true })).toBeVisible();
+    await expect(a.getByRole('link', { name: 'Carica documenti per il progetto', exact: true })).toHaveAttribute('href', `/documents/new?clientId=${tech.clientId}&projectId=${tech.projectId}`);
+    await documentContextScreens(a, 'document-handoff');
+    await a.goto(`/technical-office/practices/${practice.id}`);
+    await a.getByRole('link', { name: 'Carica documenti per questa pratica', exact: true }).click();
+    await expect(a.getByRole('heading', { name: 'Carica documenti nel contesto', exact: true })).toBeVisible();
+    const form = a.locator('form').filter({ has: a.locator('input[type=file]') });
+    await form.locator('[data-interactive-ready=true]').waitFor({ state: 'attached' });
+    await expect(form.locator('[name=clientId]')).toHaveValue(tech.clientId);
+    await expect(form.getByRole('combobox', { name: 'Progetto del documento', exact: true })).toHaveValue(tech.projectId);
+    await expect(form.getByRole('combobox', { name: 'Servizio del documento', exact: true })).toHaveValue(tech.serviceId);
+    await documentContextScreens(a, 'document-context-upload');
+    const file = { name: 'ordinary-practice-context.txt', mimeType: 'text/plain', buffer: Buffer.from('Documento tecnico sintetico collegato esattamente alla pratica') };
+    await form.locator('input[type=file]').setInputFiles(file);
+    await form.getByRole('button', { name: 'Carica in storage privato', exact: true }).click();
+    await expect(a.getByRole('list', { name: 'Esito caricamenti' })).toContainText(`${file.name}: Caricato`);
+    const docs = await db.document.findMany({ where: { fileName: file.name, clientId: tech.clientId } }); expect(docs).toHaveLength(1);
+    const doc = docs[0]; expect(doc.projectId).toBe(tech.projectId); expect(doc.clientServiceId).toBe(tech.serviceId);
+    expect(await db.documentVersion.count({ where: { documentId: doc.id } })).toBe(1);
+    expect(await db.auditLog.count({ where: { entityId: doc.id, event: 'document_upload' } })).toBe(1);
+    await t.goto(`/technical-office/practices/${practice.id}`);
+    const view = t.locator(`a[href="/documents/${doc.id}/view"]`); await expect(view).toBeVisible();
+    const opened = tc.waitForEvent('page'); await view.click(); const viewer = await opened;
+    await expect(viewer.locator('body')).toContainText(file.buffer.toString());
+    const download = await t.request.get(`/documents/${doc.id}/download`);
+    expect(download.status()).toBe(200); expect(await download.body()).toEqual(file.buffer);
+    for (const intent of ['view', 'download']) {
+      const denied = await o.request.get(`/documents/${doc.id}/${intent}`);
+      expect(denied.status()).toBe(403); expect(await denied.text()).toBe('Documento non disponibile');
+      expect(denied.headers()['cache-control']).toContain('no-store');
+    }
+    const before = await db.auditLog.count({ where: { actorId: tech.userId, entityId: doc.id, event: { in: ['document_view', 'document_download'] } } });
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: false } });
+    expect((await viewer.reload())?.status()).toBe(403);
+    await expect(viewer.locator('body')).toHaveText('Documento non disponibile');
+    const revokedDownload = await t.request.get(`/documents/${doc.id}/download`);
+    expect(revokedDownload.status()).toBe(403); expect(await revokedDownload.text()).toBe('Documento non disponibile');
+    expect(revokedDownload.headers()['cache-control']).toContain('no-store');
+    expect(await db.auditLog.count({ where: { actorId: tech.userId, entityId: doc.id, event: { in: ['document_view', 'document_download'] } } })).toBe(before);
+    await viewer.close();
+    writeFileSync(join(root, 'document-context-ordinary-proof.json'), JSON.stringify({ synthetic: true, exactContext: true, persistedOnce: true,
+      versionAndAuditOnce: true, nativeTechnicianPreview: true, exactDownloadBytes: true, otherTechnicianDenied: true, openSessionRevocation: true, newSelectiveGrants: 0 }));
+  } finally {
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: true } });
+    await ac.close(); await tc.close(); await other.close();
+  }
+});
+
+test('commercial upload uses existing capability and own client only; revoked capability stops an already open form', async ({ page }) => {
+  const sales = fixture.fixtures.find(f => f.role === 'commerciale' && !f.denied)!;
+  const foreign = fixture.fixtures.find(f => f.role === 'backoffice' && !f.denied)!;
+  await login(page, sales.key); await page.goto(`/clients/${sales.clientId}#documenti`);
+  const dossier = page.locator('#documenti');
+  await expect(dossier.getByRole('combobox', { name: 'Progetto del documento', exact: true }).locator('option')).toHaveCount(1);
+  await expect(dossier.getByRole('combobox', { name: 'Servizio del documento', exact: true }).locator('option')).toHaveCount(1);
+  const own = `/documents/new?clientId=${sales.clientId}`;
+  await page.goto(own);
+  const form = page.locator('form').filter({ has: page.locator('input[type=file]') });
+  await form.locator('[data-interactive-ready=true]').waitFor({ state: 'attached' });
+  await expect(form.getByRole('combobox', { name: 'Progetto del documento', exact: true }).locator('option')).toHaveCount(1);
+  await expect(form.getByRole('combobox', { name: 'Servizio del documento', exact: true }).locator('option')).toHaveCount(1);
+  await documentContextScreens(page, 'commercial-owned-document-context');
+  const file = { name: 'commercial-own-client.txt', mimeType: 'text/plain', buffer: Buffer.from('Documento sintetico del solo cliente commerciale') };
+  await form.locator('input[type=file]').setInputFiles(file); await form.getByRole('button', { name: 'Carica in storage privato', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Esito caricamenti' })).toContainText(`${file.name}: Caricato`);
+  const docs = await db.document.findMany({ where: { clientId: sales.clientId, fileName: file.name } }); expect(docs).toHaveLength(1);
+  expect(docs[0].projectId).toBeNull(); expect(docs[0].clientServiceId).toBeNull();
+  expect(await db.auditLog.count({ where: { entityId: docs[0].id, event: 'document_upload' } })).toBe(1);
+  for (const query of [`clientId=${foreign.clientId}`, `clientId=${sales.clientId}&projectId=${foreign.projectId}`, `clientId=${sales.clientId}&projectId=${sales.projectId}`]) {
+    const denied = await page.goto('/documents/new?' + query); expect(denied?.status()).toBe(404);
+    await expect(page.locator('input[type=file]')).toHaveCount(0);
+    expect(await page.content()).not.toContain(`Synthetic privacy ${foreign.key}`);
+  }
+  await page.goto(own); await form.locator('[data-interactive-ready=true]').waitFor({ state: 'attached' });
+  await form.locator('input[type=file]').setInputFiles({ ...file, name: 'revoked-commercial-upload.txt' });
+  const before = await db.document.count({ where: { clientId: sales.clientId } });
+  try {
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: false } });
+    await form.getByRole('button', { name: 'Carica in storage privato', exact: true }).click();
+    await expect(page.getByRole('list', { name: 'Esito caricamenti' })).toContainText('Risorsa non disponibile');
+    expect(await db.document.count({ where: { clientId: sales.clientId } })).toBe(before);
+    expect(await db.auditLog.count({ where: { actorId: sales.userId, event: 'document_upload', entityId: { not: docs[0].id } } })).toBe(0);
+  } finally {
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: true } });
+  }
+  writeFileSync(join(root, 'document-context-commercial-proof.json'), JSON.stringify({ synthetic: true, existingPermissionOverride: true,
+    ownClientUpload: true, noProjectWriteGranted: true, foreignContextDenied: true, openFormRevocation: true }));
 });
 
 async function technicalFootprint(clientId: string) {

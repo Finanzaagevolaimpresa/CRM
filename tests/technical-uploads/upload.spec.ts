@@ -191,7 +191,8 @@ test('native private acquisition, exact technical version selection, positive by
   for (const person of [r.salesA, r.salesB]) { const sc = await browser.newContext(), page = await sc.newPage(); await login(page, person.email);
     for (const url of [privateUrl, selectedUrl]) expect((await sc.request.get(url)).status()).toBe(404);
     const ordinary = await sc.request.get('/documents/' + saved.documentId + '/download', { maxRedirects: 0 });
-    expect(ordinary.status()).toBe(307); expect(ordinary.headers().location).toBe('/dashboard');
+    expect(ordinary.status()).toBe(403); expect(ordinary.headers().location).toBeUndefined();
+    expect(ordinary.headers()['cache-control']).toContain('no-store');
     expect(await ordinary.text()).not.toContain(content.toString());
     for (const url of ['/search?q=Documento%20acquisito', '/documents', '/notifications']) {
       const response = await sc.request.get(url); expect(response.status()).toBeLessThan(500); expect(await response.text()).not.toContain('Documento acquisito sintetico'); }
