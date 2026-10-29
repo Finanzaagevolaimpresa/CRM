@@ -1,3 +1,5 @@
+const RECORD_REMINDER_MIGRATION = '20261028180000_record_deadline_reminders_v1';
+const RECORD_REMINDER_MIGRATION_SHA256 = 'dfc159e99ab00a8587fe5c50834fd4d651b25ff14d1a9aa5a0b7731abf9652f6';
 const HISTORICAL_CONTACT_MIGRATION = '20261027220000_historical_lead_contact_v1';
 const HISTORICAL_CONTACT_MIGRATION_SHA256 = '7cfd6093caca8fbdf022aa66720c8bf6b38d1a04b1f599a80f66505c5e3edf4c';
 const TECHNICAL_PRIVATE_ITEM_MIGRATION = '20261027010000_technical_private_items_v1';
@@ -86,7 +88,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
   return db.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
     if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
-    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; updateEmailChecksum: string | null; selectiveLeadChecksum: string | null; selectiveClientChecksum: string | null; selectivePracticeChecksum: string | null; selectiveDocumentChecksum: string | null; selectivePracticeDocumentChecksum: string | null; selectiveCompanyChecksum: string | null; selectivePersonChecksum: string | null; selectiveLeadEditChecksum: string | null; adminRequestChecksum: string; technicalWorkItemChecksum: string; technicalUploadChecksum: string; technicalAcquisitionChecksum: string; historicalContactChecksum: string; technicalPrivateItemChecksum: string; technicalAssignmentChecksum: string | null; now: Date }>>`
+    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; updateEmailChecksum: string | null; selectiveLeadChecksum: string | null; selectiveClientChecksum: string | null; selectivePracticeChecksum: string | null; selectiveDocumentChecksum: string | null; selectivePracticeDocumentChecksum: string | null; selectiveCompanyChecksum: string | null; selectivePersonChecksum: string | null; selectiveLeadEditChecksum: string | null; adminRequestChecksum: string; technicalWorkItemChecksum: string; technicalUploadChecksum: string; technicalAcquisitionChecksum: string; recordReminderChecksum: string; historicalContactChecksum: string; technicalPrivateItemChecksum: string; technicalAssignmentChecksum: string | null; now: Date }>>`
       SELECT current_database() AS database, clock_timestamp() AS now,
         (SELECT count(*)::integer FROM "_prisma_migrations") AS count,
         (SELECT bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1) FROM "_prisma_migrations") AS complete,
@@ -109,9 +111,10 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${TECHNICAL_UPLOAD_MIGRATION}) AS "technicalUploadChecksum",
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${TECHNICAL_ACQUISITION_MIGRATION}) AS "technicalAcquisitionChecksum",
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${TECHNICAL_PRIVATE_ITEM_MIGRATION}) AS "technicalPrivateItemChecksum",
-        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${HISTORICAL_CONTACT_MIGRATION}) AS "historicalContactChecksum"`;
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${HISTORICAL_CONTACT_MIGRATION}) AS "historicalContactChecksum",
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${RECORD_REMINDER_MIGRATION}) AS "recordReminderChecksum"`;
     const observed = Date.parse(plan.observedAt), expiry = Date.parse(plan.validUntil);
-    if (state.database !== plan.targetDatabase || state.count !== 70 || !state.complete || state.checksum !== MIGRATION_SHA256
+    if (state.database !== plan.targetDatabase || state.count !== 71 || !state.complete || state.checksum !== MIGRATION_SHA256
       || state.contextChecksum !== CONTEXT_MIGRATION_SHA256
       || state.updatesChecksum !== UPDATES_MIGRATION_SHA256
       || state.videosChecksum !== VIDEOS_MIGRATION_SHA256
@@ -131,6 +134,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
       || state.technicalAcquisitionChecksum !== TECHNICAL_ACQUISITION_MIGRATION_SHA256
       || state.technicalPrivateItemChecksum !== TECHNICAL_PRIVATE_ITEM_MIGRATION_SHA256
       || state.historicalContactChecksum !== HISTORICAL_CONTACT_MIGRATION_SHA256
+      || state.recordReminderChecksum !== RECORD_REMINDER_MIGRATION_SHA256
       || observed > state.now.getTime() || state.now.getTime() - observed > 300_000
       || expiry <= state.now.getTime() || expiry - observed > 31 * 86_400_000) denied();
     // Lock both people before the mailbox, following native admission ordering.

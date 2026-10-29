@@ -7,7 +7,7 @@ import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
 import { previewRecordUpdate, confirmRecordUpdate, readRecordUpdateReceipt } from './record-updates';
-import { readRecordUpdate } from './record-update-delivery';
+import { readSelectedRecordNotice } from './record-reminder-notifications';
 import { RecordUpdateError } from './record-update-contract';
 import { updateCommandSchema } from './record-update-input';
 import { SerializableConflictError } from './serializable';
@@ -53,7 +53,7 @@ export async function verifyRecordUpdateResultAction(commandId: string) {
 export async function markRecordUpdateReadAction(form: FormData) {
   const session = await requireSession();
   const id = z.string().uuid().parse(form.get('id'));
-  await readRecordUpdate(prisma, session, id, true);
+  await readSelectedRecordNotice(prisma, session, await loadActivePrivilegedStepUpKey(prisma), id, true);
   revalidatePath('/notifications'); revalidatePath('/notifications/updates');
   revalidatePath(`/notifications/updates/${id}`);
 }

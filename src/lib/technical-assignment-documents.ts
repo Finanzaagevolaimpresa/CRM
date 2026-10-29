@@ -15,7 +15,7 @@ const denied = (): never => { throw new TechnicalAssignmentError('DENIED'); };
  * released financial, exact-version, privacy and canonical resource locks.
  * Selecting a target never includes unrelated client or future documents. */
 export async function snapshotTechnicalAssignmentDocuments(tx: Prisma.TransactionClient,
-  state: TechnicalAssignmentTransaction, context: Context,
+  state: Pick<TechnicalAssignmentTransaction, 'authority' | 'recipient'>, context: Context,
   choices: readonly { fileId: string; allowDownload: boolean }[]) {
   const target = state.recipient;
   if (!target || choices.length > 20 || new Set(choices.map(row => row.fileId)).size !== choices.length) return denied();
@@ -57,7 +57,7 @@ export async function snapshotTechnicalAssignmentDocuments(tx: Prisma.Transactio
 }
 
 export async function assertTechnicalAssignmentDocuments(tx: Prisma.TransactionClient,
-  state: TechnicalAssignmentTransaction, context: Context, choices: Choices) {
+  state: Pick<TechnicalAssignmentTransaction, 'authority' | 'recipient'>, context: Context, choices: Choices) {
   const snapshot = await snapshotTechnicalAssignmentDocuments(tx, state, context, choices);
   if (choices.length !== snapshot.documents.length || choices.some(choice =>
     canonicalSha256(choice) !== canonicalSha256(snapshot.documents.find(row => row.fileId === choice.fileId) ?? null))) {
