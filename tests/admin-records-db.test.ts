@@ -12,6 +12,7 @@ import { adminUserVersion } from '../src/lib/admin-user-command-contract';
 import { technicalFixture, technicalTarget } from './technical-assignments/fixtures';
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../src/lib/technical-private-item-service';
 import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-item-contract';
+import { paymentCorrectionFixture } from './admin-records/payment-fixture';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences,
   type AdminRecordCommand } from '../src/lib/admin-records';
 
@@ -37,6 +38,33 @@ async function command(model: string, id: string, patch: Record<string, string> 
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+
+test('evidenced payment correction and restoration preserve the original collection and align linked services exactly once', options, async () => {
+  const f = await paymentCorrectionFixture(db, admin.user.id);
+  const input = await command('Payment', f.payment.id, { status: 'rimborsato' });
+  await assert.rejects(save(input), /HISTORY/);
+  const correction = { evidenceVersionId: f.version.id, effectiveAt: f.effectiveAt, confirmed: true as const };
+  const foreign = await paymentCorrectionFixture(db, admin.user.id);
+  await assert.rejects(save({ ...input, paymentCorrection: { ...correction, evidenceVersionId: foreign.version.id } }), /CONTEXT/);
+  await assert.rejects(save({ ...input, paymentCorrection: { ...correction, effectiveAt: new Date(Date.now() + 3600_000).toISOString() } }), /INVALID/);
+  const valid = { ...input, paymentCorrection: correction }; await save(valid); await save(valid);
+  assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).paymentStatus, 'rimborsato');
+  const after = await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } });
+  assert.equal(after.status, 'rimborsato'); assert.deepEqual(after.collectedAt, f.payment.collectedAt); assert.equal(after.accountingDocumentId, f.payment.accountingDocumentId);
+  assert.equal(await db.auditLog.count({ where: { id: `payment-correction:${input.commandId}` } }), 1);
+  const restore = { ...await command('Payment', f.payment.id, { status: 'incassato' }), paymentCorrection: correction };
+  await save(restore);
+  assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).paymentStatus, 'parziale');
+  const restored = await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } });
+  assert.equal(restored.status, 'incassato'); assert.deepEqual(restored.collectedAt, f.payment.collectedAt); assert(restored.totalAmount.equals(f.payment.totalAmount));
+  await assert.rejects(save({ ...await command('Payment', f.payment.id, { status: 'da_incassare' }), paymentCorrection: correction }), /HISTORY/);
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_PAYMENT_AUDIT_FAILURE'); } } } }) as unknown as PrismaClient;
+  const retry = { ...await command('Payment', f.payment.id, { status: 'stornato' }), paymentCorrection: correction };
+  await assert.rejects(saveAdminRecord(failing, admin.session, retry, proof()), /SYNTHETIC_PAYMENT_AUDIT_FAILURE/);
+  assert.equal((await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } })).status, 'incassato');
+  assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).paymentStatus, 'parziale');
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: retry.commandId } }), 0);
+});
 
 test('reference search reaches records beyond the initial window and retains ordinary scope restrictions', options, async () => {
   const prefix = `Ricerca sintetica ${randomUUID()}`, ids = Array.from({ length: 1005 }, () => randomUUID()).sort();

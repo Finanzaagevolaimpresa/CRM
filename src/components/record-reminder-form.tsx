@@ -1,4 +1,5 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import Link from 'next/link';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import type { readRecordReminderSetup } from '@/lib/record-reminder-management';
@@ -39,6 +40,7 @@ export function RecordReminderForm({ setup }: { setup: Setup }) {
   const [command, setCommand] = useState<ReminderInput | null>(null), [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false), [consent, setConsent] = useState(false);
   const [confirmed, setConfirmed] = useState(false), [uncertain, setUncertain] = useState(false), [message, setMessage] = useState('');
+  const [needsStepUp, setNeedsStepUp] = useState(false);
   const locked = !ready || busy || Boolean(preview) || confirmed || uncertain;
   async function prepare() {
     if (inFlight.current || locked) return;
@@ -48,7 +50,7 @@ export function RecordReminderForm({ setup }: { setup: Setup }) {
         remindAt: localInstant(date), selection: { people, groups }, mode: 'CRM' };
       const result = await previewRecordReminderAction(input);
       if (result.ok) { setCommand(input); setPreview(result.preview); }
-      else setMessage(result.message);
+      else { setMessage(result.message); setNeedsStepUp(result.stepUpRequired); }
     } catch { setMessage('Riepilogo non disponibile: controlla data, ora e conferma personale. Nessun salvataggio richiesto.'); }
     finally { setBusy(false); inFlight.current = false; }
   }
@@ -60,7 +62,9 @@ export function RecordReminderForm({ setup }: { setup: Setup }) {
       if (result.ok) { setConfirmed(true); setMessage('Promemoria registrato. Diventerà disponibile nel CRM all’istante scelto, soltanto con permessi ancora validi.'); }
       else {
         setMessage(result.message); setUncertain(!result.definite);
-        if (result.definite) { setPreview(null); setCommand(null); remember('reminderDecision', ''); }
+        setNeedsStepUp(result.stepUpRequired);
+        if (result.stepUpRequired) remember('reminderDecision', '');
+        if (result.definite && !result.stepUpRequired) { setPreview(null); setCommand(null); remember('reminderDecision', ''); }
       }
     } catch { setUncertain(true); setMessage('Risposta non ricevuta. Verifica l’esito prima di programmare un altro promemoria.'); }
     finally { setBusy(false); inFlight.current = false; }
@@ -105,10 +109,19 @@ export function RecordReminderForm({ setup }: { setup: Setup }) {
       </li>)}</ul>
       <p className="text-sm">La selezione non concede accesso. Un cambiamento dell’attività, delle persone o dei permessi può sospendere il promemoria. Nessuna email viene inviata.</p>
       <label className="flex items-start gap-2"><input type="checkbox" checked={consent} disabled={busy || uncertain} onChange={e => setConsent(e.target.checked)}/>Confermo questo istante e questi destinatari per l’avviso CRM</label>
-      <div className="flex flex-wrap gap-3"><button type="button" className={button} disabled={!consent || busy || uncertain} onClick={confirm}>Programma promemoria</button>
+      <div className="flex flex-wrap gap-3"><button type="button" className={button} disabled={!consent || busy || uncertain || needsStepUp} onClick={confirm}>Programma promemoria</button>
         <button type="button" className="rounded-xl border px-4 py-2" disabled={busy || uncertain} onClick={() => { setPreview(null); setConsent(false); }}>Modifica il riepilogo</button></div>
     </section>}
     {message && <p role="status" className="rounded-xl bg-slate-100 p-3">{message}</p>}
+    {needsStepUp && <InlinePrivilegedConfirmation />}
+    {needsStepUp && command && <button type="button" className="font-semibold underline" disabled={busy} onClick={async () => {
+      setBusy(true); setConsent(false);
+      try { const result = await previewRecordReminderAction(command);
+        if (result.ok) { setPreview(result.preview); setNeedsStepUp(false); setMessage('Riepilogo aggiornato. Controllalo e conferma personalmente.'); }
+        else setMessage(result.message);
+      } catch { setMessage('Riepilogo non disponibile. Le scelte sono conservate.'); }
+      finally { setBusy(false); }
+    }}>Aggiorna riepilogo dopo la conferma</button>}
     {uncertain && <button type="button" className={button} disabled={busy} onClick={verify}>Verifica esito</button>}
     {command && (uncertain || confirmed) && <p className="break-all text-sm">Riferimento: {command.commandId}</p>}
     {confirmed && command && <Link href={`/notifications/reminders/${command.commandId}`} className="font-bold underline">Apri stato del promemoria</Link>}
@@ -136,13 +149,14 @@ export function CancelRecordReminder({ reminderCommandId, resumeCommandId }: { r
   const inFlight = useRef(false), [busy, setBusy] = useState(false), [consent, setConsent] = useState(false);
   const [commandId, setCommandId] = useState(resumeCommandId ?? ''), [uncertain, setUncertain] = useState(Boolean(resumeCommandId));
   const [done, setDone] = useState(false), [message, setMessage] = useState('');
+  const [needsStepUp, setNeedsStepUp] = useState(false);
   async function cancel() {
     if (inFlight.current || !consent || uncertain || done) return;
     inFlight.current = true; setBusy(true);
     const id = crypto.randomUUID(); setCommandId(id); remember('cancelDecision', id);
     try { const result = await cancelRecordReminderAction({ commandId: id, reminderCommandId }, consent);
       if (result.ok) { setDone(true); setMessage('Promemoria annullato. Lo storico e le letture già registrate sono conservati.'); }
-      else { setMessage(result.message); setUncertain(!result.definite); if (result.definite) remember('cancelDecision', ''); }
+      else { setMessage(result.message); setUncertain(!result.definite); setNeedsStepUp(result.stepUpRequired); if (result.definite) remember('cancelDecision', ''); }
     } catch { setUncertain(true); setMessage('Risposta non ricevuta. Verifica l’annullamento senza ripeterlo.'); }
     finally { setBusy(false); inFlight.current = false; }
   }
@@ -161,5 +175,6 @@ export function CancelRecordReminder({ reminderCommandId, resumeCommandId }: { r
       <button className={button} disabled={!consent || busy} onClick={cancel}>Annulla promemoria</button></>}
     {uncertain && <><p className="break-all text-sm">Riferimento annullamento: {commandId}</p><button className={button} disabled={busy} onClick={verify}>Verifica esito annullamento</button></>}
     {message && <p role="status">{message}</p>}{done && <a className="block font-bold underline" href={`/notifications/reminders/${reminderCommandId}`}>Rileggi lo stato aggiornato</a>}
+    {needsStepUp && <InlinePrivilegedConfirmation />}
   </div>;
 }

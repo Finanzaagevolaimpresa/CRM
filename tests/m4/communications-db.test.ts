@@ -5,7 +5,7 @@ import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { saveApprovedMessageDraft, submitApprovedMessage, approveExactMessage, prepareManualMessage, recordManualMessageEvidence,
   configureCommunicationMailbox, qualifyCommunicationMailbox, acquireManualReply, linkAmbiguousReply,
-  readPracticeCommunications, readCommunicationAdministration } from '../../src/lib/approved-communications';
+  readPracticeCommunications, readCommunicationAdministration, listAdminComplaintMessages } from '../../src/lib/approved-communications';
 import { ApprovedCommunicationError } from '../../src/lib/approved-communication-contract';
 import { readinessCommunicationFixture } from './readiness-fixture';
 
@@ -192,6 +192,9 @@ test('M4 replies deduplicate aliases, retain ambiguous inputs, and require an ex
 test('M4 complaint content cannot be disclosed by reclassifying a later revision', { skip: !enabled }, async () => {
   const f = await fixture();
   const saved = await saveApprovedMessageDraft(db, f.admin, { ...f.input, classification: 'COMPLAINT' }, runtime);
+  const complaints = await listAdminComplaintMessages(db, f.admin);
+  assert(complaints.messages.some(item => item.id === saved.id && item.subject === f.input.subject));
+  await assert.rejects(listAdminComplaintMessages(db, f.operator), failure('DENIED'));
   assert.equal((await readPracticeCommunications(db, f.operator, f.context)).messages.length, 0);
   await assert.rejects(saveApprovedMessageDraft(db, f.admin, { ...f.input, expectedRevision: saved.revision, classification: 'ORDINARY' }, runtime), failure('DENIED'));
   const outsider = await user('consulente');

@@ -3,9 +3,31 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { paymentCorrectionFixture } from './payment-fixture';
+import { romeDateTimeInput } from '../../src/lib/rome-date-time';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
+
+test('payment adjustment selects an exact evidence version and reopens the preserved collection and linked service state', async ({ page }) => {
+  const admin = await db.user.findUniqueOrThrow({ where: { email: f.adminEmail } });
+  const payment = await paymentCorrectionFixture(db, admin.id);
+  await login(page); await page.goto(`/admin/records/Payment/${payment.payment.id}`);
+  await page.getByLabel('Stato', { exact: true }).selectOption('stornato');
+  const proof = page.getByRole('region', { name: 'Prova della rettifica del pagamento', exact: true });
+  await proof.getByLabel('Cerca Documento e versione a prova della rettifica', { exact: true }).fill(payment.document.title);
+  await proof.getByRole('button', { name: 'Cerca collegamenti', exact: true }).click();
+  const version = proof.getByLabel('Documento e versione a prova della rettifica', { exact: true });
+  await expect(version.locator(`option[value="${payment.version.id}"]`)).toHaveCount(1); await version.selectOption(payment.version.id);
+  await proof.getByLabel('Data effettiva della rettifica documentata', { exact: true }).fill(romeDateTimeInput(new Date(payment.effectiveAt)));
+  await proof.getByRole('checkbox').check(); await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByLabel('Stato', { exact: true })).toHaveValue('stornato');
+  const persisted = await db.payment.findUniqueOrThrow({ where: { id: payment.payment.id } });
+  expect(persisted.collectedAt).toEqual(payment.payment.collectedAt); expect(persisted.accountingDocumentId).toBe(payment.payment.accountingDocumentId);
+  expect((await db.clientService.findUniqueOrThrow({ where: { id: payment.service.id } })).paymentStatus).toBe('stornato');
+  expect(await db.auditLog.count({ where: { entityId: payment.payment.id, event: 'admin_payment_status_correction' } })).toBe(1);
+});
 
 test('creating an account keeps every choice through expiry and confirms one persisted identity', async ({ page, context }) => {
   await login(page); await page.goto('/settings/users');

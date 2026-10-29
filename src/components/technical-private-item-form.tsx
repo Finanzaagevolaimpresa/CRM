@@ -22,10 +22,14 @@ export function TechnicalPrivateItemRecovery({ target, commandId, action }: {
       <a className="font-semibold underline" href={technicalManagementPath(target)}>Scegli persone e perimetri</a>}
   </section>;
 }
-function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<TechnicalPrivateItemState['preview']>;
-  action: TechnicalPrivateItemAction; recovery: TechnicalPrivateItemAction; edit: () => void }) {
-  const ready = useSyncExternalStore(subscribe, client, server), [state, submit, pending] = useActionState(action, initial);
-  const [sent, setSent] = useState(false), locked = !ready || (sent && !state.stepUpRequired) || pending, c = preview.command;
+function Confirm({ preview, action, recovery, edit, renew, preparing }: { preview: NonNullable<TechnicalPrivateItemState['preview']>;
+  action: TechnicalPrivateItemAction; recovery: TechnicalPrivateItemAction; edit: () => void; renew: () => void; preparing: boolean }) {
+  const ready = useSyncExternalStore(subscribe, client, server), [state, submit, pending] = useActionState(async (previous: TechnicalPrivateItemState, form: FormData) => {
+    const result = await action(previous, form);
+    if (result.stepUpRequired !== undefined) { const url = new URL(window.location.href); url.searchParams.delete('privateItemDecision'); window.history.replaceState(window.history.state, '', url); }
+    return result;
+  }, initial);
+  const [sent, setSent] = useState(false), locked = !ready || sent || pending || preparing, c = preview.command;
   return <section aria-label="Riepilogo creazione privata" className="min-w-0 space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4">
     <h2 className="text-xl font-bold">Conferma la creazione privata</h2>
     <dl className="min-w-0 space-y-2"><dt className="font-semibold">Tipo</dt><dd>{c.kind === 'Task' ? 'Attività' : 'Voce checklist'}</dd>
@@ -40,6 +44,7 @@ function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<Tec
       <label className="flex items-start gap-2"><input type="checkbox" name="confirmed" required />Confermo il contenuto e la creazione privata.</label>
       <button className={button} disabled={locked}>Crea elemento privato</button></form><p role="status">{state.message}</p>
     {state.stepUpRequired && <InlinePrivilegedConfirmation />}
+    {state.stepUpRequired !== undefined && <button type="button" className="font-semibold underline" disabled={pending || preparing} onClick={renew}>Aggiorna riepilogo dopo la conferma</button>}
     {state.outcome?.status === 'RECORDED' && <a className="font-semibold underline" href={technicalManagementPath(c.target)}>Scegli persone e perimetri</a>}
     {state.outcome?.status === 'RECORDED' && <a className="font-semibold underline" href={`/admin/records/${c.kind === 'Task' ? 'Task' : 'DocumentChecklistItem'}/${c.itemId}`}>Riapri elemento e correzioni Admin</a>}
     {state.uncertain && <TechnicalPrivateItemRecovery target={c.target} commandId={c.commandId} action={recovery} />}
@@ -70,6 +75,7 @@ export function TechnicalPrivateItemForm({ target, contextSha256, initialCommand
         <RomeDateTimeInput label="Scadenza facoltativa" className={control} value={dueAt} disabled={locked} onChange={setDueAt} /></div>}
       <button className={button} disabled={locked || !title.trim() || (kind === 'Task' && invalidDate)}>Prepara riepilogo</button><p role="status">{state.message}</p>
     </form>{state.stepUpRequired && <InlinePrivilegedConfirmation />}{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction}
-      edit={() => setIdentity({ commandId: crypto.randomUUID(), itemId: crypto.randomUUID() })} />}
+      edit={() => setIdentity({ commandId: crypto.randomUUID(), itemId: crypto.randomUUID() })} preparing={pending}
+      renew={() => { const form = new FormData(); form.set('command', JSON.stringify(command)); startTransition(() => submit(form)); }} />}
   </section>;
 }

@@ -15,6 +15,8 @@ import { loadActivePrivilegedStepUpKey, lockRegisteredPrivilegedStepUpKey } from
 import { loadTechnicalPrivateItemRecord } from './technical-private-item-persistence';
 import { lockTechnicalAssignmentContext } from './technical-assignment-context';
 import { admitsTechnicalAssignmentManager } from './technical-assignment-permissions';
+import { createHash } from 'node:crypto';
+import { readPrivateDocumentBounded } from './storage';
 
 type Tx = Prisma.TransactionClient;
 async function withSerializableTransaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
@@ -52,6 +54,7 @@ const archives: Record<string, { status: string; draft: string }> = {
 export const adminRecordCommand = z.object({ commandId: z.string().uuid(), model: z.string().min(1).max(80), id: identifier,
   operation: z.enum(['CREATE', 'UPDATE', 'TRASH', 'RESTORE', 'RECTIFY']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().trim().min(3).max(2000), values: z.record(z.string(), z.string().max(100_000)),
+  paymentCorrection: z.object({ evidenceVersionId: identifier, effectiveAt: z.string().datetime({ offset: true }), confirmed: z.literal(true) }).strict().optional(),
 }).strict();
 export type AdminRecordCommand = z.infer<typeof adminRecordCommand>;
 
@@ -100,6 +103,7 @@ export function parseAdminRecordValues(policy: AdminRecordPolicy, values: Record
   if (['Project', 'ProjectExpense'].includes(policy.model) && result.priority && !['bassa', 'media', 'alta', 'urgente'].includes(String(result.priority))) fail('INVALID');
   if (policy.model === 'Client' && !['attivo', 'sospeso', 'archiviato'].includes(String(result.status))) fail('INVALID');
   if (policy.model === 'Contract' && creating && result.status === 'firmato') fail('HISTORY');
+  if (policy.model === 'Payment' && creating) { result.status ??= 'da_incassare'; if (result.status !== 'da_incassare') fail('HISTORY'); }
   if (creating && archives[policy.model] && result.status !== archives[policy.model].draft) fail('HISTORY');
   if (policy.model === 'CommercialLeadSlaPolicyVersion' && (!['STAGED', 'ACTIVE'].includes(String(result.status))
     || !Number.isSafeInteger(result.responseTargetSeconds) || Number(result.responseTargetSeconds) < 60 || Number(result.responseTargetSeconds) > 2_592_000)) fail('INVALID');
@@ -256,9 +260,66 @@ async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, ch
   if (policy.model === 'PracticeCommunication' && !['bozza', 'da_revisionare'].includes(String(before.status))) fail('HISTORY');
   if (policy.model === 'Contract' && changed.some(key => !['notes', 'status'].includes(key)) && (before.signedAt || before.signedDocumentId || before.status === 'firmato'
     || await tx.payment.count({ where: { contractId: before.id, OR: [{ collectedAt: { not: null } }, { status: { in: ['parziale', 'incassato', 'stornato', 'rimborsato'] } }] } }))) fail('HISTORY');
-  if (policy.model === 'Payment' && changed.some(key => !['method', 'dueDate', 'notes'].includes(key))
+  if (policy.model === 'Payment' && changed.some(key => !['method', 'dueDate', 'status', 'notes'].includes(key))
     && (before.collectedAt || before.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(before.status))
       || await tx.clientService.count({ where: { paymentId: before.id } }))) fail('HISTORY');
+}
+async function paymentStatuses(tx: Tx, row: Row | null) {
+  if (!row) return ['da_incassare'];
+  const current = String(row.status);
+  if (['da_incassare', 'scaduto'].includes(current) && !row.collectedAt && !row.accountingDocumentId)
+    return ['da_incassare', 'scaduto', 'stornato'];
+  if (['incassato', 'parziale'].includes(current) && row.collectedAt && row.accountingDocumentId)
+    return [current, 'stornato', 'rimborsato'];
+  if (['stornato', 'rimborsato'].includes(current)) {
+    const prior = await tx.adminRecordRevision.findFirst({ where: { model: 'Payment', recordId: row.id, operation: 'UPDATE',
+      after: { path: ['status'], equals: current }, NOT: { before: { path: ['status'], equals: current } } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }] });
+    const origin = prior?.before as Row | undefined, recorded = prior?.after as Row | undefined;
+    const preserved = ['clientId', 'contractId', 'taxableAmount', 'vatAmount', 'totalAmount', 'collectedAt', 'accountingDocumentId'];
+    if (origin && recorded && preserved.every(key => adminRecordVersion(recorded[key] ?? null) === adminRecordVersion(row[key] ?? null)))
+      return [current, String(origin.status)];
+  }
+  return [current];
+}
+/** A declaration of an evidenced administrative correction, never a new bank
+ * movement or a replacement of the original collection receipt. */
+async function correctPaymentStatus(tx: Tx, actor: Actor, command: AdminRecordCommand, before: Row, nextStatus: string, now: Date) {
+  const correction = command.paymentCorrection;
+  if (!correction || !recordUpdatePermission(actor, 'document.download') || !(await paymentStatuses(tx, before)).includes(nextStatus)) fail('HISTORY');
+  const effectiveAt = new Date(correction.effectiveAt);
+  if (effectiveAt > now || (before.collectedAt && effectiveAt < new Date(String(before.collectedAt)))) fail('INVALID');
+  const initial = await tx.documentVersion.findUnique({ where: { id: correction.evidenceVersionId } });
+  if (!initial) fail('CONTEXT');
+  await lock(tx, 'Document', initial.documentId); await lock(tx, 'DocumentVersion', initial.id);
+  const version = await tx.documentVersion.findUniqueOrThrow({ where: { id: initial.id } });
+  const document = await tx.document.findUniqueOrThrow({ where: { id: version.documentId } });
+  await assertContextVisible(tx, actor, 'Document', document);
+  const contract = await tx.contract.findUnique({ where: { id: String(before.contractId) } });
+  if (!contract || document.deletedAt || document.status !== 'verificato' || document.clientId !== before.clientId
+    || (document.projectId && document.projectId !== contract.projectId) || (document.validUntil && document.validUntil <= now)
+    || !/^[a-f0-9]{64}$/.test(version.checksum ?? '')) fail('CONTEXT');
+  if (document.clientServiceId) {
+    const context = await tx.clientService.findUnique({ where: { id: document.clientServiceId } });
+    if (!context || context.deletedAt || context.clientId !== before.clientId || context.contractId !== before.contractId) fail('CONTEXT');
+  }
+  let bytes: Buffer;
+  try { bytes = await readPrivateDocumentBounded(version.storagePath, 50 * 1024 * 1024); } catch { fail('CONTEXT'); }
+  if (!bytes.length || createHash('sha256').update(bytes).digest('hex') !== version.checksum) fail('CONTEXT');
+  await tx.$queryRaw`SELECT id FROM "ClientService" WHERE "paymentId"=${before.id} ORDER BY id FOR UPDATE`;
+  const services = await tx.clientService.findMany({ where: { paymentId: before.id }, orderBy: { id: 'asc' } });
+  if (services.length && !recordUpdatePermission(actor, 'service.write')) fail('DENIED');
+  for (const service of services) {
+    await assertContextVisible(tx, actor, 'ClientService', service);
+    if (service.clientId !== before.clientId || service.contractId !== before.contractId) fail('CONTEXT');
+    const status = nextStatus === 'incassato' ? (new Prisma.Decimal(String(before.totalAmount)).equals(contract.totalAmount) ? 'incassato' : 'parziale') : nextStatus;
+    await tx.clientService.update({ where: { id: service.id }, data: { paymentStatus: status as typeof service.paymentStatus, recordUpdateEpoch: { increment: 1 } } });
+    await tx.auditLog.create({ data: { actorId: actor.id, entityType: 'ClientService', entityId: service.id, event: 'admin_payment_status_alignment',
+      after: { commandId: command.commandId, paymentId: before.id, previousStatus: service.paymentStatus, status } } });
+  }
+  await tx.auditLog.create({ data: { id: `payment-correction:${command.commandId}`, actorId: actor.id, entityType: 'Payment', entityId: before.id,
+    event: 'admin_payment_status_correction', after: { commandId: command.commandId, previousStatus: String(before.status), status: nextStatus,
+      effectiveAt: effectiveAt.toISOString(), evidenceVersionId: version.id, evidenceSha256: version.checksum, evidenceBytes: bytes.length,
+      linkedServices: services.map(service => service.id), declaration: 'ADMINISTRATIVE_CORRECTION_NO_FUNDS_TRANSFER' } } });
 }
 async function archiveRestoreStatus(tx: Tx, model: string, row: Row): Promise<string | null> {
   const archive = archives[model]; if (!archive || row.status !== archive.status) return null;
@@ -301,6 +362,9 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       const values = parseAdminRecordValues(policy, command.values, command.operation === 'CREATE');
       const changed = Object.keys(values).filter(key => adminRecordVersion(before?.[key] ?? null) !== adminRecordVersion(values[key]));
       if (before) await assertEditable(tx, policy, before, changed);
+      if (command.paymentCorrection && (policy.model !== 'Payment' || !before || !changed.includes('status'))) fail('INVALID');
+      if (policy.model === 'Payment' && before && changed.includes('status'))
+        await correctPaymentStatus(tx, current.actor, command, before, String(values.status), await current.finish());
       if (before && archives[policy.model] && changed.includes('status')) {
         if (changed.some(key => key !== 'status') || (values.status !== archives[policy.model].status
           && values.status !== await archiveRestoreStatus(tx, policy.model, before))) fail('HISTORY');
@@ -422,10 +486,25 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
   });
 }
 
-const referenceModels = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
+const referenceModels = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'DocumentVersion', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
 const deadlineModels = ['Client', 'Project', 'TechnicalPractice', 'Task', 'ClientService'];
 async function referenceRows(tx: Tx, actor: Actor, model: string, query = '', page = 1) {
   if (![...referenceModels, ...deadlineModels].includes(model)) fail('INVALID');
+  if (model === 'DocumentVersion') {
+    if (!recordUpdatePermission(actor, 'document.download')) fail('DENIED');
+    const rows = await tx.$queryRaw<Array<{ id: string; documentId: string; title: string; version: number }>>`
+      SELECT v.id, v."documentId", d.title, v.version FROM "DocumentVersion" v JOIN "Document" d ON d.id=v."documentId"
+      WHERE d."deletedAt" IS NULL AND d.status='verificato' AND
+        (${query}='' OR v.id=${query} OR d.id=${query} OR d.title ILIKE ${'%' + query + '%'})
+      ORDER BY v.id LIMIT 51 OFFSET ${(page - 1) * 50}`;
+    const options: NonNullable<AdminField['options']> = [];
+    for (const row of rows.slice(0, 50)) {
+      try { await assertContextVisible(tx, actor, 'DocumentVersion', row); }
+      catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
+      options.push({ value: row.id, label: `${row.title} · versione ${row.version}`, group: model });
+    }
+    return { options, hasNext: rows.length > 50 };
+  }
   const fields = metadata(model).fields;
   const names = fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'email', 'contractNumber', 'code'].includes(field.name));
   const rows = await delegate(tx, model).findMany({ take: 51, skip: (page - 1) * 50, orderBy: { id: 'asc' },
@@ -446,8 +525,9 @@ export async function searchAdminRecordReferences(db: PrismaClient, session: Aut
   const input = z.object({ model: z.string().max(80), field: z.string().max(80), query: z.string().trim().max(200),
     page: z.number().int().min(1).max(10000), entityType: z.string().max(80).optional() }).strict().parse(raw);
   const policy = adminRecordPolicy(input.model);
-  if (!policy.fields.includes(input.field)) fail('INVALID');
-  const target = input.model === 'Deadline' && input.field === 'entityId' && deadlineModels.includes(input.entityType ?? '')
+  const paymentEvidence = input.model === 'Payment' && input.field === 'administrativeEvidenceVersionId';
+  if (!paymentEvidence && !policy.fields.includes(input.field)) fail('INVALID');
+  const target = paymentEvidence ? 'DocumentVersion' : input.model === 'Deadline' && input.field === 'entityId' && deadlineModels.includes(input.entityType ?? '')
     ? input.entityType : relation(input.model, input.field)?.type;
   if (!target || ![...referenceModels, ...deadlineModels].includes(target)) fail('INVALID');
   return withSerializableTransaction(db, async tx => {
@@ -470,7 +550,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
     if (policy.model === 'Contract' && (row.signedAt || row.signedDocumentId || row.status === 'firmato'
       || await tx.payment.count({ where: { contractId: row.id, OR: [{ collectedAt: { not: null } }, { status: { in: ['parziale', 'incassato', 'stornato', 'rimborsato'] } }] } }))) editable = ['notes', 'status'];
     if (policy.model === 'Payment' && (row.collectedAt || row.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(row.status))
-      || await tx.clientService.count({ where: { paymentId: row.id } }))) editable = ['method', 'dueDate', 'notes'];
+      || await tx.clientService.count({ where: { paymentId: row.id } }))) editable = ['method', 'dueDate', 'status', 'notes'];
     if (policy.model === 'CommercialOffer' && (row.status !== 'bozza' || await tx.practiceOfferRevision.count({ where: { commercialOfferId: row.id } }))) editable = ['notes', 'followUpAt', 'followUpNote', 'outcomeNote'];
     if (archives[policy.model] && !editable.includes('status')) editable.push('status');
   }
@@ -507,6 +587,9 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
       descriptor.type = 'select'; descriptor.options = [...new Set(row ? [String(row.status), archive.status, ...(restored ? [restored] : [])] : [archive.draft])]
         .map(value => ({ value, label: value === archive.status ? 'Archivia conservando le evidenze' : restored === value ? 'Ripristina lo stato precedente · ' + value.replaceAll('_', ' ') : value.replaceAll('_', ' ') }));
       descriptor.help = 'L’archiviazione conserva contenuto, autori e approvazioni. Il ripristino è ammesso solo allo stato registrato prima dell’archiviazione, senza altre modifiche.';
+    } else if (policy.model === 'Payment' && name === 'status') {
+      descriptor.type = 'select'; descriptor.options = (await paymentStatuses(tx, row)).map(value => ({ value, label: value.replaceAll('_', ' ') }));
+      descriptor.help = 'Il cambio di stato è una dichiarazione amministrativa documentata. Gli incassi si registrano dal percorso dedicato. Il ripristino recupera solo lo stato precedente registrato.';
     } else if (field.kind === 'enum') {
       descriptor.type = 'select'; descriptor.options = Prisma.dmmf.datamodel.enums.find(item => item.name === field.type)!.values
         .filter(item => (policy.model !== 'Project' || item.name !== 'archiviato')
@@ -558,6 +641,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     await current.finish();
     return { model, id, version: adminRecordVersion(row), label: creating ? `Nuovo · ${policy.label}` : label(row!),
       ...form, create: creating, trash: Boolean(policy.trash), deleted: Boolean(row?.deletedAt || removed),
+      paymentCorrection: model === 'Payment' && !creating,
       guidance: privateTarget ? 'Elemento tecnico privato: puoi correggere il contenuto, archiviare e ripristinare entro la tua autorità personale. Origine e collegamenti restano conservati. I cambi di stato e lifecycle invalidano i perimetri precedenti: dopo il ripristino verifica e conferma di nuovo gli incarichi necessari.' : policy.guidance ?? null,
       href: privateTarget ? privateTarget.kind === 'Project' ? `/projects/${privateTarget.targetId}/assignments` : `/technical-office/practices/${privateTarget.targetId}/assignments` : policy.href.replace('{id}', id), relationships, restoringRevision: revisionId ?? null,
       history: history.map(item => ({ id: item.commandId, action: item.operation, at: item.createdAt.toISOString(), reason: item.reason,

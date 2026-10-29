@@ -5,7 +5,7 @@ import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation, PrivilegedAdmissionRequired } from './privileged-access';
 import { RecordUpdateError } from './record-update-contract';
 import { SerializableConflictError } from './serializable';
 import { previewRecordReminder } from './record-reminder-preview';
@@ -23,8 +23,9 @@ async function credentials() {
     stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' };
 }
 function failure(error: unknown) {
-  const definite = error instanceof RecordUpdateError || error instanceof ZodError || error instanceof SerializableConflictError;
-  return { ok: false as const, definite, message: definite
+  const stepUpRequired = error instanceof PrivilegedAdmissionRequired;
+  const definite = stepUpRequired || error instanceof RecordUpdateError || error instanceof ZodError || error instanceof SerializableConflictError;
+  return { ok: false as const, definite, stepUpRequired, message: stepUpRequired ? 'Conferma la tua identità. Le scelte del promemoria restano disponibili; nessuna operazione è stata eseguita.' : definite
     ? 'Operazione non registrata: controlla conferma personale, scadenza, persone e permessi correnti. Prepara un nuovo riepilogo.'
     : 'Esito non confermato. Usa «Verifica esito» e conserva il riferimento; non ripetere il salvataggio.' };
 }
@@ -34,14 +35,14 @@ function failure(error: unknown) {
 // and discard a confirmed result. Explicit navigation reads the current state.
 export async function previewRecordReminderAction(raw: unknown) {
   const session = await requireSession();
-  try { return { ok: true as const, preview: await previewRecordReminder(prisma, session, await credentials(), raw) }; }
+  try { await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true }); return { ok: true as const, preview: await previewRecordReminder(prisma, session, await credentials(), raw) }; }
   catch (error) { return failure(error); }
 }
 export async function confirmRecordReminderAction(raw: unknown,
   token: Parameters<typeof confirmRecordReminder>[4], confirmed: boolean) {
   const session = await requireSession();
-  await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true });
     const result = await confirmRecordReminder(prisma, session, await credentials(), raw, token, confirmed);
     return { ok: true as const, result };
   } catch (error) { return failure(error); }
@@ -53,8 +54,8 @@ export async function verifyRecordReminderAction(commandId: string) {
 }
 export async function cancelRecordReminderAction(raw: unknown, confirmed: boolean) {
   const session = await requireSession();
-  await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true });
     const result = await cancelRecordReminder(prisma, session, await credentials(), raw, confirmed);
     return { ok: true as const, result };
   } catch (error) { return failure(error); }

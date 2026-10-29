@@ -95,6 +95,16 @@ test('two technicians receive only the selected deadline at its real time; curre
   const summary = admin.getByRole('region', { name: 'Riepilogo promemoria', exact: true });
   await expect(summary.getByText(/escluso: accesso pertinente assente/)).toHaveCount(2);
   await screen(admin, 'exact-preview', 1440); await screen(admin, 'exact-preview', 390);
+  await ac.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  const beforeRenewal = await db.recordUpdateCommand.count(); await confirm(admin);
+  await expect(admin.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  expect(await db.recordUpdateCommand.count()).toBe(beforeRenewal);
+  await admin.getByLabel('Password corrente', { exact: true }).fill(password);
+  await admin.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(admin.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await admin.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
+  await expect(admin.getByText('Riepilogo aggiornato. Controllalo e conferma personalmente.', { exact: true })).toBeVisible();
+  await admin.getByLabel('Confermo questo istante e questi destinatari per l’avviso CRM', { exact: true }).check();
   const beforeMail = await db.approvedCommunication.count(); await confirm(admin); const commandId = await recorded(admin);
   const rows = await deliveries(commandId); expect(rows.map(r => r.recipientId).sort()).toEqual([f.techA.id, f.techB.id].sort());
   const a = rows.find(r => r.recipientId === f.techA.id)!, b = rows.find(r => r.recipientId === f.techB.id)!;

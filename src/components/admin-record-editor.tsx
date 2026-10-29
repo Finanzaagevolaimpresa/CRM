@@ -13,12 +13,14 @@ const subscribe = () => () => {}, hydrated = () => true, server = () => false;
 export function AdminRecordEditor({ data, commandId, recovering = false }: { data: AdminRecordForm; commandId: string; recovering?: boolean }) {
   const ready = useSyncExternalStore(subscribe, hydrated, server);
   const [values, setValues] = useState(data.values), [reason, setReason] = useState('');
+  const [evidenceVersionId, setEvidenceVersionId] = useState(''), [effectiveAt, setEffectiveAt] = useState(''), [declared, setDeclared] = useState(false);
   const canUpdate = data.fields.some(field => !field.readOnly);
   const [operation, setOperation] = useState<AdminRecordCommand['operation']>(data.create ? 'CREATE' : data.deleted ? 'RESTORE' : canUpdate ? 'UPDATE' : 'RECTIFY');
   const [pending, setPending] = useState(false), [result, setResult] = useState<AdminSaveResult | null>(recovering
     ? { ok: false, uncertain: true, message: 'Questo riferimento contiene un tentativo da verificare. Nessun salvataggio viene ripetuto automaticamente.' } : null);
   const [confirmedClose, setConfirmedClose] = useState(false);
   const [submitted, setSubmitted] = useState<AdminRecordCommand | null>(null);
+  const correctingPayment = data.paymentCorrection && operation === 'UPDATE' && values.status !== data.values.status;
   const frozen = !ready || pending || Boolean(result?.uncertain || result?.ok || result?.closed);
   const fieldClass = 'block w-full rounded-xl border border-slate-300 bg-white p-3';
   const href = `/admin/records/${data.model}/${data.id}`;
@@ -30,7 +32,8 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
   async function submit(replay = false) {
     if (!ready || pending || (result?.uncertain && !replay)) return;
     const command = replay && submitted ? submitted : { commandId, model: data.model, id: data.id, operation,
-      expectedVersion: data.version, reason, values: operation === 'CREATE' || operation === 'UPDATE' ? values : {} };
+      expectedVersion: data.version, reason, values: operation === 'CREATE' || operation === 'UPDATE' ? values : {},
+      ...(correctingPayment && declared ? { paymentCorrection: { evidenceVersionId, effectiveAt, confirmed: true as const } } : {}) };
     setSubmitted(command); setPending(true); remember(true);
     try { const saved = await saveAdminRecordAction(command); setResult(saved); if (!saved.uncertain && !saved.ok) remember(false); }
     catch { setResult({ ok: false, uncertain: true, message: 'Risposta interrotta. Il comando è conservato: verifica l’esito prima di proseguire.' }); }
@@ -71,6 +74,13 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
             {field.readOnly && <p className="text-sm">Valore storico conservato. Usa la rettifica o il percorso di nuova bozza indicato sopra.</p>}
           </fieldset>;
         })}</div>}
+        {correctingPayment && <section aria-label="Prova della rettifica del pagamento" className="space-y-4 rounded-xl border border-amber-400 p-4">
+          <h2 className="font-bold">Rettifica documentata del pagamento</h2>
+          <p>L’incasso originario, la sua data e la sua prova restano conservati. I servizi collegati ricevono lo stesso aggiornamento contabile. Il CRM non esegue rimborsi o trasferimenti di denaro.</p>
+          <AdminReferenceSelect model="Payment" field={{ name: 'administrativeEvidenceVersionId', label: 'Documento e versione a prova della rettifica', type: 'select', required: true, reference: true, options: [] }} value={evidenceVersionId} onChange={setEvidenceVersionId} />
+          <RomeDateTimeInput label="Data effettiva della rettifica documentata" value={effectiveAt} onChange={setEffectiveAt} required className={fieldClass} />
+          <label className="flex gap-3"><input type="checkbox" required checked={declared} onChange={event => setDeclared(event.target.checked)} />Dichiaro di avere verificato la prova e lo stato amministrativo indicato; non sto registrando un nuovo incasso.</label>
+        </section>}
         {operation === 'RECTIFY' && <p>La rettifica viene aggiunta al registro della scheda. Non cambia il contenuto originale, non sostituisce una firma e non attesta una consegna o una presa in carico.</p>}
         {operation === 'TRASH' && <p>Il record e il suo contenuto vengono conservati per il ripristino. I collegamenti e le prove storiche non vengono ricreati.</p>}
         <label className="block font-semibold">Motivazione della correzione<textarea required minLength={3} maxLength={2000} className={fieldClass}

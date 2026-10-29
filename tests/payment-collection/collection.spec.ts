@@ -93,6 +93,14 @@ test('mobile service registration, actual collection, explicit linking and techn
   await form.getByLabel('Scadenza delle attività', { exact: true }).fill('2027-01-15');
   await form.getByLabel('Attività incluse, una per riga', { exact: true }).fill(f.input.activities.join('\n'));
   await form.getByLabel('Motivazione', { exact: true }).fill(f.input.reason); await form.getByRole('checkbox').check();
+  await page.context().clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  expect(await db.technicalPractice.count({ where: { clientId: f.client.id } })).toBe(0);
+  await expect(form.getByLabel('Attività incluse, una per riga', { exact: true })).toHaveValue(f.input.activities.join('\n'));
+  await page.getByLabel('Password corrente', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
   await expect.poll(async () => Boolean(await getHandoffReceipt(db, service.id))).toBe(true);
   await page.goto(`/services/${service.id}/handoff`);

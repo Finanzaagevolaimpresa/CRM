@@ -5,18 +5,19 @@ import { ZodError } from 'zod';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation, PrivilegedAdmissionRequired } from './privileged-access';
 import { previewProjectHandoff, confirmProjectHandoff, readProjectHandoffReceipt } from './project-handoff';
 import { ProjectHandoffError } from './project-handoff-contract';
 import { RecordUpdateError } from './record-update-contract';
 import { SerializableConflictError } from './serializable';
 function failure(error: unknown) {
-  const definite = error instanceof ProjectHandoffError || error instanceof RecordUpdateError || error instanceof ZodError || error instanceof SerializableConflictError;
-  const message = error instanceof ProjectHandoffError && error.code === 'EXISTS'
+  const stepUpRequired = error instanceof PrivilegedAdmissionRequired;
+  const definite = stepUpRequired || error instanceof ProjectHandoffError || error instanceof RecordUpdateError || error instanceof ZodError || error instanceof SerializableConflictError;
+  const message = stepUpRequired ? 'Conferma la tua identità. Il riepilogo resta disponibile; la sua scadenza viene comunque verificata prima del salvataggio.' : error instanceof ProjectHandoffError && error.code === 'EXISTS'
     ? 'Una pratica è già collegata. Riapri il passaggio dal progetto per consultarla.'
     : definite ? 'Preparazione non salvata: dati, sessione o autorizzazioni non sono più validi. Riapri il progetto e prepara un nuovo riepilogo.'
       : 'Esito non confermato. Usa «Verifica esito»; non ripetere la creazione.';
-  return { ok: false as const, definite, message };
+  return { ok: false as const, definite, stepUpRequired, message };
 }
 export async function previewProjectHandoffAction(raw: unknown) {
   const session = await requireSession();
@@ -28,8 +29,8 @@ export async function previewProjectHandoffAction(raw: unknown) {
 }
 export async function confirmProjectHandoffAction(raw: unknown, preview: unknown) {
   const session = await requireSession();
-  await requireEnforcedPrivilegedMutation(session, 'R05_RESPONSIBILITY');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'R05_RESPONSIBILITY', { inline: true });
     const key = await loadActivePrivilegedStepUpKey(prisma);
     if (!key) throw new ProjectHandoffError('DENIED');
     const store = await cookies();

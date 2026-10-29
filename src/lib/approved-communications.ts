@@ -697,6 +697,36 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
   });
 }
 
+/** Restricted administrative index; each row passes the same live context and
+ * attachment admission as the native reader before any subject is returned. */
+export async function listAdminComplaintMessages(db: Db, claimed: AuthSession, page = 1) {
+  if (!Number.isSafeInteger(page) || page < 1 || page > 10000) throw new ApprovedCommunicationError('INVALID');
+  return readTransaction(db, async tx => {
+    const current = await actor(tx, claimed, 'practice_communications.read');
+    if (current.role !== 'admin' || !hasPermission(current, 'legal.read')) denied();
+    const registry = await tx.internalSession.findUnique({ where: { id: current.sessionId! } });
+    if (!registry) denied();
+    let until = Math.min(current.expiresAt * 1000, registry.expiresAt.getTime());
+    const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT m.id FROM "ApprovedCommunication" m
+      JOIN "CommunicationVersion" v ON v."messageId"=m.id AND v.revision=m."currentRevision"
+      WHERE v.snapshot->>'classification'='COMPLAINT' ORDER BY m."updatedAt" DESC,m.id LIMIT 51 OFFSET ${(page - 1) * 50}`;
+    const messages = [];
+    for (const candidate of candidates.slice(0, 50)) {
+      let detail: MessageScopeDetail;
+      try { detail = await messageScope(tx, current, candidate.id); }
+      catch (error) { if (error instanceof ApprovedCommunicationError && ['DENIED', 'CONFLICT'].includes(error.code)) continue; throw error; }
+      const admittedUntil = await readableMessageAttachments(tx, current, detail);
+      if (admittedUntil === null) continue;
+      until = Math.min(until, admittedUntil, detail.updateUntil);
+      messages.push({ id: detail.row.id, context: rowContext(detail.row), subject: detail.snapshot.subject, contextLabel: detail.scope.label,
+        state: detail.row.state, revision: detail.row.currentRevision, updatedAt: detail.row.updatedAt.toISOString() });
+    }
+    const [finished] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    if (finished.now.getTime() >= until) denied();
+    return { messages, page, hasMore: candidates.length > 50 };
+  });
+}
+
 /** Authenticated context-file operations reuse every native context gate. */
 export async function loadCommunicationFileContext(tx: Tx, claimed: AuthSession, rawContext: unknown, write: boolean) {
   const context = parse(communicationContextSchema, rawContext);

@@ -68,6 +68,14 @@ test('native exact preview and lost-response recovery reopen one practice withou
   const context=await browser.newContext(),page=await context.newPage();await login(page);const row=await fixture();
   const before=await Promise.all([db.technicalAssignment.count(),db.approvedCommunication.count(),db.task.count(),db.document.count()]);
   await open(page,row.project.id);await preview(page);await screen(page,'preview',1440);await screen(page,'preview',390);
+  await context.clearCookies({name:'fai_crm_privileged_step_up'});
+  await page.getByRole('button',{name:'Prepara pratica',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Conferma identità senza lasciare il lavoro',exact:true})).toBeVisible();
+  expect(await db.technicalPractice.count({where:{projectId:row.project.id}})).toBe(0);
+  await expect(page.getByLabel('Tipologia pratica',{exact:true})).toHaveValue('Preparazione sintetica');
+  await page.getByLabel('Password corrente',{exact:true}).fill(password);
+  await page.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();
+  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.',{exact:true})).toBeVisible();
   let captured:{url:string;headers:Record<string,string>;body:Buffer}|undefined;
   await page.route(`**/projects/${row.project.id}/technical-handoff*`,async route=>{
     const request=route.request();

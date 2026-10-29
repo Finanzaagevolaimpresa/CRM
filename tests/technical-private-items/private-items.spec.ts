@@ -80,6 +80,9 @@ test('native preview creates nothing; exact private task and checklist save with
       await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
       await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
       expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
+      await page.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Crea elemento privato', exact: true })).toBeEnabled();
+      await page.getByLabel('Confermo il contenuto e la creazione privata.', { exact: true }).check();
     }
     await save(page);
     expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(1);

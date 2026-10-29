@@ -71,8 +71,8 @@ export const adminRecordCatalogue = [
     'leadId clientId title description services includedActivities taxableAmount vatAmount totalAmount validUntil operationalConditions commercialProposal notes followUpAt followUpNote outcomeNote',
     { create: true, trash: 'soft', href: '/commercial-offers/{id}', guidance: 'Le nuove offerte restano bozze. Le condizioni delle offerte già inviate, accettate o collegate a una revisione si conservano; note e seguito commerciale restano correggibili. Nessuna operazione invia l’offerta o accetta un incarico.' }),
   item('Payment', 'Pagamenti · dati operativi', 'Servizi e amministrazione', 'payment.write',
-    'contractId clientId taxableAmount vatAmount totalAmount method dueDate notes',
-    { create: true, href: '/payments/{id}/collection', guidance: 'Importi e collegamenti sono modificabili prima dell’incasso. Gli incassi mantengono evidenza e procedura dedicata; una rettifica non dichiara movimenti finanziari mai avvenuti.' }),
+    'contractId clientId taxableAmount vatAmount totalAmount method dueDate status notes',
+    { create: true, href: '/payments/{id}/collection', guidance: 'Importi e collegamenti si correggono prima dell’incasso. Storni, rimborsi e ripristini richiedono una prova documentale, una data e una dichiarazione amministrativa: conservano l’incasso originario e aggiornano lo stato dei servizi collegati. Nessuna operazione muove denaro. Per un incasso parziale del contratto registra una rata dell’importo effettivo e usa Conferma incasso; non alterare una rata già incassata.' }),
   item('ClientService', 'Servizi acquistati', 'Servizi e amministrazione', 'service.write',
     'clientId companyId projectId practiceType requestedAmount plannedInvestment operationalNotes dueDate internalNotes',
     { trash: 'soft', guidance: 'Acquisto, pagamento, avvio, chiusura e assegnazione restano nelle procedure collegate, con i rispettivi gate e prove.' }),
@@ -147,4 +147,5 @@ export type AdminField = { name: string; label: string; type: 'text' | 'longtext
 export type AdminRecordForm = { model: string; id: string; version: string; label: string; fields: AdminField[];
   values: Record<string, string>; create: boolean; trash: boolean; deleted: boolean; guidance: string | null; href: string;
   relationships: { label: string; href: string }[]; restoringRevision: string | null;
+  paymentCorrection?: boolean;
   history: { id: string; action: string; at: string; reason: string; actor: string; canRestore: boolean }[] };

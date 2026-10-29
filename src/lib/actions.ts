@@ -1,5 +1,6 @@
 'use server';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
+import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
 import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
 import { withSerializableTransaction } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
@@ -817,6 +818,7 @@ export async function updateCommercialOffer(form: FormData) {
     } else if (updateData.status === 'inviata' && !updateData.sentAt) {
       updateData.sentAt = now;
     }
+    assertCommercialOfferTermsPreserved(before, updateData, Boolean(await tx.practiceOfferRevision.count({ where: { commercialOfferId: data.id } })));
     const offer = await tx.commercialOffer.update({ where: { id: data.id }, data: updateData });
     const events = ['commercial_offer_update'];
     if (before.status !== offer.status) events.push('commercial_offer_status_change');
