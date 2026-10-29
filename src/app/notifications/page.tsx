@@ -1,5 +1,6 @@
+import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from "next/link";
-import { Badge, Card, EmptyState, PageHeader, formatDateTime } from "@/components/ui";
+import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { getInternalNotifications } from "@/lib/internal-notifications";
 
@@ -19,9 +20,10 @@ export default async function NotificationsPage() {
     <div className="crm-space-y-6">
       <PageHeader
         title="Notifiche"
-        description="Priorità operative, aggiornamenti selezionati dall’Admin e richieste AI, con accesso verificato per ogni scheda."
+        description="Priorità operative, aggiornamenti selezionati dall’Admin e richieste AI, con accesso verificato per ogni scheda. Orari Europe/Rome."
       />
       <Link href="/notifications/updates" className="inline-block font-bold text-fai-blue underline">Aggiornamenti selezionati e stato di lettura</Link>
+      {session.role === 'admin' && <Link href="/notifications/reminders" className="block font-bold text-fai-blue underline">I miei promemoria programmati</Link>}
 
       <Card
         title="Notifiche attive"
@@ -54,7 +56,7 @@ export default async function NotificationsPage() {
                 </div>
                 <div>
                   <p className="text-[0.65rem] font-black uppercase tracking-wide text-slate-400">Data / scadenza</p>
-                  <p className="mt-1 text-sm font-bold text-slate-700">{formatDateTime(notification.date)}</p>
+                  <p className="mt-1 text-sm font-bold text-slate-700">{formatRecordNoticeTime(notification.date)}</p>
                 </div>
                 <Link
                   className="inline-flex justify-center rounded-xl bg-fai-green px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-xs transition hover:bg-fai-navy"
