@@ -41,6 +41,8 @@ const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveA
 
 test('evidenced payment correction and restoration preserve the original collection and align linked services exactly once', options, async () => {
   const f = await paymentCorrectionFixture(db, admin.user.id);
+  const evidenceChoices = await searchAdminRecordReferences(db, admin.session, { model: 'Payment', field: 'administrativeEvidenceVersionId', query: f.document.title, page: 1 });
+  assert(evidenceChoices.options.some(row => row.value === f.version.id), 'the exact verified evidence version must be reachable from the Admin editor');
   const input = await command('Payment', f.payment.id, { status: 'rimborsato' });
   await assert.rejects(save(input), /HISTORY/);
   const correction = { evidenceVersionId: f.version.id, effectiveAt: f.effectiveAt, confirmed: true as const };

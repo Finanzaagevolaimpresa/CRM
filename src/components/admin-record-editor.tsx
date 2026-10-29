@@ -41,14 +41,14 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
   }
   return <div className="space-y-6">
     <nav className="flex flex-wrap gap-4"><Link className="underline" href={`/admin/records/${data.model}`}>Elenco</Link>
-      {data.href && <Link className="underline" href={data.href}>Apri percorso operativo</Link>}
+      {data.href && !data.create && <Link className="underline" href={data.href}>Apri percorso operativo</Link>}
       {!data.create && <Link className="underline" target="_blank" rel="noopener" href={href}>Confronta la scheda attuale in una nuova scheda</Link>}</nav>
     {data.guidance && <p className="rounded-xl bg-slate-100 p-4">{data.guidance}</p>}
     {data.restoringRevision && <p role="status" className="rounded-xl border border-amber-300 p-4">Stai preparando il ripristino dei dati precedenti a una correzione. Controlla i valori e indica la motivazione: il salvataggio crea una nuova revisione e conserva tutte le prove.</p>}
     {data.relationships.length > 0 && <section><h2 className="font-bold">Collegamenti interessati</h2>{data.relationships.map(link => <p key={link.href}><Link className="underline" href={link.href}>{link.label}</Link></p>)}</section>}
     <form onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-5">
       <fieldset disabled={frozen} className="space-y-5">
-        {!data.create && <label className="block font-semibold">Operazione<select className={fieldClass} value={operation}
+        {!data.create && <label className="block font-semibold">Operazione<select aria-label="Operazione" className={fieldClass} value={operation}
           onChange={event => setOperation(event.target.value as AdminRecordCommand['operation'])}>
           {data.deleted ? <option value="RESTORE">Ripristina la scheda conservata</option> : <>
             {canUpdate && <option value="UPDATE">Correggi i dati operativi</option>}<option value="RECTIFY">Registra una rettifica motivata nelle evidenze</option>
@@ -104,8 +104,8 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
         finally { setPending(false); }
       }}>Riconcilia e chiudi il tentativo</button>
     </section>}
-    {result?.ok && <Link className="inline-block rounded-xl bg-green-800 px-5 py-3 text-white" href={href}>Riapri e verifica il salvataggio</Link>}
-    {result?.closed && <Link className="underline" href={data.create ? `/admin/records/${data.model}/new?draft=${data.id}` : href}>Riapri per una nuova operazione</Link>}
+    {result?.ok && <a className="inline-block rounded-xl bg-green-800 px-5 py-3 text-white" href={href}>Riapri e verifica il salvataggio</a>}
+    {result?.closed && <a className="underline" href={data.create ? `/admin/records/${data.model}/new?draft=${data.id}` : href}>Riapri per una nuova operazione</a>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Correzioni e rettifiche registrate</h2>
       {!data.history.length && <p>Nessuna correzione amministrativa registrata da questa funzione.</p>}
       {data.history.map(row => <article key={row.id} className="space-y-2 rounded-xl border p-3"><p>{({ CREATE: 'Creazione', UPDATE: 'Correzione dati', TRASH: 'Cestino', RESTORE: 'Ripristino', RECTIFY: 'Rettifica annotata' } as Record<string, string>)[row.action]} · {operationalRomeTime(row.at)} · {row.actor}</p><p className="whitespace-pre-wrap">{row.reason}</p>

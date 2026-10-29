@@ -23,12 +23,12 @@ export function AdminReferenceSelect({ model, field, value, entityType, onChange
     finally { pending.current = false; setBusy(false); }
   }
   return <div className="space-y-2">
-    <label className="block font-semibold">{field.label}<select className="block w-full rounded-xl border p-3" value={value}
+    <label className="block font-semibold">{field.label}<select aria-label={field.label} className="block w-full rounded-xl border p-3" value={value}
       required={field.required} onChange={event => onChange(event.target.value)} disabled={busy}>
       <option value="">Nessuna selezione</option>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select></label>
     {!field.readOnly && <div className="space-y-2 rounded-xl bg-slate-50 p-2">
-      <label className="block text-sm">Cerca {field.label}<input className="block w-full rounded-xl border p-2" value={query} maxLength={200}
+      <label className="block text-sm">Cerca {field.label}<input aria-label={`Cerca ${field.label}`} className="block w-full rounded-xl border p-2" value={query} maxLength={200}
         onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void search(1); } }} /></label>
       <div className="flex flex-wrap gap-3"><button type="button" disabled={busy || Boolean(field.dependsOn && !entityType)} className="underline" onClick={() => void search(1)}>Cerca collegamenti</button>
         <button type="button" disabled={busy || page === 1 || query !== lastQuery} className="underline disabled:opacity-40" onClick={() => void search(page - 1)}>Precedenti</button>

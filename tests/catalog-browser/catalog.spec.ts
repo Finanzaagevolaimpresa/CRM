@@ -65,7 +65,7 @@ test('current and historical catalog remain readable and selectable', async ({ b
     try {
       await db.serviceCatalog.update({ where: { code: 'ottimizzazione_aziendale_ai' }, data: { active: false } });
       await page.goto(`${app}/service-catalog?serviceCode=ottimizzazione_aziendale_ai`);
-      await expect(page.getByRole('alert')).toHaveText('La selezione non è valida, non è ancora disponibile oppure la tipologia digitale non è compatibile con il servizio.');
+      await expect(page.getByRole('alert').filter({ hasText: 'La selezione non è valida' })).toHaveText('La selezione non è valida, non è ancora disponibile oppure la tipologia digitale non è compatibile con il servizio.');
       const inactiveOptimization = page.getByRole('heading', { name: 'Ottimizzazione Aziendale AI' }).locator('xpath=ancestor::section[1]');
       await expect(inactiveOptimization.getByText('Revisione non disponibile per nuove selezioni', { exact: true })).toBeVisible();
       await expect(inactiveOptimization.getByText('Versione 2 · TERMS-v2 · Su preventivo · pubblicata, non selezionabile', { exact: true })).toBeVisible();
