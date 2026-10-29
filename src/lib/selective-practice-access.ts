@@ -370,6 +370,7 @@ export async function practiceSharingManagement(db: PrismaClient, claimed: AuthS
           recipientEmail: grant.recipient.email, revision: grant.revision, revoked: !!grant.revokedAt,
           expiresAt: payload.success ? payload.data.selection.expiresAt : null,
           fields: payload.success ? payload.data.selection.fields : [],
+          documents: payload.success ? (payload.data.selection.documents ?? []) : [],
           documentCount: payload.success ? (payload.data.documents?.length ?? 0) : 0 };
       }) };
   });

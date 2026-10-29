@@ -247,7 +247,11 @@ test('exact document-only native selection, inline bytes, direct URL denial and 
   await reader.setViewportSize({ width: 390, height: 844 });
   expect(await reader.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await reader.screenshot({ path: path.join(evidence, 'practice-document-recipient-mobile.png'), fullPage: true });
-  await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
+  await admin.reload(); await admin.getByLabel('Persona esistente').selectOption(row.readerId);
+  await expect(admin.getByLabel(document.title + ' · versione 1', { exact: false })).toBeChecked();
+  await expect(admin.getByLabel('Titolo', { exact: true })).not.toBeChecked();
+  await expect(admin.getByRole('status').filter({ hasText: 'Bozza dalla selezione registrata' })).toBeVisible();
+  await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
   await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
   await expect.poll(async () => (await db.selectivePracticeGrant.findFirstOrThrow({ where: { practiceId: row.practiceId } })).revokedAt !== null).toBe(true);
   expect((await rc.request.get(url)).status()).toBe(404);

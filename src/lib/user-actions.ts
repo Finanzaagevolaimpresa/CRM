@@ -1,6 +1,5 @@
 'use server';
 import { cookies, headers } from 'next/headers';
-import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
 import { getSession } from './auth';
 import { prisma } from './prisma';
@@ -28,7 +27,9 @@ export async function submitAdminUserCommand(form: FormData): Promise<AdminUserC
       : operation === 'OVERRIDES' ? { overrides: Array.from(form.entries()).filter(([name]) => name.startsWith('permission:')).map(([name, value]) => ({ permission: name.slice(11), value })) } : {};
     const receipt = await executeAdminUserCommand(prisma, session, identity, values, { key,
       sessionToken: store.get(process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session')?.value ?? '', stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' });
-    for (const path of ['/settings/users', '/settings/roles', '/settings/users/' + receipt.userId]) revalidatePath(path);
+    // These authenticated pages read current data on every request. Keep the
+    // current form and receipt URL stable until the explicit reopening link:
+    // a server-action route refresh can discard the in-flight receipt fragment.
     return { ok: true, message: 'Operazione account registrata. Riapri la scheda per verificare lo stato corrente.', ...receipt };
   } catch (error) {
     if (error instanceof PrivilegedAdmissionRequired) return error.formState;

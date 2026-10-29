@@ -1,5 +1,6 @@
 'use client';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
+import { sharingLocalExpiry, UnavailableSharingChoices } from './sharing-draft-helpers';
 
 import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
@@ -16,7 +17,7 @@ const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-whit
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 type Grant = { id: string; recipientId: string; recipientName: string; recipientEmail: string; revision: number;
-  revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; commandId: string; documentCount: number; companyCount: number; companyFieldCount: number; personCount: number; personFieldCount: number };
+  revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; documents: ClientDocumentChoice[]; companies: ClientCompanyChoice[]; people: ClientPersonChoice[]; commandId: string; documentCount: number; companyCount: number; companyFieldCount: number; personCount: number; personFieldCount: number };
 type DocumentOption = { documentId: string; versionId: string; version: number; title: string; fileName: string; mimeType: string; category: string; area: string };
 function rememberCommand(id: string) {
   // A lost response can be reconciled after reload without creating a command.
@@ -55,13 +56,22 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
     expiresAt: expiresTime !== null && validExpiry ? new Date(expiresTime).toISOString() : null };
   const locked = confirming || confirmation.ok || !!confirmation.uncertain;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
+  function chooseRecipient(id: string) {
+    const existing = grants.find(row => row.recipientId === id);
+    setRecipient(id); setFields(existing?.fields ?? []); setDocuments(existing?.documents ?? []);
+    setCompanies(existing?.companies ?? []); setPeople(existing?.people ?? []); setExpires(sharingLocalExpiry(existing?.expiresAt));
+  }
   const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId && preview.preview;
   return <div className="min-w-0 space-y-6" data-testid="client-sharing" data-interactive-ready={ready}>
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-4">
       <fieldset disabled={!ready || locked || preparing} className="min-w-0 space-y-4">
-        <label className="block font-semibold">Persona esistente<select required className={control} value={recipientId} onChange={event => setRecipient(event.target.value)}>
+        <label className="block font-semibold">Persona esistente<select required className={control} value={recipientId} onChange={event => chooseRecipient(event.target.value)}>
           <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email} · {person.role}</option>)}
         </select></label>
+        {grant && <p role="status">Bozza dalla selezione registrata, revisione {grant.revision}{grant.revoked ? ' · revocata' : ''}. Controlla campi, versioni e scadenza; nessuna concessione cambia prima della nuova conferma.</p>}
+        <UnavailableSharingChoices label="Versioni selezionate non presenti nell’elenco" ids={documents.filter(row => !documentOptions.some(option => option.versionId === row.versionId)).map(row => row.versionId)} remove={id => { setDocuments(old => old.filter(row => row.versionId !== id)); changed(); }} />
+        <UnavailableSharingChoices label="Aziende selezionate non presenti nell’elenco" ids={companies.filter(row => !companyOptions.some(option => option.id === row.companyId)).map(row => row.companyId)} remove={id => { setCompanies(old => old.filter(row => row.companyId !== id)); changed(); }} />
+        <UnavailableSharingChoices label="Referenti selezionati non presenti nell’elenco" ids={people.filter(row => !personOptions.some(option => option.membershipId === row.membershipId)).map(row => row.membershipId)} remove={id => { setPeople(old => old.filter(row => row.membershipId !== id)); changed(); }} />
         <fieldset><legend className="mb-2 font-semibold">Campi che la persona potrà leggere</legend><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {(Object.entries(selectiveClientFields) as [SelectiveClientField, string][]).map(([key, label]) => <label className="flex items-center gap-2 rounded-lg border p-3" key={key}>
             <input type="checkbox" checked={fields.includes(key)} onChange={event => setFields(old => event.target.checked ? [...old, key] : old.filter(value => value !== key))} />{label}</label>)}
@@ -144,6 +154,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   </div>;
 }
 function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
+  const [commandId] = useState(grant.commandId);
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, action, pending] = useActionState(revokeClientSharingAction, initial);
   return <div className="min-w-0 space-y-3 rounded-xl border p-4">
@@ -154,12 +165,12 @@ function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
     <p className="text-sm">Aziende selezionate: {grant.companyCount} · campi aziendali: {grant.companyFieldCount}</p>
     <p className="text-sm">Collegamenti dei referenti selezionati: {grant.personCount} · campi dei referenti: {grant.personFieldCount}</p>
     <p>{grant.expiresAt ? `Scadenza: ${new Date(grant.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza indicata'}</p>
-    {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(grant.commandId)} className="space-y-3">
-      <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={grant.commandId} />
+    {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(commandId)} className="space-y-3">
+      <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={commandId} />
       <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={!ready || pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
       <button disabled={!ready || pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
     </form>}
     <p role="status">{state.message}</p>
-    {state.stepUpRequired && <InlinePrivilegedConfirmation />}{!grant.revoked && <Receipt commandId={grant.commandId} clientId={clientId} />}
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}{!grant.revoked && <Receipt commandId={commandId} clientId={clientId} />}
   </div>;
 }
