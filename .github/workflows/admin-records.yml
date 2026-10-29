@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-records-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 33' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 33' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 35' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 35' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
       - name: Prepare isolated browser accounts

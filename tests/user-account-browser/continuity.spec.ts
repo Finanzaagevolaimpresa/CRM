@@ -162,6 +162,8 @@ test('removal requires admin step-up and preserves work, archive and immediate r
   await expect(removal).toHaveAttribute('data-interactive-ready', 'true');
   await removal.getByRole('checkbox').check();
   await removal.getByRole('button', { name: 'Rimuovi account' }).click();
+  await expect(removal.getByRole('status')).toContainText('Operazione account registrata.');
+  await admin.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   await expect(admin.getByRole('heading', { name: 'Account rimosso', exact: true })).toBeVisible();
   expect((await db.user.findUniqueOrThrow({ where: { id: ownerId } })).active).toBe(false);
   expect((await db.client.findUniqueOrThrow({ where: { id: clientId } })).salesOwnerId).toBe(ownerId);

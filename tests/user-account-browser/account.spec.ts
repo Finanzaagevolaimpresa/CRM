@@ -108,17 +108,19 @@ test('admin account management, own profile/password, direct denials, revocation
   const resetRequest = admin.waitForRequest((req) => Boolean(req.headers()['next-action']));
   await reset.getByRole('button', { name: 'Reimposta password', exact: true }).click();
   const capturedReset = await resetRequest;
-  await expect(reset.getByRole('status')).toHaveText('Password aggiornata. Le sessioni precedenti sono state revocate.');
+  await expect(reset.getByRole('status')).toContainText('Operazione account registrata.');
+  await expect(reset.getByLabel('Nuova password', { exact: true })).toHaveValue('');
   await operator.goto('/settings/account');
   await expect(operator).toHaveURL(/\/login$/);
   await login(operator, operatorEmail, password);
   await replay(operator, capturedReset, operatorUser.id, adminUser.id);
   expect((await db.user.findUniqueOrThrow({ where: { id: adminUser.id } })).passwordHash === adminUser.passwordHash).toBe(true);
 
+  await admin.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   const adminProfile = admin.getByRole('form', { name: 'Modifica profilo' });
   await adminProfile.getByLabel('Email di accesso').fill(changedEmail);
   await adminProfile.getByRole('button', { name: 'Salva profilo' }).click();
-  await expect(adminProfile.getByRole('status')).toHaveText('Profilo aggiornato.');
+  await expect(adminProfile.getByRole('status')).toContainText('Profilo aggiornato. Operazione account registrata.');
   await operator.goto('/settings/account');
   await expect(operator).toHaveURL(/\/login$/);
   await login(operator, operatorEmail, password, false);

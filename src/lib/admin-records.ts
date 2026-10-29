@@ -90,7 +90,7 @@ export function parseAdminRecordValues(policy: AdminRecordPolicy, values: Record
       if (!(field.type === 'Int' ? /^\d{1,10}$/ : signed ? /^-?(?:0|[1-9]\d{0,13})(?:\.\d{1,2})?$/ : /^(?:0|[1-9]\d{0,13})(?:\.\d{1,2})?$/).test(value)) fail('INVALID');
       if (field.type === 'Int' && Number(value) > 2147483647) fail('INVALID');
       if (['ownershipPercent', 'expectedBenefitPercent', 'dataCompleteness'].includes(name) && Number(value) > 100) fail('INVALID');
-      result[name] = field.type === 'Int' ? Number(value) : value;
+      result[name] = field.type === 'Int' ? Number(value) : new Prisma.Decimal(value).toString();
     } else if (field.type === 'Json') {
       try { result[name] = JSON.parse(value); } catch { fail('INVALID'); }
     } else if (field.type === 'String') {
@@ -225,10 +225,13 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
   if (new Set(clientIds).size > 1) fail('CONTEXT');
   const projects = [after.projectId, ...[...links.values()].map(row => row.projectId)].filter(Boolean);
   if (new Set(projects).size > 1) fail('CONTEXT');
+  const companyIds = [after.companyId, ...[...links.values()].map(row => row.companyId)].filter(Boolean);
+  if (new Set(companyIds).size > 1) fail('CONTEXT');
   if (policy.model === 'CommercialOffer' && !after.leadId && !after.clientId) fail('CONTEXT');
   if (after.documentId) {
     const document = links.get('Document');
-    if (document && (document.clientId !== after.clientId || (document.projectId && document.projectId !== after.projectId))) fail('CONTEXT');
+    if (document && ((Object.hasOwn(after, 'clientId') && document.clientId !== after.clientId)
+      || (Object.hasOwn(after, 'projectId') && document.projectId && document.projectId !== after.projectId))) fail('CONTEXT');
   }
   if (policy.model === 'Deadline') {
     const targetPolicy = adminRecordCatalogue.find(item => ['Client', 'Project', 'TechnicalPractice', 'Task', 'ClientService'].includes(item.model) && item.model === after.entityType);
@@ -253,6 +256,7 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
 }
 
 async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, changed: string[]) {
+  if (['DocumentExtraction', 'VisuraAnalysis'].includes(policy.model) && changed.includes('documentId')) fail('HISTORY');
   if (before.technicalPrivate === true && privateFields[policy.model]
     && changed.some(name => !privateFields[policy.model].includes(name))) fail('HISTORY');
   if (archives[policy.model] && changed.every(key => key === 'status')) return;
@@ -553,6 +557,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
   const values: Record<string, string> = {}, result: AdminField[] = [];
   let editable = [...policy.fields];
   if (row) {
+    if (['DocumentExtraction', 'VisuraAnalysis'].includes(policy.model)) editable = editable.filter(name => name !== 'documentId');
     if (row.technicalPrivate === true && privateFields[policy.model]) editable = privateFields[policy.model];
     if ((policy.model === 'PreAnalysis' && !['da_avviare', 'raccolta_dati', 'bozza_generata'].includes(String(row.status)))
       || (policy.model === 'Dossier' && !['bozza_ai', 'bozza_consulente'].includes(String(row.status)))

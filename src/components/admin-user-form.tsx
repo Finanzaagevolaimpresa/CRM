@@ -16,7 +16,7 @@ export function AdminUserForm({ identity: initial, children, className, label, d
     url.hash = value ? 'account-command=' + encodeURIComponent(JSON.stringify(identity)) : '';
     window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
   }
-  return <div><form aria-label={label} onReset={event => event.preventDefault()} onSubmit={async event => {
+  return <div><form aria-label={label} data-interactive-ready={ready} aria-busy={pending} onReset={event => event.preventDefault()} onSubmit={async event => {
     event.preventDefault(); if (frozen) return;
     const element = event.currentTarget, form = new FormData(element);
     for (const [key, value] of Object.entries(identity)) form.set(key, value);

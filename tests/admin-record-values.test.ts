@@ -28,7 +28,7 @@ test('ordinary corrections reject hidden fields, missing fields and non-finite o
 });
 test('share percentages, IDs and typed dates are validated before persistence', () => {
   const p = adminRecordPolicy('CompanyPerson'), valid = values('CompanyPerson', { companyId: 'company', personId: 'person', role: 'socio', ownershipPercent: '25.50' });
-  assert.equal(parseAdminRecordValues(p, valid, true).ownershipPercent, '25.50');
+  assert.equal(parseAdminRecordValues(p, valid, true).ownershipPercent, '25.5');
   for (const patch of [{ ownershipPercent: '100.01' }, { ownershipPercent: '-1' }, { personId: '../another' }] as Record<string, string>[]) assert.throws(() => parseAdminRecordValues(p, { ...valid, ...patch }, true));
   const d = values('Deadline', { title: 'Data sintetica', entityType: 'Project', entityId: 'project', dueAt: '2027-01-03T12:30:00+01:00', status: 'aperta' });
   assert.equal((parseAdminRecordValues(adminRecordPolicy('Deadline'), d, true).dueAt as Date).toISOString(), '2027-01-03T11:30:00.000Z');
@@ -38,6 +38,6 @@ test('negative business results are allowed without allowing negative requested 
   const p = adminRecordPolicy('BankabilityAssessment');
   const input = values(p.model, { clientId: 'client', netProfit: '-1200.50', equity: '-500', estimatedCashflow: '-100', ebitda: '-10' });
   const parsed = parseAdminRecordValues(p, input, true);
-  assert.equal(parsed.netProfit, '-1200.50');
+  assert.equal(parsed.netProfit, '-1200.5');
   assert.throws(() => parseAdminRecordValues(p, { ...input, revenue: '-100' }, true));
 });

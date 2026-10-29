@@ -61,6 +61,63 @@ test('rapid sequential corrections persist every submitted value and journal the
   }
 });
 
+test('ordinary companies, people, incorporation subjects, work and deadlines persist coherent links and restore the same records', options, async () => {
+  const f = await fixture(), companyId = randomUUID(), personId = randomUUID(), linkId = randomUUID(), incorporationId = randomUUID();
+  await save(await command('Company', companyId, { clientId: f.client.id, name: 'Azienda sintetica Admin', employees: '3', annualRevenue: '100000.00' }, 'CREATE'));
+  await save(await command('Person', personId, { firstName: 'Persona', lastName: 'Sintetica', email: 'ordinary-person@example.test' }, 'CREATE'));
+  await save(await command('CompanyPerson', linkId, { companyId, personId, role: 'socio', ownershipPercent: '25.50' }, 'CREATE'));
+  assert.equal((await db.companyPerson.findUniqueOrThrow({ where: { id: linkId } })).ownershipPercent?.toString(), '25.5');
+  await save(await command('Person', personId, { notes: 'Rettifica anagrafica sintetica' }));
+  assert.equal((await db.person.findUniqueOrThrow({ where: { id: personId } })).notes, 'Rettifica anagrafica sintetica');
+  await save(await command('CompanyPerson', linkId, {}, 'TRASH')); assert.equal(await db.companyPerson.findUnique({ where: { id: linkId } }), null);
+  await save(await command('CompanyPerson', linkId, {}, 'RESTORE'));
+  assert.equal((await db.companyPerson.findUniqueOrThrow({ where: { id: linkId } })).personId, personId);
+  await save(await command('IncorporationSubject', incorporationId, { promoterClientId: f.client.id, plannedActivity: 'Attività da valutare', estimatedInvestment: '25000.00' }, 'CREATE'));
+  await save(await command('IncorporationSubject', incorporationId, {}, 'TRASH'));
+  await save(await command('IncorporationSubject', incorporationId, {}, 'RESTORE'));
+  assert.equal((await db.incorporationSubject.findUniqueOrThrow({ where: { id: incorporationId } })).estimatedInvestment?.toString(), '25000');
+  const projectId = randomUUID(), practiceId = randomUUID(), taskId = randomUUID(), checklistId = randomUUID(), deadlineId = randomUUID();
+  await save(await command('Project', projectId, { clientId: f.client.id, companyId, title: 'Progetto collegato sintetico', totalInvestment: '25000.00' }, 'CREATE'));
+  await save(await command('TechnicalPractice', practiceId, { clientId: f.client.id, projectId, title: 'Pratica sintetica', practiceType: 'verifica', targetEntity: 'Ente sintetico' }, 'CREATE'));
+  await save(await command('Task', taskId, { clientId: f.client.id, companyId, projectId, title: 'Attività di verifica', dueAt: '2031-01-03T10:30:00.000Z' }, 'CREATE'));
+  await save(await command('DocumentChecklistItem', checklistId, { clientId: f.client.id, projectId, title: 'Documento da richiedere' }, 'CREATE'));
+  await save(await command('Deadline', deadlineId, { entityType: 'Task', entityId: taskId, title: 'Scadenza esatta', dueAt: '2031-01-03T10:30:00.000Z' }, 'CREATE'));
+  await save(await command('Deadline', deadlineId, {}, 'TRASH')); await save(await command('Deadline', deadlineId, {}, 'RESTORE'));
+  assert.equal((await db.deadline.findUniqueOrThrow({ where: { id: deadlineId } })).dueAt.toISOString(), '2031-01-03T10:30:00.000Z');
+  await save(await command('TechnicalPractice', practiceId, {}, 'TRASH')); await save(await command('TechnicalPractice', practiceId, {}, 'RESTORE'));
+  const practice = await db.technicalPractice.findUniqueOrThrow({ where: { id: practiceId } });
+  assert.equal(practice.projectId, projectId); assert.equal(practice.deletedAt, null); assert.equal(practice.technicalOwnerId, null);
+  assert.equal((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: checklistId } })).status, 'da_richiedere');
+});
+
+test('manual assessments and document analyses retain amounts, source documents and historical corrections', options, async () => {
+  const f = await fixture(), company = await db.company.create({ data: { clientId: f.client.id, name: 'Azienda analisi sintetiche' } });
+  const bankId = randomUUID(), financeId = randomUUID(), grantId = randomUUID(), measureId = randomUUID(), cumulabilityId = randomUUID();
+  await save(await command('BankabilityAssessment', bankId, { clientId: f.client.id, projectId: f.project.id, ebitda: '-123.50', revenue: '100000.00', dataCompleteness: '50' }, 'CREATE'));
+  await save(await command('CorporateFinancingAssessment', financeId, { clientId: f.client.id, projectId: f.project.id, requestedAmount: '25000.00', purpose: 'Valutazione sintetica', sustainableInstallment: '1200.00' }, 'CREATE'));
+  await save(await command('GrantAssessment', grantId, { projectId: f.project.id, summary: 'Analisi manuale sintetica' }, 'CREATE'));
+  await save(await command('MeasureMatch', measureId, { grantAssessmentId: grantId, internalMeasureName: 'Misura sintetica', expectedBenefitAmount: '5000.00', expectedBenefitPercent: '20.00', officialSourceUrl: 'https://example.test/source' }, 'CREATE'));
+  await save(await command('CumulabilityAssessment', cumulabilityId, { projectId: f.project.id, grantAssessmentId: grantId, summary: 'Verifica manuale da revisionare' }, 'CREATE'));
+  assert.equal((await db.bankabilityAssessment.findUniqueOrThrow({ where: { id: bankId } })).ebitda?.toString(), '-123.5');
+  assert.equal((await db.corporateFinancingAssessment.findUniqueOrThrow({ where: { id: financeId } })).sustainableInstallment?.toString(), '1200');
+  assert.equal((await db.measureMatch.findUniqueOrThrow({ where: { id: measureId } })).expectedBenefitPercent?.toString(), '20');
+  await save(await command('BankabilityAssessment', bankId, { ebitda: '-100.00', riskRationale: 'Rettifica sintetica motivata' }));
+  assert.equal((await db.bankabilityAssessment.findUniqueOrThrow({ where: { id: bankId } })).ebitda?.toString(), '-100');
+  const doc = await db.document.create({ data: { clientId: f.client.id, companyId: company.id, projectId: f.project.id, title: 'Fonte sintetica', type: 'altro',
+    fileName: 'source.txt', mimeType: 'text/plain', sizeBytes: 12, storagePath: 'synthetic/unchanged-source.txt', checksum: 'a'.repeat(64), uploadedById: admin.user.id } });
+  const extractionId = randomUUID(), visuraId = randomUUID();
+  await save(await command('DocumentExtraction', extractionId, { documentId: doc.id, extractedText: 'Trascrizione manuale', extractedJson: '{"synthetic":true}' }, 'CREATE'));
+  await save(await command('VisuraAnalysis', visuraId, { documentId: doc.id, companyId: company.id, findings: '{"synthetic":true}' }, 'CREATE'));
+  await save(await command('DocumentExtraction', extractionId, { extractedText: 'Trascrizione rettificata' }));
+  const otherDoc = await db.document.create({ data: { ...doc, id: randomUUID(), title: 'Fonte diversa sintetica' } });
+  await assert.rejects(save(await command('DocumentExtraction', extractionId, { documentId: otherDoc.id })), /HISTORY/);
+  await save(await command('DocumentExtraction', extractionId, {}, 'TRASH')); await save(await command('DocumentExtraction', extractionId, {}, 'RESTORE'));
+  await save(await command('VisuraAnalysis', visuraId, {}, 'TRASH')); await save(await command('VisuraAnalysis', visuraId, {}, 'RESTORE'));
+  assert.equal((await db.documentExtraction.findUniqueOrThrow({ where: { id: extractionId } })).extractedText, 'Trascrizione rettificata');
+  assert.equal((await db.visuraAnalysis.findUniqueOrThrow({ where: { id: visuraId } })).documentId, doc.id);
+  assert.deepEqual(await db.document.findUniqueOrThrow({ where: { id: doc.id } }), doc);
+});
+
 test('evidenced payment correction and restoration preserve the original collection and align linked services exactly once', options, async () => {
   const f = await paymentCorrectionFixture(db, admin.user.id);
   const evidenceChoices = await searchAdminRecordReferences(db, admin.session, { model: 'Payment', field: 'administrativeEvidenceVersionId', query: f.document.title, page: 1 });
