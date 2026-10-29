@@ -1,0 +1,38 @@
+name: Isolated backup schema reference
+on:
+  push:
+    branches: [codex/pr234-backup-schema-r03]
+permissions: {contents: read}
+jobs:
+  schema-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-backup-reference-only
+          POSTGRES_DB: r04_synthetic_source
+        options: >-
+          --health-cmd="pg_isready -U postgres -d r04_synthetic_source"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
+      - name: Pure rejection contracts
+        run: python3 -B tools/backup-schema-reference/test_schema_reference.py
+      - name: Actual synthetic PostgreSQL roundtrip and six schema mutations
+        env:
+          R04_SYNTHETIC_BACKUP_CONFIRMED: '1'
+          R04_SYNTHETIC_POSTGRES_CONTAINER: '${{ job.services.postgres.id }}'
+        run: python3 -B tools/backup-schema-reference/qualify_synthetic.py
+      - name: Source identity unchanged
+        run: git diff --exit-code && git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: schema-reference-${{ github.sha }}
+          path: '${{ runner.temp }}/schema-reference-evidence'
+          if-no-files-found: warn
+          retention-days: 14
