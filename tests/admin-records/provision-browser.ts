@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson } from '../selective-sharing/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+async function main() {
 assert.equal(process.env.CI, 'true'); assert.equal(process.env.ADMIN_RECORD_DB_TESTS, '1');
 const db = new PrismaClient();
 try {
@@ -17,3 +18,6 @@ try {
   writeFileSync(join(process.env.ADMIN_RECORD_EVIDENCE!, 'fixture.json'), JSON.stringify({ adminEmail: admin.user.email, technicianEmail: technician.user.email,
     clientId: client.id, projects: projects.map(row => ({ id: row.id, title: row.title })) }));
 } finally { await db.$disconnect(); }
+
+}
+void main().catch(() => { console.error('ADMIN_BROWSER_PROVISION_FAILED'); process.exitCode = 1; });

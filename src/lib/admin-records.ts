@@ -198,10 +198,11 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
     && ['clientId', 'companyId', 'projectId', 'clientServiceId'].some(key => before[key] !== after[key])) {
     // Reparenting a graph is a separate explicit operation. Never silently move
     // a parent while retaining contradictory children, grants or signed context.
-    for (const dependent of models) for (const field of dependent.fields.filter(item => item.kind === 'object'
-      && item.type === policy.model && item.relationFromFields?.length === 1)) {
-      if (await delegate(tx, dependent.name).count({ where: { [field.relationFromFields![0]]: before.id } })) fail('DEPENDENCIES');
+    for (const dependent of models) for (const field of dependent.fields.filter(item => item.kind !== 'object'
+      && relation(dependent.name, item.name)?.type === policy.model)) {
+      if (await delegate(tx, dependent.name).count({ where: { [field.name]: before.id } })) fail('DEPENDENCIES');
     }
+    if (await tx.deadline.count({ where: { entityType: policy.model, entityId: before.id } })) fail('DEPENDENCIES');
   }
   if (policy.model === 'CompanyPerson' && await tx.companyPerson.count({ where: { companyId: String(after.companyId),
     personId: String(after.personId), id: { not: after.id } } })) fail('CONTEXT');
@@ -230,7 +231,7 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
   if (!proof) fail('DENIED');
   return withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy, proof);
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`admin-record:${command.commandId}`},0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`admin-record:${command.commandId}`},0))::text`;
     const previous = await tx.adminRecordRevision.findUnique({ where: { commandId: command.commandId } });
     if (previous) {
       if (previous.operation === 'CLOSE') fail('CLOSED');
@@ -323,7 +324,7 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
   const policy = adminRecordPolicy(input.model);
   return withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy);
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`admin-record:${input.commandId}`},0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`admin-record:${input.commandId}`},0))::text`;
     const previous = await tx.adminRecordRevision.findUnique({ where: { commandId: input.commandId } });
     if (previous) {
       if (previous.actorId !== current.actor.id || previous.model !== input.model || previous.recordId !== input.id) fail('DENIED');

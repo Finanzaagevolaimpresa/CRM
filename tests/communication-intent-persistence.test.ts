@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import {
@@ -78,6 +77,7 @@ test('N15 migration 44 is one additive transaction with three dedicated dormant 
     '20261027010000_technical_private_items_v1',
     '20261027220000_historical_lead_contact_v1',
     '20261028180000_record_deadline_reminders_v1',
+    '20261029190000_admin_record_revisions_v1',
   ].includes(name));
   assert.equal(names.length, 44);
   assert.equal(names.at(-1), '20260909120000_n15_dedicated_communication_persistence_v1');
@@ -111,9 +111,11 @@ test('N15 producer and clock require an explicit internal authority object', () 
 test('N15 contract stays pure and persistence has only qualified synthetic assignment call-sites', () => {
   const contract = readFileSync('src/lib/communication-backbone-contract.ts', 'utf8');
   assert.doesNotMatch(contract, /@prisma\/client|communication-intent-persistence/u);
-  const sources = ['src', 'scripts', 'prisma'].flatMap((directory) => {
-    return execFileSync('find', [directory, '-type', 'f'], { encoding: 'utf8' }).trim().split('\n');
-  }).filter((source) => source && /\.(?:c|m)?(?:j|t)sx?$/u.test(source)
+  const files = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const path = directory + '/' + entry.name;
+    return entry.isDirectory() ? files(path) : entry.isFile() ? [path] : [];
+  });
+  const sources = ['src', 'scripts', 'prisma'].flatMap(files).filter((source) => source && /\.(?:c|m)?(?:j|t)sx?$/u.test(source)
     && source !== 'src/lib/communication-intent-persistence.ts'
     && source !== 'src/lib/communication-backbone-contract.ts');
   const allowed = new Set([
