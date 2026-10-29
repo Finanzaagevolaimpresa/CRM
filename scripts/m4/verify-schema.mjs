@@ -255,7 +255,7 @@ export function verifyCommunicationSchema() {
   assert.equal(createHash('sha256').update(schema63).digest('hex'), leadEditing.schemaSha256, 'TECHNICAL_BASELINE_SCHEMA63');
   assert.equal(git('diff', '--name-only', technical.baseline, 'HEAD', '--', 'prisma/migrations'), `${technicalPath}\n${requestPath}\n${itemPath}\n${uploadPath}\n${acquisitionPath}\n${privateItemPath}\n${historicalContactPath}\n${reminderPath}\n${adminPath}`, 'TECHNICAL_PREFIX63_UNCHANGED');
   assert.equal(hash(technicalPath), technical.migrationSha256, 'TECHNICAL_MIGRATION_HASH');
-  assert.equal(hash('prisma/schema.prisma'), reminders.schemaSha256, 'TECHNICAL_SCHEMA_HASH');
+  assert.equal(hash('prisma/schema.prisma'), admin.schemaSha256, 'TECHNICAL_SCHEMA_HASH');
   assert.equal(git('rev-parse', `${requests.baseline}^{tree}`), requests.baselineTree, 'ADMIN_REQUEST_BASELINE_TREE');
   git('merge-base', '--is-ancestor', requests.baseline, 'HEAD');
   const schema64 = execFileSync('git', ['show', `${requests.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
@@ -303,6 +303,8 @@ export function verifyCommunicationSchema() {
   git('merge-base', '--is-ancestor', admin.baseline, 'HEAD');
   assert.equal(git('diff', '--name-only', admin.baseline, 'HEAD', '--', 'prisma/migrations'), adminPath, 'ADMIN_PREFIX71_UNCHANGED');
   assert.equal(hash(adminPath), admin.migrationSha256, 'ADMIN_MIGRATION_HASH');
+  const schema71 = execFileSync('git', ['show', `${admin.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
+  assert.equal(createHash('sha256').update(schema71).digest('hex'), reminders.schemaSha256, 'ADMIN_BASELINE_SCHEMA71');
 
   // Admission must recognize the same reviewed SQL as the migration manifest.
   // A stale pin denies even an otherwise valid explicit email activation.
