@@ -84,13 +84,16 @@ export function parseAdminRecordValues(policy: AdminRecordPolicy, values: Record
       result[name] = value;
     } else fail('INVALID');
   }
-  if (['Contract', 'Payment'].includes(policy.model)) {
+  if (['Contract', 'Payment', 'CommercialOffer'].includes(policy.model)) {
     const cents = (value: unknown) => new Prisma.Decimal(String(value)).mul(100);
     if (!cents(result.taxableAmount).plus(cents(result.vatAmount)).equals(cents(result.totalAmount))) fail('INVALID');
   }
   if (policy.model === 'Project' && result.status === 'archiviato') fail('HISTORY');
   if (['Project', 'ProjectExpense'].includes(policy.model) && result.priority && !['bassa', 'media', 'alta', 'urgente'].includes(String(result.priority))) fail('INVALID');
   if (policy.model === 'Client' && !['attivo', 'sospeso', 'archiviato'].includes(String(result.status))) fail('INVALID');
+  if (policy.model === 'Contract' && creating && result.status === 'firmato') fail('HISTORY');
+  if (policy.model === 'CommercialLeadSlaPolicyVersion' && (!['STAGED', 'ACTIVE'].includes(String(result.status))
+    || !Number.isSafeInteger(result.responseTargetSeconds) || Number(result.responseTargetSeconds) < 60 || Number(result.responseTargetSeconds) > 2_592_000)) fail('INVALID');
   return result;
 }
 
@@ -104,11 +107,12 @@ const readPermission = (policy: AdminRecordPolicy): Permission => policy.permiss
   : policy.permission.replace(/\.write$/, '.read') as Permission;
 async function lock(tx: Tx, model: string, id: string) {
   metadata(model);
-  await tx.$queryRaw(Prisma.sql`SELECT id FROM ${Prisma.raw('"' + model + '"')} WHERE id=${id} FOR UPDATE`);
+  const identity = model === 'CommercialLeadSlaPolicyVersion' ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
+  await tx.$queryRaw(Prisma.sql`SELECT id FROM ${Prisma.raw('"' + model + '"')} WHERE id=${identity} FOR UPDATE`);
 }
 const label = (row: Row) => String(row.title ?? row.displayName ?? row.name ?? row.contractNumber ?? row.internalMeasureName ?? row.description
   ?? ([row.firstName, row.lastName].filter(Boolean).join(' ') || row.id));
-const relationTargets: Record<string, string> = { clientId: 'Client', promoterClientId: 'Client', companyId: 'Company', personId: 'Person',
+const relationTargets: Record<string, string> = { leadId: 'Lead', clientId: 'Client', promoterClientId: 'Client', companyId: 'Company', personId: 'Person',
   projectId: 'Project', incorporationSubjectId: 'IncorporationSubject', clientServiceId: 'ClientService', serviceCatalogId: 'ServiceCatalog',
   contractId: 'Contract', paymentId: 'Payment', documentId: 'Document', technicalPracticeId: 'TechnicalPractice',
   grantAssessmentId: 'GrantAssessment', preAnalysisId: 'PreAnalysis', assignedToId: 'User' };
@@ -119,7 +123,7 @@ function admittedRow(actor: Awaited<ReturnType<typeof updateActor>>['actor'], ro
   const excluded = new Set<string>([...(actor.selectiveClientIds ?? []), ...(actor.selectiveProjectIds ?? []), ...(actor.selectiveLeadIds ?? []),
     ...(actor.selectivePracticeIds ?? []), ...(actor.selectiveDocumentIds ?? []), ...(actor.selectiveClientCompanyIds ?? []), ...(actor.selectiveClientPersonIds ?? []),
     ...(actor.selectiveServiceIds ?? []), ...(actor.selectiveContractIds ?? []), ...(actor.technicalTaskIds ?? []), ...(actor.technicalChecklistIds ?? [])]);
-  return !excluded.has(row.id) && !['clientId', 'companyId', 'projectId', 'clientServiceId', 'contractId', 'paymentId', 'documentId', 'technicalPracticeId', 'personId']
+  return !excluded.has(row.id) && !['leadId', 'clientId', 'companyId', 'projectId', 'clientServiceId', 'contractId', 'paymentId', 'documentId', 'technicalPracticeId', 'personId']
     .some(key => typeof row[key] === 'string' && excluded.has(row[key] as string));
 }
 
@@ -182,6 +186,7 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
   if (new Set(clientIds).size > 1) fail('CONTEXT');
   const projects = [after.projectId, ...[...links.values()].map(row => row.projectId)].filter(Boolean);
   if (new Set(projects).size > 1) fail('CONTEXT');
+  if (policy.model === 'CommercialOffer' && !after.leadId && !after.clientId) fail('CONTEXT');
   if (after.documentId) {
     const document = links.get('Document');
     if (document && (document.clientId !== after.clientId || (document.projectId && document.projectId !== after.projectId))) fail('CONTEXT');
@@ -209,12 +214,15 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
 }
 
 async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, changed: string[]) {
+  if (policy.model === 'CommercialLeadSlaPolicyVersion') fail('HISTORY');
+  if (policy.model === 'CommercialOffer' && changed.some(key => !['notes', 'followUpAt', 'followUpNote', 'outcomeNote'].includes(key))
+    && (before.status !== 'bozza' || await tx.practiceOfferRevision.count({ where: { commercialOfferId: before.id } }))) fail('HISTORY');
   if (policy.model === 'PreAnalysis' && !['da_avviare', 'raccolta_dati', 'bozza_generata'].includes(String(before.status))) fail('HISTORY');
   if (policy.model === 'Dossier' && !['bozza_ai', 'bozza_consulente'].includes(String(before.status))) fail('HISTORY');
   if (policy.model === 'ClientDossier' && (before.currentVersionId || before.approvedVersionId || before.status !== 'bozza')) fail('HISTORY');
   if (policy.model === 'AiOutput' && !['needs_review', 'flagged'].includes(String(before.status))) fail('HISTORY');
   if (policy.model === 'PracticeCommunication' && !['bozza', 'da_revisionare'].includes(String(before.status))) fail('HISTORY');
-  if (policy.model === 'Contract' && changed.some(key => key !== 'notes') && (before.signedAt || before.signedDocumentId || before.status === 'firmato'
+  if (policy.model === 'Contract' && changed.some(key => !['notes', 'status'].includes(key)) && (before.signedAt || before.signedDocumentId || before.status === 'firmato'
     || await tx.payment.count({ where: { contractId: before.id, OR: [{ collectedAt: { not: null } }, { status: { in: ['parziale', 'incassato', 'stornato', 'rimborsato'] } }] } }))) fail('HISTORY');
   if (policy.model === 'Payment' && changed.some(key => !['method', 'dueDate', 'notes'].includes(key))
     && (before.collectedAt || before.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(before.status))
@@ -251,6 +259,16 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       const values = parseAdminRecordValues(policy, command.values, command.operation === 'CREATE');
       const changed = Object.keys(values).filter(key => adminRecordVersion(before?.[key] ?? null) !== adminRecordVersion(values[key]));
       if (before) await assertEditable(tx, policy, before, changed);
+      if (policy.model === 'Contract' && before && changed.includes('status')) {
+        const signed = Boolean(before.signedAt || before.signedDocumentId || before.status === 'firmato');
+        if (values.status === 'firmato') {
+          const prior = await tx.adminRecordRevision.findFirst({ where: { model: 'Contract', recordId: before.id, operation: 'UPDATE',
+            before: { path: ['status'], equals: 'firmato' }, after: { path: ['status'], equals: 'archiviato' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }] });
+          const source = prior?.before as Row | undefined;
+          if (before.status !== 'archiviato' || !before.signedAt || !before.signedDocumentId || !source
+            || source.signedDocumentId !== before.signedDocumentId || String(source.signedAt) !== (before.signedAt as Date).toISOString()) fail('HISTORY');
+        } else if (signed && !['archiviato', 'annullato', 'non_firmato'].includes(String(values.status))) fail('HISTORY');
+      }
       if (policy.model === 'Document' && before && isFinancialDocument(before as FinancialDocumentMetadata)
         && !isFinancialDocument({ ...before, ...values } as FinancialDocumentMetadata)) fail('HISTORY');
       if (!admittedRow(current.actor, { ...(before ?? { id: command.id }), ...values })) fail('DENIED');
@@ -265,6 +283,19 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       if (policy.model === 'Task' && values.status) values.completedAt = values.status === 'completata' ? before?.completedAt ?? await current.finish() : null;
       if (command.operation === 'CREATE') {
         if (metadata(policy.model).fields.some(field => field.name === 'createdById')) values.createdById = current.actor.id;
+        if (policy.model === 'Dossier') values.status = 'bozza_consulente';
+        if (policy.model === 'PreAnalysis') values.status = 'raccolta_dati';
+        if (policy.model === 'CommercialLeadSlaPolicyVersion') {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('admin-record:sla-policy',0))::text`;
+          const previous = await tx.commercialLeadSlaPolicyVersion.findMany({ where: { policyCode: 'COMMERCIAL_FIRST_RESPONSE' }, orderBy: { version: 'desc' } });
+          values.version = (previous[0]?.version ?? 0) + 1;
+          if (values.status === 'ACTIVE') {
+            const active = previous.filter(row => row.status === 'ACTIVE'); if (active.length !== 1) fail('DENIED');
+            await tx.commercialLeadSlaPolicyVersion.update({ where: { id: active[0].id }, data: { status: 'RETIRED', updatedAt: await current.finish() } });
+            await tx.auditLog.create({ data: { actorId: current.actor.id, entityType: 'CommercialLeadSlaPolicyVersion', entityId: active[0].id,
+              event: 'admin_sla_policy_replaced', after: { commandId: command.commandId, replacementId: command.id, previousVersion: active[0].version } } });
+          }
+        }
         after = await records.create({ data: { id: command.id, ...values } });
       } else after = await records.update({ where: { id: command.id }, data: values });
     } else if (command.operation === 'TRASH') {
@@ -346,6 +377,20 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
 
 async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor: Awaited<ReturnType<typeof updateActor>>['actor']) {
   const values: Record<string, string> = {}, result: AdminField[] = [];
+  let editable = [...policy.fields];
+  if (row) {
+    if ((policy.model === 'PreAnalysis' && !['da_avviare', 'raccolta_dati', 'bozza_generata'].includes(String(row.status)))
+      || (policy.model === 'Dossier' && !['bozza_ai', 'bozza_consulente'].includes(String(row.status)))
+      || (policy.model === 'ClientDossier' && (row.currentVersionId || row.approvedVersionId || row.status !== 'bozza'))
+      || (policy.model === 'AiOutput' && !['needs_review', 'flagged'].includes(String(row.status)))
+      || (policy.model === 'PracticeCommunication' && !['bozza', 'da_revisionare'].includes(String(row.status)))
+      || policy.model === 'CommercialLeadSlaPolicyVersion') editable = [];
+    if (policy.model === 'Contract' && (row.signedAt || row.signedDocumentId || row.status === 'firmato'
+      || await tx.payment.count({ where: { contractId: row.id, OR: [{ collectedAt: { not: null } }, { status: { in: ['parziale', 'incassato', 'stornato', 'rimborsato'] } }] } }))) editable = ['notes', 'status'];
+    if (policy.model === 'Payment' && (row.collectedAt || row.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(row.status))
+      || await tx.clientService.count({ where: { paymentId: row.id } }))) editable = ['method', 'dueDate', 'notes'];
+    if (policy.model === 'CommercialOffer' && (row.status !== 'bozza' || await tx.practiceOfferRevision.count({ where: { commercialOfferId: row.id } }))) editable = ['notes', 'followUpAt', 'followUpNote', 'outcomeNote'];
+  }
   for (const name of policy.fields) {
     const field = metadata(policy.model).fields.find(item => item.name === name)!;
     if (!field || field.kind === 'object') fail('INVALID');
@@ -353,11 +398,11 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
     const initial = row?.[name] ?? (field.hasDefaultValue && typeof field.default !== 'object' ? field.default : null);
     values[name] = initial == null ? '' : initial instanceof Date ? initial.toISOString() : field.type === 'Json' ? JSON.stringify(initial, null, 2) : String(initial);
     const descriptor: AdminField = { name, label: adminFieldLabels[name] ?? name.replace(/([A-Z])/g, ' $1').toLowerCase(),
-      required: field.isRequired && !field.hasDefaultValue,
+      required: field.isRequired && !field.hasDefaultValue, readOnly: !editable.includes(name),
       type: field.type === 'DateTime' ? 'date' : field.type === 'Boolean' ? 'boolean' : ['Decimal', 'Int'].includes(field.type) ? 'number'
         : field.type === 'Json' ? 'json' : /notes|description|summary|content|conditions|rationale|issues|findings|documents|text/i.test(name) ? 'longtext' : 'text' };
     if (related) {
-      const allowed = ['Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
+      const allowed = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
       if (!allowed.includes(related.type)) fail('INVALID');
       const rows = await delegate(tx, related.type).findMany({ take: 1001, orderBy: { id: 'asc' },
         where: { ...(metadata(related.type).fields.some(item => item.name === 'deletedAt') ? { deletedAt: null } : {}) },
@@ -394,6 +439,9 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
       descriptor.type = 'select'; descriptor.options = ['bassa', 'media', 'alta', 'urgente'].map(value => ({ value, label: value }));
     } else if (policy.model === 'Client' && name === 'status') {
       descriptor.type = 'select'; descriptor.options = ['attivo', 'sospeso', 'archiviato'].map(value => ({ value, label: value }));
+    } else if (policy.model === 'CommercialLeadSlaPolicyVersion' && name === 'status') {
+      descriptor.type = 'select'; descriptor.options = (row ? ['STAGED', 'ACTIVE', 'RETIRED'] : ['STAGED', 'ACTIVE']).map(value => ({ value,
+        label: value === 'STAGED' ? 'Preparata per la valutazione' : value === 'RETIRED' ? 'Storica' : row ? 'Attiva' : 'Sostituisci la politica attiva' }));
     }
     result.push(descriptor);
   }

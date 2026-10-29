@@ -57,16 +57,19 @@ export const adminRecordCatalogue = [
   item('VisuraAnalysis', 'Analisi visure · revisione', 'Documenti e attività', 'company.write', 'companyId findings humanReviewStatus'),
   item('PreAnalysis', 'Preanalisi', 'Analisi e dossier', 'project.write',
     'projectId clientId companyId internalSummary clientReadySummary scenarioA scenarioB blockingConditions requiredDocuments nextActions commercialRecommendation',
-    { href: '/preanalyses/{id}', guidance: 'Le preanalisi già revisionate o approvate si rettificano nella procedura di nuova versione; i relativi autore, approvatore e date non sono modificabili.' }),
+    { create: true, href: '/preanalyses/{id}', guidance: 'Per correggere contenuti già approvati, registra la rettifica e crea una nuova bozza dalla lista Preanalisi. La nuova bozza non eredita approvazioni, autori o esecuzioni AI.' }),
   item('Dossier', 'Dossier storici · bozze', 'Analisi e dossier', 'dossier.write', 'preAnalysisId projectId clientId title type markdownContent jsonContent',
-    { guidance: 'Solo bozze modificabili. Dossier approvati o consegnati richiedono una rettifica o una nuova versione; esportazioni e prove di consegna restano conservate.' }),
+    { create: true, guidance: 'Solo bozze modificabili. Dalla lista puoi creare una nuova bozza manuale; le approvazioni, le esportazioni e le prove di consegna del documento precedente restano conservate.' }),
   item('ClientDossier', 'Dossier cliente', 'Analisi e dossier', 'dossier.write', 'clientId clientServiceId projectId title type content',
-    { href: '/client-dossiers/{id}', guidance: 'I dossier versionati usano il proprio editor e il ciclo di revisione; questa correzione è riservata alle bozze non versionate.' }),
+    { create: true, href: '/client-dossiers/{id}', guidance: 'Le nuove bozze manuali non ereditano approvazioni. I dossier versionati usano il proprio editor e il ciclo di revisione; questa correzione è riservata alle bozze non versionate.' }),
   item('AiOutput', 'Output AI · revisione del contenuto', 'Analisi e dossier', 'ai.review', 'title content',
     { guidance: 'Correzione delle bozze prima dell’approvazione, con conservazione del testo originario. Non avvia esecuzioni né modifica provider o approvazioni.' }),
   item('Contract', 'Contratti · dati operativi', 'Servizi e amministrazione', 'contract.write',
-    'clientId projectId contractNumber serviceName serviceDescription taxableAmount vatAmount totalAmount notes',
-    { create: true, href: '/contracts/{id}', guidance: 'La correzione degli importi riguarda contratti non firmati e senza movimenti. Firme e documenti firmati si gestiscono nella scheda; non vengono ricreati dalla correzione.' }),
+    'clientId projectId contractNumber serviceName serviceDescription taxableAmount vatAmount totalAmount status sentAt notes',
+    { create: true, href: '/contracts/{id}', guidance: 'Puoi archiviare o annullare un contratto conservando firme, incassi e storico. Il ripristino di un contratto firmato richiede una precedente archiviazione registrata. Invio manuale e data indicano una dichiarazione amministrativa: nessun messaggio viene inviato. Gli importi si correggono prima della firma e dei movimenti.' }),
+  item('CommercialOffer', 'Offerte commerciali', 'Servizi e amministrazione', 'lead.write',
+    'leadId clientId title description services includedActivities taxableAmount vatAmount totalAmount validUntil operationalConditions commercialProposal notes followUpAt followUpNote outcomeNote',
+    { create: true, trash: 'soft', href: '/commercial-offers/{id}', guidance: 'Le nuove offerte restano bozze. Le condizioni delle offerte già inviate, accettate o collegate a una revisione si conservano; note e seguito commerciale restano correggibili. Nessuna operazione invia l’offerta o accetta un incarico.' }),
   item('Payment', 'Pagamenti · dati operativi', 'Servizi e amministrazione', 'payment.write',
     'contractId clientId taxableAmount vatAmount totalAmount method dueDate notes',
     { create: true, href: '/payments/{id}/collection', guidance: 'Importi e collegamenti sono modificabili prima dell’incasso. Gli incassi mantengono evidenza e procedura dedicata; una rettifica non dichiara movimenti finanziari mai avvenuti.' }),
@@ -77,6 +80,8 @@ export const adminRecordCatalogue = [
     'code name description category basePrice active displayOrder', { create: true, href: '/service-catalog' }),
   item('PracticeCommunication', 'Comunicazioni di pratica · bozze', 'Comunicazioni', 'practice_communications.write',
     'technicalPracticeId title content internalNote type channel', { trash: 'soft', guidance: 'Le comunicazioni usate o approvate restano prove storiche. Nessuna modifica invia un messaggio o ne dichiara l’invio.' }),
+  item('CommercialLeadSlaPolicyVersion', 'Tempi di risposta ai lead · versioni', 'Impostazioni operative', 'settings.manage',
+    'responseTargetSeconds status', { create: true, href: '/leads/inbox', guidance: 'Ogni variazione crea una nuova versione. Scegli STAGED per prepararla o ACTIVE per sostituire una politica già attiva. I cicli SLA già aperti conservano la propria scadenza e politica. Questa operazione non attiva inbox, scheduler o provider.' }),
 ] as const;
 
 export function adminRecordPolicy(model: string): AdminRecordPolicy {
@@ -85,6 +90,9 @@ export function adminRecordPolicy(model: string): AdminRecordPolicy {
   return found;
 }
 export const adminFieldLabels: Record<string, string> = {
+  leadId: 'Lead', services: 'Servizi proposti', includedActivities: 'Attività incluse', operationalConditions: 'Condizioni operative',
+  sentAt: 'Data dichiarata di invio manuale', followUpAt: 'Prossimo seguito commerciale', followUpNote: 'Nota sul seguito', outcomeNote: 'Nota sull’esito',
+  responseTargetSeconds: 'Tempo di risposta in secondi',
   clientId: 'Cliente', companyId: 'Azienda', projectId: 'Progetto', clientServiceId: 'Servizio acquistato',
   promoterClientId: 'Cliente promotore', personId: 'Persona', incorporationSubjectId: 'Soggetto da costituire',
   technicalPracticeId: 'Pratica tecnica', contractId: 'Contratto', paymentId: 'Pagamento', documentId: 'Documento',
@@ -135,7 +143,7 @@ export const adminFieldLabels: Record<string, string> = {
   doubleFundingRisk: 'Rischio doppio finanziamento', timingConflicts: 'Conflitti temporali', plannedInvestment: 'Investimento previsto', operationalNotes: 'Note operative',
 };
 export type AdminField = { name: string; label: string; type: 'text' | 'longtext' | 'number' | 'date' | 'boolean' | 'select' | 'json';
-  required: boolean; options?: { value: string; label: string; group?: string }[]; dependsOn?: string; help?: string };
+  required: boolean; readOnly?: boolean; options?: { value: string; label: string; group?: string }[]; dependsOn?: string; help?: string };
 export type AdminRecordForm = { model: string; id: string; version: string; label: string; fields: AdminField[];
   values: Record<string, string>; create: boolean; trash: boolean; deleted: boolean; guidance: string | null; href: string;
   relationships: { label: string; href: string }[]; restoringRevision: string | null;

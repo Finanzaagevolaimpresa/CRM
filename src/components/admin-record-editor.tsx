@@ -12,7 +12,8 @@ const subscribe = () => () => {}, hydrated = () => true, server = () => false;
 export function AdminRecordEditor({ data, commandId, recovering = false }: { data: AdminRecordForm; commandId: string; recovering?: boolean }) {
   const ready = useSyncExternalStore(subscribe, hydrated, server);
   const [values, setValues] = useState(data.values), [reason, setReason] = useState('');
-  const [operation, setOperation] = useState<AdminRecordCommand['operation']>(data.create ? 'CREATE' : data.deleted ? 'RESTORE' : 'UPDATE');
+  const canUpdate = data.fields.some(field => !field.readOnly);
+  const [operation, setOperation] = useState<AdminRecordCommand['operation']>(data.create ? 'CREATE' : data.deleted ? 'RESTORE' : canUpdate ? 'UPDATE' : 'RECTIFY');
   const [pending, setPending] = useState(false), [result, setResult] = useState<AdminSaveResult | null>(recovering
     ? { ok: false, uncertain: true, message: 'Questo riferimento contiene un tentativo da verificare. Nessun salvataggio viene ripetuto automaticamente.' } : null);
   const [confirmedClose, setConfirmedClose] = useState(false);
@@ -46,13 +47,13 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
         {!data.create && <label className="block font-semibold">Operazione<select className={fieldClass} value={operation}
           onChange={event => setOperation(event.target.value as AdminRecordCommand['operation'])}>
           {data.deleted ? <option value="RESTORE">Ripristina la scheda conservata</option> : <>
-            <option value="UPDATE">Correggi i dati operativi</option><option value="RECTIFY">Registra una rettifica motivata nelle evidenze</option>
+            {canUpdate && <option value="UPDATE">Correggi i dati operativi</option>}<option value="RECTIFY">Registra una rettifica motivata nelle evidenze</option>
             {data.trash && <option value="TRASH">Sposta nel cestino recuperabile</option>}</>}
         </select></label>}
-        {(operation === 'CREATE' || operation === 'UPDATE') && <div className="grid gap-4 md:grid-cols-2">{data.fields.map(field => {
+        {(operation === 'CREATE' || operation === 'UPDATE' || !canUpdate) && <div className="grid gap-4 md:grid-cols-2">{data.fields.map(field => {
           const change = (value: string) => setValues(current => ({ ...current, [field.name]: value,
             ...Object.fromEntries(data.fields.filter(other => other.dependsOn === field.name).map(other => [other.name, ''])) }));
-          return <div key={field.name} className={['longtext', 'json'].includes(field.type) ? 'md:col-span-2' : ''}>
+          return <fieldset key={field.name} disabled={field.readOnly} className={['longtext', 'json'].includes(field.type) ? 'min-w-0 md:col-span-2' : 'min-w-0'}>
             {field.type === 'date' ? <RomeDateTimeInput label={field.label} value={values[field.name]} onChange={change} required={field.required} className={fieldClass} />
               : <label className="block font-semibold">{field.label}
                 {field.type === 'boolean' ? <select className={fieldClass} value={values[field.name]} onChange={event => change(event.target.value)}><option value="true">Sì</option><option value="false">No</option></select>
@@ -64,7 +65,8 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
                       step={field.type === 'number' ? 'any' : undefined} value={values[field.name]} onChange={event => change(event.target.value)} />}
               </label>}
             {field.help && <p className="text-sm">{field.help}</p>}
-          </div>;
+            {field.readOnly && <p className="text-sm">Valore storico conservato. Usa la rettifica o il percorso di nuova bozza indicato sopra.</p>}
+          </fieldset>;
         })}</div>}
         {operation === 'RECTIFY' && <p>La rettifica viene aggiunta al registro della scheda. Non cambia il contenuto originale, non sostituisce una firma e non attesta una consegna o una presa in carico.</p>}
         {operation === 'TRASH' && <p>Il record e il suo contenuto vengono conservati per il ripristino. I collegamenti e le prove storiche non vengono ricreati.</p>}

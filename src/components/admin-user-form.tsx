@@ -21,7 +21,12 @@ export function AdminUserForm({ identity: initial, children, className, label, d
     const form = new FormData(event.currentTarget);
     for (const [key, value] of Object.entries(identity)) form.set(key, value);
     remember(true); setPending(true);
-    try { const result = await submitAdminUserCommand(form); setState(result); if (!result.uncertain && !result.ok) remember(false); }
+    try {
+      const result = await submitAdminUserCommand(form); setState(result);
+      // A successful action can refresh the route without its fragment. Restore
+      // the same receipt reference after that response, including known success.
+      remember(Boolean(result.uncertain || result.ok || result.closed));
+    }
     catch { setState({ ok: false, uncertain: true, message: 'Risposta interrotta. Il riferimento è conservato nell’indirizzo della pagina: verifica l’esito.' }); }
     finally { setPending(false); }
   }}><fieldset disabled={Boolean(frozen)} className={className}>{children}</fieldset></form>

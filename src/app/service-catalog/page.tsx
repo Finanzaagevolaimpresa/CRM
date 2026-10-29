@@ -1,3 +1,4 @@
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 export const dynamic = 'force-dynamic';
 
 import { Card, EmptyState, PageHeader } from '@/components/ui';
@@ -31,6 +32,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
   }
   return <div className="crm-space-y-6">
     <PageHeader title="Catalogo servizi" description={`Composizione ${FAI_SERVICE_CATALOG_V2_VERSION}. Consultazione interna: richiesta, preventivo e incarico restano fasi separate.`} />
+    <AdminRecordShortcut session={session} model="ServiceCatalog" />
     {params.preparation === 'complete' ? <p role="status">Revisioni interne disponibili.</p> : null}
     {params.preparation === 'denied' ? <p role="alert">Preparazione non consentita oppure catalogo da riconciliare.</p> : null}
     {canPrepare ? <Card title="Preparazione del catalogo interno"><p className="mb-3 text-sm">Pubblica le revisioni previste per le nuove selezioni, conservando lo storico. I documenti già emessi mantengono la propria revisione.</p><form action={prepareInternalCatalogAction}><button type="submit" className="rounded-xl bg-fai-blue px-4 py-3 font-bold text-white">Prepara catalogo interno</button></form></Card> : null}

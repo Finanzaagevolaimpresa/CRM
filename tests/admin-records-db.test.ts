@@ -92,6 +92,57 @@ test('removed account restoration preserves identity, role and references while 
   assert.equal((await db.$transaction(tx => restoreRemovedAccount(tx, admin.session, target.user.id, proof()))).ok, false);
   assert.equal(await db.auditLog.count({ where: { entityId: target.user.id, event: 'user_restored_inactive' } }), 1);
 });
+
+test('manual analysis and dossier creation starts new unapproved drafts without invented AI provenance', options, async () => {
+  const f = await fixture(), preId = randomUUID(), dossierId = randomUUID(), clientDossierId = randomUUID();
+  await save(await command('PreAnalysis', preId, { clientId: f.client.id, projectId: f.project.id, internalSummary: 'Analisi manuale sintetica' }, 'CREATE'));
+  await save(await command('Dossier', dossierId, { clientId: f.client.id, projectId: f.project.id, preAnalysisId: preId, title: 'Dossier manuale sintetico', type: 'nota_interna', markdownContent: 'Bozza sintetica', jsonContent: '{}' }, 'CREATE'));
+  await save(await command('ClientDossier', clientDossierId, { clientId: f.client.id, projectId: f.project.id, title: 'Bozza cliente sintetica', content: 'Testo da revisionare' }, 'CREATE'));
+  const pre = await db.preAnalysis.findUniqueOrThrow({ where: { id: preId } }), dossier = await db.dossier.findUniqueOrThrow({ where: { id: dossierId } });
+  const client = await db.clientDossier.findUniqueOrThrow({ where: { id: clientDossierId } });
+  assert.equal(pre.status, 'raccolta_dati'); assert.equal(pre.aiRunId, null); assert.equal(pre.approvedAt, null);
+  assert.equal(dossier.status, 'bozza_consulente'); assert.equal(dossier.aiRunId, null); assert.equal(dossier.approvedById, null);
+  assert.equal(client.status, 'bozza'); assert.equal(client.sourceAiOutputId, null); assert.equal(client.createdById, admin.user.id);
+});
+
+test('contract archive and restoration preserve the signed proof and refuse fabricated signing', options, async () => {
+  const f = await fixture(), signedAt = new Date('2026-01-01T00:00:00.000Z');
+  const row = await db.contract.create({ data: { clientId: f.client.id, contractNumber: randomUUID(), serviceName: 'Servizio sintetico', serviceDescription: 'Attività test',
+    taxableAmount: 100, vatAmount: 22, totalAmount: 122, status: 'firmato', signedAt, signedDocumentId: 'synthetic-existing-proof-reference' } });
+  await save(await command('Contract', row.id, { status: 'archiviato' }));
+  await save(await command('Contract', row.id, { status: 'firmato' }));
+  const current = await db.contract.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(current.signedAt?.toISOString(), signedAt.toISOString()); assert.equal(current.signedDocumentId, row.signedDocumentId); assert.equal(current.status, 'firmato');
+  const unsigned = await db.contract.create({ data: { clientId: f.client.id, contractNumber: randomUUID(), serviceName: 'Bozza', serviceDescription: 'Non firmato', taxableAmount: 100, vatAmount: 22, totalAmount: 122 } });
+  await assert.rejects(save(await command('Contract', unsigned.id, { status: 'firmato' })), /HISTORY/);
+  assert.equal((await db.contract.findUniqueOrThrow({ where: { id: unsigned.id } })).status, 'da_preparare');
+});
+
+test('offer correction validates context and totals, preserves sent conditions and restores the same archived record', options, async () => {
+  const f = await fixture(), id = randomUUID();
+  await save(await command('CommercialOffer', id, { clientId: f.client.id, title: 'Offerta sintetica', taxableAmount: '100', vatAmount: '22', totalAmount: '122' }, 'CREATE'));
+  const created = await db.commercialOffer.findUniqueOrThrow({ where: { id } }); assert.equal(created.status, 'bozza'); assert.equal(created.createdById, admin.user.id);
+  await db.commercialOffer.update({ where: { id }, data: { status: 'inviata', sentAt: new Date() } });
+  await assert.rejects(save(await command('CommercialOffer', id, { taxableAmount: '200', vatAmount: '44', totalAmount: '244' })), /HISTORY/);
+  await save(await command('CommercialOffer', id, { followUpNote: 'Seguito sintetico conservato' }));
+  await save(await command('CommercialOffer', id, {}, 'TRASH')); await save(await command('CommercialOffer', id, {}, 'RESTORE'));
+  const restored = await db.commercialOffer.findUniqueOrThrow({ where: { id } }); assert.equal(restored.status, 'inviata'); assert.equal(restored.followUpNote, 'Seguito sintetico conservato');
+  assert.equal(restored.totalAmount.toString(), '122'); assert.equal(restored.deletedAt, null);
+});
+
+test('SLA replacement creates a new version and retains the previous policy without activating dormant functionality', options, async () => {
+  const previous = await db.commercialLeadSlaPolicyVersion.findFirst({ orderBy: { version: 'desc' } });
+  const active = await db.commercialLeadSlaPolicyVersion.findFirst({ where: { status: 'ACTIVE', policyCode: 'COMMERCIAL_FIRST_RESPONSE' } })
+    ?? await db.commercialLeadSlaPolicyVersion.create({ data: { version: (previous?.version ?? 0) + 1, status: 'ACTIVE', responseTargetSeconds: 3600, createdById: admin.user.id } });
+  const id = randomUUID(); await save(await command('CommercialLeadSlaPolicyVersion', id, { responseTargetSeconds: '7200', status: 'ACTIVE' }, 'CREATE'));
+  const old = await db.commercialLeadSlaPolicyVersion.findUniqueOrThrow({ where: { id: active.id } }), current = await db.commercialLeadSlaPolicyVersion.findUniqueOrThrow({ where: { id } });
+  assert.equal(old.status, 'RETIRED'); assert.equal(old.responseTargetSeconds, active.responseTargetSeconds); assert.equal(old.version, active.version);
+  assert.equal(current.status, 'ACTIVE'); assert.equal(current.responseTargetSeconds, 7200); assert(current.version > active.version);
+  assert.equal(await db.commercialLeadSlaPolicyVersion.count({ where: { policyCode: 'COMMERCIAL_FIRST_RESPONSE', status: 'ACTIVE' } }), 1);
+  await assert.rejects(save(await command('CommercialLeadSlaPolicyVersion', id, { responseTargetSeconds: '1' })), /INVALID/);
+  await assert.rejects(save(await command('CommercialLeadSlaPolicyVersion', id, { responseTargetSeconds: '9000' })), /HISTORY/);
+  assert.equal(process.env.COMMERCIAL_LEAD_INBOX_MODE, 'disabled');
+});
 test('Admin corrects priority and amounts after fifteen minutes, then reopens exact persisted values and history', options, async () => {
   const f = await fixture(), input = await command('Project', f.project.id, { priority: 'urgente', requestedAmount: '12345.67' });
   await save(input, admin, 900);

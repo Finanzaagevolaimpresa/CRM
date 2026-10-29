@@ -27,6 +27,7 @@ test('creating an account keeps every choice through expiry and confirms one per
   await form.getByRole('button', { name: 'Crea utente', exact: true }).click();
   await expect(page.getByRole('cell', { name: email, exact: true })).toBeVisible();
   expect(await db.user.count({ where: { email } })).toBe(1);
+  await expect(page).toHaveURL(/#account-command=/);
   await page.reload(); await page.getByRole('button', { name: 'Verifica esito account', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
 });
