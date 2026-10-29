@@ -153,8 +153,11 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
-  const prepared = previewGeneration === generation ? preview.preview : undefined;
-  const preparedRevoke = preparedRevokeGeneration === revokeGeneration ? revocation.preview : undefined;
+  // useActionState retains its previous response while preparing the next one.
+  // Never render that old decision as the new preview, even for one frame.
+  const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId ? preview.preview : undefined;
+  const preparedRevoke = !preparingRevoke && preparedRevokeGeneration === revokeGeneration
+    && revocation.preview?.input.commandId === revokeCommandId ? revocation.preview : undefined;
   const resume = (message: string, needsConfirmation: boolean) => {
     setSubmitted(false); setPreviewGeneration(-1); setPreparedRevokeGeneration(-1);
     setGeneration(value => value + 1); setCommand(crypto.randomUUID());

@@ -49,7 +49,7 @@ test('no sharing/email/Admin authority substitutes the distinct empty technical 
 });
 
 test('project priority and named owners are visible only when individually selected, including the operational list', options, async () => {
-  const f = await fixture(), target = technicalTarget(f, 'Project');
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), target = technicalTarget(f, 'Project');
   await assignTechnical(db, admin, target, f.techB, { statusOnly: true });
   const first = await readTechnicalWork(db, f.techB.session, target);
   assert.deepEqual(first.fields.map(row => row.key), ['status']);
