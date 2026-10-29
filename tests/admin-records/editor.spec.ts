@@ -66,7 +66,7 @@ test('historical values are restored by an explicit new revision and retained af
 test('create, trash and restore an expense without duplicating identity or losing its amount', async ({ page }) => {
   await login(page); await page.goto('/admin/records/ProjectExpense/new');
   await page.getByRole('combobox', { name: 'Progetto', exact: true }).selectOption(f.projects[2].id);
-  await page.getByRole('textbox', { name: 'Categoria', exact: true }).fill('software');
+  await page.getByRole('combobox', { name: 'Categoria', exact: true }).selectOption('software');
   await page.getByRole('textbox', { name: 'Descrizione', exact: true }).fill('Voce browser sintetica');
   await page.getByRole('spinbutton', { name: 'Importo', exact: true }).fill('123.45'); await reason(page);
   const id = new URL(page.url()).searchParams.get('draft')!; await save(page);
@@ -81,14 +81,15 @@ test('a committed response lost in transit recovers one receipt after reload wit
   await login(page); await openProject(page, 3);
   await page.getByRole('textbox', { name: 'Titolo', exact: true }).fill('Esito recuperato dopo perdita risposta'); await reason(page);
   const commandId = new URL(page.url()).searchParams.get('command')!;
-  let posts = 0; const pattern = '**/admin/records/Project/**';
+  let posts = 0, responseDiscarded = false; const pattern = '**/admin/records/Project/**';
   await page.route(pattern, async route => {
     if (route.request().method() !== 'POST') return route.continue();
-    posts++; await route.fetch(); await route.abort('failed');
+    posts++; await route.fetch(); await route.abort('failed'); responseDiscarded = true;
   });
   await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
   await expect.poll(() => posts).toBe(1);
   await expect.poll(() => db.adminRecordRevision.count({ where: { commandId } })).toBe(1);
+  await expect.poll(() => responseDiscarded).toBe(true);
   await page.unroute(pattern); await page.reload();
   await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true })).toBeVisible();
@@ -155,4 +156,18 @@ test('selective client sharing keeps recipient and fields across expiry and gran
   await expect(inline).toContainText('Identità confermata.');
   await page.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Accesso confermato:' })).toBeVisible();
+});
+
+test('Admin restores a removed identity through its archive while access stays disabled', async ({ page }) => {
+  await login(page);
+  const target = await db.user.findUniqueOrThrow({ where: { email: f.technicianEmail } });
+  await db.user.update({ where: { id: target.id }, data: { active: false, deletedAt: new Date() } });
+  await page.goto(`/settings/users/${target.id}`);
+  await page.getByRole('checkbox', { name: 'Ripristino l’identità conservando l’accesso disattivato.', exact: true }).check();
+  await page.getByRole('button', { name: 'Ripristina account disattivato', exact: true }).click();
+  await expect.poll(async () => (await db.user.findUniqueOrThrow({ where: { id: target.id } })).deletedAt).toBe(null);
+  await page.reload();
+  await expect(page.getByRole('form', { name: 'Modifica profilo', exact: true })).toBeVisible();
+  expect((await db.user.findUniqueOrThrow({ where: { id: target.id } })).active).toBe(false);
+  expect(await db.auditLog.count({ where: { entityId: target.id, event: 'user_restored_inactive' } })).toBe(1);
 });

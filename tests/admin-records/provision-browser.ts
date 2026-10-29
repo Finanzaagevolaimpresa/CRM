@@ -13,6 +13,7 @@ try {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const hash = await bcrypt.hash(process.env.ADMIN_RECORD_BROWSER_PASSWORD!, 12);
   const admin = await syntheticAuthority(db, hash), technician = await syntheticPerson(db, 'Tecnico sintetico', 'consulente', hash);
+  await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   for (const person of [admin, technician]) await db.$transaction(tx => revokeAllInternalSessions(tx, person.user.id, 'INTERNAL_GLOBAL', admin.user.id));
   await assertRegistryActivationReady(db);
   const client = await db.client.create({ data: { displayName: 'Cliente sintetico Admin browser', type: 'societa' } });

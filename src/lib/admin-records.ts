@@ -221,7 +221,7 @@ async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, ch
       || await tx.clientService.count({ where: { paymentId: before.id } }))) fail('HISTORY');
 }
 async function readDeleted(tx: Tx, model: string, id: string) {
-  const latest = await tx.adminRecordRevision.findFirst({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { commandId: 'desc' }] });
+  const latest = await tx.adminRecordRevision.findFirst({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }] });
   return latest?.operation === 'TRASH' && latest.after === null ? latest : null;
 }
 
@@ -409,7 +409,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     const row = existing ?? (removed?.before as unknown as Row | undefined) ?? null;
     if (creating ? !policy.create || Boolean(row) : !row) fail('DENIED');
     if (row) await assertContextVisible(tx, current.actor, model, row);
-    const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { commandId: 'desc' }], take: 100,
+    const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
       select: { commandId: true, operation: true, createdAt: true, reason: true, actor: { select: { name: true, email: true } } } });
     const memberships = model === 'Person' ? await tx.companyPerson.findMany({ where: { personId: id } }) : [];
     const companies = await tx.company.findMany({ where: { id: { in: memberships.map(item => item.companyId) } }, select: { id: true, name: true, clientId: true } });
@@ -449,7 +449,7 @@ export async function listAdminRecords(db: PrismaClient, session: AuthSession, m
     if (trash && policy.trash === 'leaf') {
       const snapshots = await tx.$queryRaw<Array<{ before: Row }>>`SELECT latest.before FROM (
         SELECT DISTINCT ON ("recordId") "recordId", operation, before FROM "AdminRecordRevision"
-        WHERE model=${model} AND operation <> 'CLOSE' ORDER BY "recordId", "createdAt" DESC, "commandId" DESC
+        WHERE model=${model} AND operation <> 'CLOSE' ORDER BY "recordId", "createdAt" DESC, "transactionId" DESC, "commandId" DESC
       ) latest WHERE operation='TRASH' AND (${query}='' OR "recordId"=${query} OR latest.before::text ILIKE ${'%' + query + '%'})
       ORDER BY "recordId" LIMIT 51 OFFSET ${(page - 1) * 50}`;
       rows = snapshots.map(snapshot => ({ ...snapshot.before, deletedAt: true }));

@@ -4,6 +4,10 @@ import { internalSessionMode } from './session';
 import { lockAuthoritativeInternalSession, lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
 import { accountPasswordSchema, accountProfileSchema } from './user-account-contract';
 import { lockCommunicationDirectory } from './communication-directory-lock';
+import type { AuthSession } from './auth';
+import { updateActor, type UpdateCredentials } from './record-updates';
+import { recordUpdatePermission } from './record-update-context';
+import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 
 type Tx = Prisma.TransactionClient;
 export type AccountActor = { userId: string; sessionId?: string };
@@ -84,4 +88,20 @@ export async function revokeAccountSessions(tx: Tx, actor: AccountActor, userId:
   await revokeAllInternalSessions(tx, userId, 'INTERNAL_GLOBAL', actor.userId);
   await record(tx, actor, userId, 'user_sessions_revoked');
   return { ok: true, sessionRevoked: actor.userId === userId };
+}
+
+/** Restore identity and references without restoring access or personal acts.
+ * The native activation command remains a separate explicit Admin decision. */
+export async function restoreRemovedAccount(tx: Tx, actor: AuthSession, userId: string, proof: UpdateCredentials): Promise<AccountResult> {
+  if (!await lockRegisteredPrivilegedStepUpKey(tx, proof.key)) return deny();
+  await lockCommunicationDirectory(tx, true);
+  const current = await updateActor(tx, actor, proof);
+  if (current.actor.role !== 'admin' || !recordUpdatePermission(current.actor, 'user.write') || actor.userId === userId) return deny();
+  const before = await lockInternalUser(tx, userId);
+  if (!before?.deletedAt) return deny();
+  await tx.user.update({ where: { id: userId }, data: { deletedAt: null, active: false } });
+  await revokeAllInternalSessions(tx, userId, 'USER_DISABLED', actor.userId);
+  await record(tx, actor, userId, 'user_restored_inactive');
+  await current.finish();
+  return { ok: true, sessionRevoked: false };
 }

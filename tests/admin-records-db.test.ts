@@ -6,6 +6,7 @@ import { syntheticAuthority, syntheticPerson, syntheticSession, syntheticSharing
 import { previewSelectiveAccess, confirmSelectiveAccess } from '../src/lib/selective-project-access';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
+import { restoreRemovedAccount } from '../src/lib/user-account-service';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt,
   type AdminRecordCommand } from '../src/lib/admin-records';
 
@@ -31,6 +32,22 @@ async function command(model: string, id: string, patch: Record<string, string> 
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+
+test('removed account restoration preserves identity, role and references while keeping access and sessions disabled', options, async () => {
+  const target = await syntheticPerson(db, 'Identità sintetica da ripristinare', 'consulente');
+  await db.user.update({ where: { id: target.user.id }, data: { deletedAt: new Date(), active: false } });
+  await assert.rejects(db.$transaction(tx => restoreRemovedAccount(tx, admin.session, target.user.id, proof(admin, 1801))));
+  assert((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).deletedAt);
+  const outsider = await syntheticPerson(db, 'Tecnico senza amministrazione', 'consulente');
+  assert.equal((await db.$transaction(tx => restoreRemovedAccount(tx, outsider.session, target.user.id, proof(outsider)))).ok, false);
+  assert.equal((await db.$transaction(tx => restoreRemovedAccount(tx, admin.session, target.user.id, proof()))).ok, true);
+  const restored = await db.user.findUniqueOrThrow({ where: { id: target.user.id } });
+  assert.equal(restored.deletedAt, null); assert.equal(restored.active, false); assert.equal(restored.role, 'consulente');
+  assert.equal(restored.email, target.user.email);
+  assert((await db.internalSession.findUniqueOrThrow({ where: { id: target.session.sessionId } })).revokedAt);
+  assert.equal((await db.$transaction(tx => restoreRemovedAccount(tx, admin.session, target.user.id, proof()))).ok, false);
+  assert.equal(await db.auditLog.count({ where: { entityId: target.user.id, event: 'user_restored_inactive' } }), 1);
+});
 test('Admin corrects priority and amounts after fifteen minutes, then reopens exact persisted values and history', options, async () => {
   const f = await fixture(), input = await command('Project', f.project.id, { priority: 'urgente', requestedAmount: '12345.67' });
   await save(input, admin, 900);

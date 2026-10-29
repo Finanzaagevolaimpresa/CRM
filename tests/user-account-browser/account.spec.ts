@@ -144,15 +144,18 @@ test('own admin profile name works without step-up while email still requires ad
   const newEmail = `m1-self-updated-${scope}@example.test`;
   await profile.getByLabel('Email di accesso').fill(newEmail);
   await profile.getByRole('button', { name: 'Salva profilo' }).click();
-  await expect(page).toHaveURL(privilegedMode === 'enforced' ? /\/settings\/security\?status=required$/ : /\/settings\/security\?status=unavailable$/);
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  await expect(profile.getByLabel('Email di accesso')).toHaveValue(newEmail);
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  if (privilegedMode === 'enforced') await expect(inline).toBeVisible();
+  else await expect(profile.getByRole('status')).toContainText('non disponibile');
   expect((await db.user.findUniqueOrThrow({ where: { id: user.id } })).email).toBe(selfAdminEmail);
   expect(await db.auditLog.count({ where: { actorId: user.id, event: 'user_profile_updated' } })).toBe(1);
   if (privilegedMode === 'enforced') {
-    await page.getByLabel('Password corrente').fill(password);
-    await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
-    await expect(page).toHaveURL(/status=active/);
-    await page.goto('/settings/account');
-    await profile.getByLabel('Email di accesso').fill(newEmail);
+    await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+    await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+    await expect(inline).toContainText('Identità confermata.');
+    await expect(profile.getByLabel('Email di accesso')).toHaveValue(newEmail);
     await profile.getByRole('button', { name: 'Salva profilo' }).click();
     await expect(page).toHaveURL(/\/login\?status=account-updated$/);
     expect((await db.user.findUniqueOrThrow({ where: { id: user.id } })).email).toBe(newEmail);
