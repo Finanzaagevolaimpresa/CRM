@@ -34,8 +34,8 @@ concurrency:
   group: pr140-release-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  release-schema70:
-    name: Schema70 historical contact and earlier state retained on restart
+  release-schema71:
+    name: Schema71 reminders and earlier state retained on restart
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

@@ -58,7 +58,7 @@ jobs:
           echo "TECHNICAL_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/technical-private-documents"
           echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/technical-private-documents" >> "$GITHUB_ENV"
-          node scripts/m4/verify-schema.mjs > "$evidence/current-schema70-binding.json"
+          node scripts/m4/verify-schema.mjs > "$evidence/current-schema71-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           historical="$RUNNER_TEMP/technical-schema63"
           mkdir -p "$historical"

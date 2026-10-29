@@ -22,7 +22,7 @@ function stale(): never { throw new TechnicalAssignmentError('STALE'); }
 
 /** Parent locks must precede this function. Existing nullable links constrain
  * the explicit choice; the loader never adds a relationship or a permission. */
-export async function lockTechnicalWorkItemSource(tx: Tx, state: TechnicalAssignmentTransaction,
+export async function lockTechnicalWorkItemSource(tx: Tx, state: Pick<TechnicalAssignmentTransaction, 'key' | 'recipient'>,
   context: Context, reference: TechnicalWorkItemIdentity, documents: TechnicalAssignmentSelection['documents'], write = false) {
   id.parse(reference.itemId);
   if (!['Task', 'ChecklistItem'].includes(reference.kind) || !context.operational || !state.recipient) denied();

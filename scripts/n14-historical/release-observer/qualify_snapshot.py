@@ -50,8 +50,12 @@ SELECT jsonb_build_object(
 
 
 def manifest():
+    # This observer qualifies only the frozen 69 -> 70 transition. Newer source
+    # migrations are qualified separately; ledger_binding still rejects a live
+    # database whose ledger is not exactly the requested historical version.
     return {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted((ROOT / "prisma/migrations").glob("*/migration.sql"))}
+            for p in sorted((ROOT / "prisma/migrations").glob("*/migration.sql"))
+            if p.parent.name <= g.MIGRATION}
 
 
 def bind(result, schema, source_manifest, raw):

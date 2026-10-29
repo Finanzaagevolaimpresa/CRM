@@ -179,6 +179,9 @@ async function main() {
       videoAudit: await db.auditLog.findMany({ where: { event: 'VIDEO_LIBRARY_MUTATION' }, orderBy: { id: 'asc' } }),
       projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
       leads: await db.lead.findMany({ orderBy: { id: 'asc' } }),
+      reminders: await db.$queryRaw<Array<{ commandId: string }>>`SELECT * FROM "RecordUpdateReminder" ORDER BY "commandId"`,
+      reminderCancellations: await db.$queryRaw<Array<{ commandId: string }>>`SELECT * FROM "RecordUpdateReminderCancellation" ORDER BY "commandId"`,
+      reminderAudits: await db.auditLog.findMany({ where: { event: { in: ['record_reminder_scheduled', 'record_reminder_canceled'] } }, orderBy: { id: 'asc' } }),
       updateRules: await db.recordUpdateRule.findMany({ orderBy: { id: 'asc' } }),
       updateCommands: await db.recordUpdateCommand.findMany({ orderBy: { id: 'asc' } }),
       updateEvents: await db.recordUpdateEvent.findMany({ orderBy: { id: 'asc' } }),
@@ -247,12 +250,14 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 70);
+    assert.equal(data.ledger.length, 71);
+    assert.equal(data.reminders.length, 5); assert.equal(data.reminderCancellations.length, 1);
+    assert.equal(data.reminderAudits.length, 6);
     assert.equal(data.historicalContacts.length, 2); assert.equal(data.historicalConversions.length, 1);
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261027220000_historical_lead_contact_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261028180000_record_deadline_reminders_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);
@@ -293,13 +298,13 @@ async function main() {
     assert.equal(data.videoUsers.length, 3);
     assert.equal(data.updateRules.length, 5);
     assert.equal(data.updateRules.filter(row => !row.active).length, 2);
-    assert.equal(data.updateCommands.length, 8);
-    assert.equal(data.updateEvents.length, 6);
-    assert.equal(data.updateDeliveries.length, 6);
+    assert.equal(data.updateCommands.length, 14);
+    assert.equal(data.updateEvents.length, 11);
+    assert.equal(data.updateDeliveries.length, 11);
     assert.equal(data.updateDeliveries.filter(row => row.mode === 'EMAIL_DRAFT').length, 3);
     assert.equal(data.m4Messages.filter(row => row.updateDeliveryId).length, 2);
     assert.equal(data.m4Versions.filter(row => row.updateSourceHash).length, 2);
-    assert.equal(data.updateDeliveries.filter(row => row.readAt).length, 1);
+    assert.equal(data.updateDeliveries.filter(row => row.readAt).length, 2);
     assert.equal(data.internalThreads.length, 2);
     assert.equal(data.internalParticipants.length, 6);
     assert.equal(data.internalParticipants.filter(row=>!row.active).length, 2);
