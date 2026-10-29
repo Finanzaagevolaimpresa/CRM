@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { operationalRomeTime } from "@/lib/operational-time";
 import { MobileNavigation } from "@/components/mobile-navigation";
 
 export function Badge({
@@ -64,7 +65,8 @@ export function StatusBadge({ status }: { status?: string | null }) {
   );
 }
 
-export function formatDateTime(value?: Date | string | null) {
+export function formatDateTime(value?: Date | string | null, timeZone?: "Europe/Rome") {
+  if (timeZone) return operationalRomeTime(value);
   if (!value) return "—";
   const date = value instanceof Date ? value : new Date(value);
   return new Intl.DateTimeFormat("it-IT", {
@@ -78,11 +80,13 @@ export function TimestampMeta({
   updatedAt,
   createdBy,
   updatedBy,
+  timeZone,
 }: {
   createdAt?: Date | string | null;
   updatedAt?: Date | string | null;
   createdBy?: string | null;
   updatedBy?: string | null;
+  timeZone?: "Europe/Rome";
 }) {
   return (
     <div className="mt-4 grid gap-3 rounded-2xl border border-white/70 bg-slate-50/80 p-4 text-xs text-slate-600 shadow-inner shadow-slate-200/60 md:grid-cols-2">
@@ -91,7 +95,7 @@ export function TimestampMeta({
           Creato il
         </span>
         <br />
-        {formatDateTime(createdAt)}
+        {formatDateTime(createdAt, timeZone)}
         {createdBy ? ` · da ${createdBy}` : ""}
       </div>
       <div>
@@ -99,7 +103,7 @@ export function TimestampMeta({
           Aggiornato il
         </span>
         <br />
-        {formatDateTime(updatedAt ?? createdAt)}
+        {formatDateTime(updatedAt ?? createdAt, timeZone)}
         {updatedBy ? ` · da ${updatedBy}` : ""}
       </div>
     </div>
@@ -143,7 +147,9 @@ export function MetaCell({
 
 export function ActivityTimeline({
   events,
+  timeZone,
 }: {
+  timeZone?: "Europe/Rome";
   events: Array<{
     id: string;
     date: Date | string;
@@ -169,7 +175,7 @@ export function ActivityTimeline({
           <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-xs shadow-slate-200/70 transition hover:border-fai-blue/25 hover:shadow-md">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <Badge tone="purple">{event.type}</Badge>
-              <span>{formatDateTime(event.date)}</span>
+              <span>{formatDateTime(event.date, timeZone)}</span>
               <span>Operatore: {event.user ?? "Sistema"}</span>
               <span>Entità: {event.entity ?? "—"}</span>
             </div>

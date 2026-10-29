@@ -15,6 +15,8 @@ import { selectedTechnicalDocuments, type TechnicalDocumentChoices as DocumentCh
 import { TechnicalDocumentChoices, type TechnicalDocumentCatalogueAction } from './technical-document-choices';
 import { TechnicalUploadProfileFields, emptyUploadProfile, uploadProfileFromChoices } from './technical-upload-profile-fields';
 import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
+import { RomeDateTimeInput } from './rome-date-time-input';
+import { operationalRomeTime as when } from '@/lib/operational-time';
 
 type Data = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>;
 type Outcome = Awaited<ReturnType<typeof readTechnicalAssignmentOutcome>>;
@@ -27,7 +29,6 @@ type Actions = { previewAction: TechnicalAssignmentManagementAction; confirmActi
 const initial: TechnicalAssignmentManagementState = { ok: false, message: '' };
 const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
-const when = (value: string) => new Date(value).toLocaleString('it-IT');
 const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 function remember(ref: TechnicalAssignmentReference, commandId: string) {
   const url = new URL(window.location.href);
@@ -77,7 +78,7 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
         <p>Approvazione o rifiuto personale dell’Admin. Nessuna pubblicazione o condivisione automatica.</p></div>}
       <dl className="grid min-w-0 gap-3 rounded-xl bg-white p-4 sm:grid-cols-2">{preview.fields.map(field => <div key={field.key} className="min-w-0">
         <dt className="font-semibold">{field.label}{assign.editableFields.some(key => key === field.key) ? ' · modificabile' : ' · lettura'}</dt>
-        <dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl>
+        <dd className="whitespace-pre-wrap break-words">{['dueDate', 'submittedAt', 'nextClientUpdateAt', 'dueAt'].includes(field.key) ? when(field.value) : field.value ?? '—'}</dd></div>)}</dl>
       <h3 className="font-bold">Versioni documentali incluse</h3>
       {!preview.documents.length ? <p>Nessun documento selezionato.</p> : <ul className="space-y-2">{preview.documents.map(doc =>
         <li key={doc.fileId} className="break-words">{doc.title} · {doc.fileName} · versione {doc.version} · {selectedDocumentAccessLabel(doc, doc.allowDownload)}</li>)}</ul>}
@@ -85,7 +86,7 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
       {!preview.workItems.length ? <p>Nessun elemento selezionato.</p> : preview.workItems.map(item => <div key={`${item.kind}:${item.itemId}`} className="space-y-2 rounded-xl bg-white p-3">
         <strong>{item.kind === 'Task' ? 'Attività' : 'Elemento checklist'}</strong>
         <dl>{item.fields.map(field => <div key={field.key} className="min-w-0"><dt className="font-semibold">{technicalItemFieldLabels[field.key]} · {field.editable ? 'modificabile' : 'lettura'}</dt>
-          <dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl></div>)}
+          <dd className="whitespace-pre-wrap break-words">{['dueDate', 'submittedAt', 'nextClientUpdateAt', 'dueAt'].includes(field.key) ? when(field.value) : field.value ?? '—'}</dd></div>)}</dl></div>)}
       <p>Il referente commerciale resta invariato. Altri clienti, progetti, pratiche e versioni future dei documenti non sono inclusi.</p>
       <p>Per questa persona, il fascicolo generale del cliente e i percorsi ordinari collegati restano esclusi: il lavoro tecnico passa dagli incarichi espliciti. Questo limite resta anche dopo revoca o scadenza e non rinnova accessi precedenti.</p>
     </> : <p>Il lavoro e lo storico sono conservati. La revoca interrompe questo incarico e non rinnova altri accessi.</p>}
@@ -175,7 +176,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
             onChange={value => { setItems(value); changed(); }} catalogueAction={catalogueAction}
             onReady={value => { setCatalogueReady(value); if (!value) changed(); }} />
           {chosenActions.includes('upload_document') && <TechnicalUploadProfileFields value={uploadChoices} onChange={setUploadChoices} />}
-          <label className="block font-semibold">Scadenza, entro 90 giorni<input className={control} type="datetime-local" required value={expires} onChange={event => setExpires(event.target.value)} /></label>
+          <RomeDateTimeInput label="Scadenza, entro 90 giorni" className={control} required value={expires} onChange={setExpires} />
           <label className="block font-semibold">Motivo dell’incarico<textarea className={control} value={reason} minLength={3} maxLength={500} required onChange={event => setReason(event.target.value)} /></label>
           <input type="hidden" name="operation" value="ASSIGN" /><input type="hidden" name="reference" value={JSON.stringify(reference)} />
           <input type="hidden" name="command" value={JSON.stringify(command)} />

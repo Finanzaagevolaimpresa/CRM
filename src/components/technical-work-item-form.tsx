@@ -4,6 +4,8 @@ import { startTransition, useActionState, useState, useSyncExternalStore } from 
 import type { readTechnicalWorkItem, previewTechnicalWorkItem, readTechnicalWorkItemOutcome } from '@/lib/technical-work-item-service';
 import { technicalWorkPath, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
 import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
+import { RomeDateTimeInput } from './rome-date-time-input';
+import { operationalRomeTime } from '@/lib/operational-time';
 
 type Data = Awaited<ReturnType<typeof readTechnicalWorkItem>>;
 export type TechnicalWorkItemState = { ok: boolean; message: string; uncertain?: boolean;
@@ -30,8 +32,8 @@ function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<Tec
   return <section className="space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo attività tecnica">
     <h2 className="text-xl font-bold">Conferma le modifiche</h2>
     <div className="grid min-w-0 gap-3 sm:grid-cols-2">{Object.entries(preview.after).map(([key, value]) => <div key={key} className="min-w-0 rounded-xl bg-white p-3">
-      <strong>{technicalItemFieldLabels[key]}</strong><p className="whitespace-pre-wrap break-words">Prima: {preview.before[key] ?? '—'}</p>
-      <p className="whitespace-pre-wrap break-words">Dopo: {value ?? '—'}</p></div>)}</div>
+      <strong>{technicalItemFieldLabels[key]}</strong><p className="whitespace-pre-wrap break-words">Prima: {key === 'dueAt' ? operationalRomeTime(preview.before[key]) : preview.before[key] ?? '—'}</p>
+      <p className="whitespace-pre-wrap break-words">Dopo: {key === 'dueAt' ? operationalRomeTime(value) : value ?? '—'}</p></div>)}</div>
     <button type="button" className="font-semibold underline disabled:opacity-50" disabled={locked} onClick={edit}>Rivedi le modifiche</button>
     <form action={submit} className="space-y-3" onSubmit={() => { const url = new URL(window.location.href);
       url.searchParams.set('itemDecision', preview.command.commandId); window.history.replaceState(window.history.state, '', url); setSent(true); }}>
@@ -68,9 +70,8 @@ export function TechnicalWorkItemForm({ target, data, initialCommandId, previewA
           onChange={event => { setSelected(event.target.checked ? [...selected, key] : selected.filter(field => field !== key)); changed(); }} />Modifica {technicalItemFieldLabels[key].toLocaleLowerCase('it-IT')}</label>
         {key === 'priority' ? <select aria-label={technicalItemFieldLabels[key]} className={control} disabled={locked || !selected.includes(key)} value={values[key]}
           onChange={event => { setValues({ ...values, [key]: event.target.value }); changed(); }}>{['bassa', 'media', 'alta', 'urgente'].map(value => <option key={value} value={value}>{value}</option>)}</select>
-          : key === 'dueAt' ? <input aria-label={technicalItemFieldLabels[key]} className={control} type="datetime-local" disabled={locked || !selected.includes(key)}
-            value={values[key] ? new Date(new Date(values[key]).getTime() - new Date(values[key]).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''}
-            onChange={event => { setValues({ ...values, [key]: event.target.value ? new Date(event.target.value).toISOString() : '' }); changed(); }} />
+          : key === 'dueAt' ? <RomeDateTimeInput label={technicalItemFieldLabels[key]} className={control} disabled={locked || !selected.includes(key)}
+            value={values[key]} onChange={instant => { setValues({ ...values, [key]: instant }); changed(); }} />
             : <textarea aria-label={technicalItemFieldLabels[key]} className={control} rows={3} maxLength={key === 'title' ? 200 : 5000}
               disabled={locked || !selected.includes(key)} value={values[key]} onChange={event => { setValues({ ...values, [key]: event.target.value }); changed(); }} />}
       </div>)}</div>
