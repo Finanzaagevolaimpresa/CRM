@@ -2,7 +2,6 @@
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 import { useActionState, useState, useSyncExternalStore } from 'react';
-import { useRouter } from 'next/navigation';
 import { prepareLeadSharing, confirmLeadSharingAction, revokeLeadSharingAction, checkLeadSharingReceipt, type LeadSharingState } from '@/lib/selective-lead-actions';
 import { selectiveLeadFields, type SelectiveLeadField } from '@/lib/selective-lead-policy';
 
@@ -30,7 +29,6 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
   leadId: string; recipients: { id: string; name: string; email: string; role: string }[];
   grants: Grant[]; initialCommandId: string;
 }) {
-  const router = useRouter();
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [recipientId, setRecipient] = useState(''), [fields, setFields] = useState<SelectiveLeadField[]>([]);
   const [expires, setExpires] = useState(''), [commandId, setCommand] = useState(initialCommandId);
@@ -80,7 +78,7 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
     </section>}
     <p role="status">{confirmation.message}</p>
     {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
-    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => router.refresh()}>Ricarica lo stato corrente</button>}
+    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => window.location.reload()}>Ricarica lo stato corrente</button>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Selezioni e revoche</h2>
       {!grants.length && <p>Nessuna selezione registrata per questo lead.</p>}
       {grants.map(row => <Revoke key={`${row.id}:${row.revision}`} grant={row} />)}

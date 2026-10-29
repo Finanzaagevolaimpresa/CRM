@@ -13,13 +13,14 @@ try {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const hash = await bcrypt.hash(process.env.ADMIN_RECORD_BROWSER_PASSWORD!, 12);
   const admin = await syntheticAuthority(db, hash), technician = await syntheticPerson(db, 'Tecnico sintetico', 'consulente', hash);
+  const commandsTarget = await syntheticPerson(db, 'Account per comandi sintetici', 'consulente', hash);
   await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
-  for (const person of [admin, technician]) await db.$transaction(tx => revokeAllInternalSessions(tx, person.user.id, 'INTERNAL_GLOBAL', admin.user.id));
+  for (const person of [admin, technician, commandsTarget]) await db.$transaction(tx => revokeAllInternalSessions(tx, person.user.id, 'INTERNAL_GLOBAL', admin.user.id));
   await assertRegistryActivationReady(db);
   const client = await db.client.create({ data: { displayName: 'Cliente sintetico Admin browser', type: 'societa' } });
   const projects = [];
   for (let index = 0; index < 5; index++) projects.push(await db.project.create({ data: { clientId: client.id, title: `Progetto sintetico Admin ${index}`, priority: 'media', requestedAmount: '100.25' } }));
-  writeFileSync(join(process.env.ADMIN_RECORD_EVIDENCE!, 'fixture.json'), JSON.stringify({ adminEmail: admin.user.email, technicianEmail: technician.user.email,
+  writeFileSync(join(process.env.ADMIN_RECORD_EVIDENCE!, 'fixture.json'), JSON.stringify({ adminEmail: admin.user.email, technicianEmail: technician.user.email, commandsEmail: commandsTarget.user.email,
     clientId: client.id, projects: projects.map(row => ({ id: row.id, title: row.title })) }));
 } finally { await db.$disconnect(); }
 

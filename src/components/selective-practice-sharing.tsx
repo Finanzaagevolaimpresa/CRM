@@ -4,7 +4,6 @@ import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
 import { useActionState, useState, useSyncExternalStore } from 'react';
-import { useRouter } from 'next/navigation';
 import { preparePracticeSharing, confirmPracticeSharingAction, revokePracticeSharingAction, checkPracticeSharingReceipt, type PracticeSharingState } from '@/lib/selective-practice-actions';
 import { selectivePracticeFields, type SelectivePracticeField } from '@/lib/selective-practice-policy';
 import { maxPracticeDocuments, type PracticeDocumentChoice } from '@/lib/selective-practice-document-policy';
@@ -34,7 +33,6 @@ export function SelectivePracticeSharing({ practiceId, recipients, grants, initi
   practiceId: string; recipients: { id: string; name: string; email: string; role: string }[];
   grants: Grant[]; initialCommandId: string; documentOptions: DocumentOption[]; documentsLimited: boolean; operational: boolean;
 }) {
-  const router = useRouter();
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [recipientId, setRecipient] = useState(''), [fields, setFields] = useState<SelectivePracticeField[]>([]);
   const [documents, setDocuments] = useState<PracticeDocumentChoice[]>([]), [documentSearch, setDocumentSearch] = useState('');
@@ -104,7 +102,7 @@ export function SelectivePracticeSharing({ practiceId, recipients, grants, initi
     </section>}
     <p role="status">{confirmation.message}</p>
     {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
-    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => router.refresh()}>Ricarica lo stato corrente</button>}
+    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => window.location.reload()}>Ricarica lo stato corrente</button>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Selezioni e revoche</h2>
       {!grants.length && <p>Nessuna selezione registrata per questa pratica.</p>}
       {grants.map(row => <Revoke key={`${row.id}:${row.revision}`} grant={row} practiceId={practiceId} />)}

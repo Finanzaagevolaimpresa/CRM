@@ -4,7 +4,6 @@ import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
 import { useActionState, useState, useSyncExternalStore } from 'react';
-import { useRouter } from 'next/navigation';
 import { prepareClientSharing, confirmClientSharingAction, revokeClientSharingAction, checkClientSharingReceipt, type ClientSharingState } from '@/lib/selective-client-actions';
 import { selectiveClientFields, type SelectiveClientField } from '@/lib/selective-client-policy';
 import { maxClientDocuments, type ClientDocumentChoice } from '@/lib/selective-client-document-policy';
@@ -40,7 +39,6 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   companyOptions: { id: string; name: string }[]; companiesLimited: boolean;
   personOptions: ClientPersonOption[]; peopleLimited: boolean;
 }) {
-  const router = useRouter();
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [recipientId, setRecipient] = useState(''), [fields, setFields] = useState<SelectiveClientField[]>([]);
   const [documents, setDocuments] = useState<ClientDocumentChoice[]>([]), [documentSearch, setDocumentSearch] = useState('');
@@ -138,7 +136,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
     </section>}
     <p role="status">{confirmation.message}</p>
     {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
-    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => router.refresh()}>Ricarica lo stato corrente</button>}
+    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => window.location.reload()}>Ricarica lo stato corrente</button>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Selezioni e revoche</h2>
       {!grants.length && <p>Nessuna selezione registrata per questo cliente.</p>}
       {grants.map(row => <Revoke key={`${row.id}:${row.revision}`} grant={row} clientId={clientId} />)}

@@ -19,7 +19,7 @@ export default async function Page({ params, searchParams }: {
   const { editDecisionId } = await searchParams;
   return <div className="min-w-0 space-y-6"><PageHeader title="Permessi di modifica del lead" description="Decidi personalmente chi può modificare i campi già condivisi." />
     <SecondaryLink href={`/leads/${id}/sharing`}>Torna alla selezione di lettura</SecondaryLink>
-    <Card title="Scegli chi può modificare"><SelectiveLeadEditManagement key={randomUUID()} data={{ ...data, grants: data.grants.map(grant => ({ ...grant, commandId: randomUUID() })) }}
+    <Card title="Scegli chi può modificare"><SelectiveLeadEditManagement key={id} data={{ ...data, grants: data.grants.map(grant => ({ ...grant, commandId: randomUUID() })) }}
       initialCommandId={randomUUID()} recoverCommandId={editDecisionId} previewAction={prepareLeadEditingAccess}
       confirmAction={confirmLeadEditingAccess} revokeAction={revokeLeadEditingAccess} receiptAction={checkLeadEditingDecision} /></Card>
   </div>;

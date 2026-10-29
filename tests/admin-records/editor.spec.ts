@@ -4,8 +4,50 @@ import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
-const f: { adminEmail: string; technicianEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
+const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
+
+test('creating an account keeps every choice through expiry and confirms one persisted identity', async ({ page, context }) => {
+  await login(page); await page.goto('/settings/users');
+  const form = page.getByRole('form', { name: 'Crea utente interno', exact: true }), email = 'admin-new-browser@example.test';
+  await form.getByPlaceholder('Nome', { exact: true }).fill('Account browser nuovo');
+  await form.getByPlaceholder('email@azienda.it').fill(email);
+  await form.locator('select[name="role"]').selectOption('commerciale');
+  await form.getByPlaceholder('Password temporanea').fill(password);
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await form.getByRole('button', { name: 'Crea utente', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible(); await expect(form.getByPlaceholder('email@azienda.it')).toHaveValue(email);
+  expect(await db.user.count({ where: { email } })).toBe(0);
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await expect(form.getByPlaceholder('Password temporanea')).toHaveValue(password);
+  await expect(form.locator('select[name="role"]')).toHaveValue('commerciale');
+  await form.getByRole('button', { name: 'Crea utente', exact: true }).click();
+  await expect(page.getByRole('cell', { name: email, exact: true })).toBeVisible();
+  expect(await db.user.count({ where: { email } })).toBe(1);
+  await page.reload(); await page.getByRole('button', { name: 'Verifica esito account', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
+});
+
+test('a lost role-change response reopens its receipt and never repeats the command', async ({ page }) => {
+  await login(page); await page.goto('/settings/users');
+  const target = await db.user.findUniqueOrThrow({ where: { email: f.commandsEmail } });
+  const form = page.getByRole('form', { name: `Modifica ruolo di ${target.name}`, exact: true });
+  await form.locator('select[name="role"]').selectOption('commerciale');
+  let discarded = false, posts = 0; const pattern = '**/settings/users*';
+  await page.route(pattern, async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts++; await route.fetch(); await route.abort('failed'); discarded = true;
+  });
+  await form.getByRole('button', { name: 'Modifica ruolo', exact: true }).click();
+  await expect.poll(() => discarded).toBe(true); await page.unroute(pattern); await page.reload();
+  await page.getByRole('button', { name: 'Verifica esito account', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
+  expect((await db.user.findUniqueOrThrow({ where: { id: target.id } })).role).toBe('commerciale');
+  expect(await db.auditLog.count({ where: { entityId: target.id, event: 'role_change' } })).toBe(1); expect(posts).toBe(1);
+});
 test.beforeAll(async () => { expect(process.env.CI).toBe('true'); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.afterAll(async () => db.$disconnect());
 async function login(page: Page, email = f.adminEmail, privileged = true) {

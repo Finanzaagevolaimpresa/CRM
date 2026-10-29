@@ -142,7 +142,11 @@ test('removal requires admin step-up and preserves work, archive and immediate r
   const pending = admin.waitForRequest(request => Boolean(request.headers()['next-action']));
   await removal.getByRole('button', { name: 'Rimuovi account' }).click();
   const captured = await pending;
-  await expect(admin).toHaveURL(mode === 'enforced' ? /status=required/ : /status=unavailable/);
+  await expect(admin).toHaveURL(new RegExp('/settings/users/' + ownerId + '$'));
+  await expect(removal.getByRole('checkbox')).toBeChecked();
+  const inline = admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  if (mode === 'enforced') await expect(inline).toBeVisible();
+  else await expect(removal.getByRole('status')).toContainText('non disponibile');
   expect((await db.user.findUniqueOrThrow({ where: { id: ownerId } })).deletedAt).toBeNull();
   await replay(other, captured);
   expect((await db.user.findUniqueOrThrow({ where: { id: ownerId } })).deletedAt).toBeNull();
@@ -152,10 +156,9 @@ test('removal requires admin step-up and preserves work, archive and immediate r
     expect(await db.auditLog.count({ where: { entityId: ownerId, event: 'user_removed' } })).toBe(0);
     await adminContext.close(); await ownerContext.close(); await otherContext.close(); return;
   }
-  await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
-  await expect(admin).toHaveURL(/status=active/);
-  await admin.goto('/settings/users/' + ownerId);
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
   await expect(removal).toHaveAttribute('data-interactive-ready', 'true');
   await removal.getByRole('checkbox').check();
   await removal.getByRole('button', { name: 'Rimuovi account' }).click();

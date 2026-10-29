@@ -181,24 +181,16 @@ test('N03 login throttle is explicit, bounded, and stores only a keyed digest', 
   assert.throws(() => loginThrottleRuntime('any@example.test', { LOGIN_THROTTLE_MODE: 'invalid' }));
 });
 
-test('N03 protects every privileged user mutation behind AuthZ and step-up', () => {
+test('N03 protects user commands behind current Admin authorization and enforced step-up', () => {
   const source = readFileSync('src/lib/user-actions.ts', 'utf8');
-  const actions = [
-    ['createInternalUser', 'USER_CREATE'],
-    ['activateInternalUser', 'USER_ACTIVATE'],
-    ['updateInternalUserRole', 'USER_ROLE_UPDATE'],
-    ['deactivateInternalUser', 'USER_DEACTIVATE'],
-    ['updateUserPermissionOverrides', 'USER_PERMISSION_OVERRIDE_UPDATE'],
-    ['resetUserPermissionOverrides', 'USER_PERMISSION_OVERRIDE_RESET'],
-  ] as const;
-  for (const [action, code] of actions) {
-    const body = source.slice(source.indexOf(`export async function ${action}`));
-    assert.match(body.slice(0, body.indexOf('\n}')), /requirePermission\('user\.write'\)/);
-    assert.match(body.slice(0, body.indexOf('\n}')), new RegExp(`requirePrivilegedMutation\\(s, '${code}'\\)`));
-  }
-  const service = readFileSync('src/lib/user-privilege-service.ts', 'utf8');
-  assert.match(service, /requireAdminActor/);
-  assert.match(service, /actorUser\.role !== 'admin'/);
+  for (const code of ['USER_CREATE', 'USER_ACTIVATE', 'USER_ROLE_UPDATE', 'USER_DEACTIVATE',
+    'USER_PERMISSION_OVERRIDE_UPDATE', 'USER_PERMISSION_OVERRIDE_RESET']) assert(source.includes(code));
+  assert.match(source, /requireEnforcedPrivilegedMutation\(session, codes\[operation\], \{ inline: true \}\)/);
+  assert.match(source, /executeAdminUserCommand/);
+  const service = readFileSync('src/lib/admin-user-commands.ts', 'utf8');
+  assert.match(service, /current\.actor\.role !== 'admin'/);
+  assert.match(service, /recordUpdatePermission\(current\.actor, 'user.write'\)/);
+  assert.match(service, /await current\.finish\(\)/);
 });
 
 test('N03 inventories AI control-plane decisions while preserving emergency stop availability', () => {

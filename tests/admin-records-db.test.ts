@@ -7,6 +7,8 @@ import { previewSelectiveAccess, confirmSelectiveAccess } from '../src/lib/selec
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
 import { restoreRemovedAccount } from '../src/lib/user-account-service';
+import { executeAdminUserCommand, reconcileAdminUserCommand } from '../src/lib/admin-user-commands';
+import { adminUserVersion } from '../src/lib/admin-user-command-contract';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt,
   type AdminRecordCommand } from '../src/lib/admin-records';
 
@@ -32,6 +34,48 @@ async function command(model: string, id: string, patch: Record<string, string> 
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+
+test('account creation records one receipt, replays a lost response and never persists a password in the journal', options, async () => {
+  const input = { commandId: randomUUID(), operation: 'CREATE', userId: randomUUID(), expectedVersion: adminUserVersion(null) };
+  const values = { name: 'Nuovo account sintetico', email: `${randomUUID()}@example.test`, password: 'synthetic-create-password-0000', role: 'consulente', active: false };
+  await executeAdminUserCommand(db, admin.session, input, values, proof());
+  await executeAdminUserCommand(db, admin.session, input, values, proof());
+  assert.equal(await db.user.count({ where: { id: input.userId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: input.userId, event: 'user_create' } }), 1);
+  assert.equal((await reconcileAdminUserCommand(db, admin.session, input))?.userId, input.userId);
+  const row = await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: input.commandId } });
+  const serialized = JSON.stringify(row, (_name, value) => typeof value === 'bigint' ? value.toString() : value);
+  for (const sensitive of [values.password, values.email, values.name, (await db.user.findUniqueOrThrow({ where: { id: input.userId } })).passwordHash]) assert(!serialized.includes(sensitive));
+});
+
+test('account role and permission commands reject stale changes, non-Admin actors and forbidden financial overrides', options, async () => {
+  const target = await syntheticPerson(db, 'Account con ruolo sintetico', 'consulente');
+  const before = await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } });
+  const input = { commandId: randomUUID(), operation: 'ROLE', userId: target.user.id, expectedVersion: adminUserVersion(before) };
+  await assert.rejects(executeAdminUserCommand(db, target.session, input, { role: 'admin' }, proof(target)));
+  await executeAdminUserCommand(db, admin.session, input, { role: 'commerciale' }, proof());
+  await assert.rejects(executeAdminUserCommand(db, admin.session, { ...input, commandId: randomUUID() }, { role: 'consulente' }, proof()), /STALE/);
+  const changed = await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } });
+  await assert.rejects(executeAdminUserCommand(db, admin.session, { ...input, operation: 'OVERRIDES', commandId: randomUUID(), expectedVersion: adminUserVersion(changed) },
+    { overrides: [{ permission: 'payment.read', value: 'allow' }] }, proof()), /DENIED/);
+  assert.equal(await db.userPermissionOverride.count({ where: { userId: target.user.id } }), 0);
+});
+
+test('account commands preserve expired drafts, protect self deactivation and close missing requests against late writes', options, async () => {
+  const target = await syntheticPerson(db, 'Account da disattivare', 'consulente');
+  const before = await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } });
+  const input = { commandId: randomUUID(), operation: 'DEACTIVATE', userId: target.user.id, expectedVersion: adminUserVersion(before) };
+  await assert.rejects(executeAdminUserCommand(db, admin.session, input, {}, proof(admin, 1801)));
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).active, true);
+  await executeAdminUserCommand(db, admin.session, input, {}, proof());
+  assert((await db.internalSession.findUniqueOrThrow({ where: { id: target.session.sessionId } })).revokedAt);
+  const own = await db.user.findUniqueOrThrow({ where: { id: admin.user.id }, include: { permissionOverrides: true } });
+  await assert.rejects(executeAdminUserCommand(db, admin.session, { ...input, commandId: randomUUID(), userId: admin.user.id, expectedVersion: adminUserVersion(own) }, {}, proof()), /DENIED/);
+  const closed = { ...input, commandId: randomUUID(), operation: 'ACTIVATE' };
+  assert((await reconcileAdminUserCommand(db, admin.session, closed, true))?.closed);
+  await assert.rejects(executeAdminUserCommand(db, admin.session, closed, {}, proof()), /CLOSED/);
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).active, false);
+});
 
 test('removed account restoration preserves identity, role and references while keeping access and sessions disabled', options, async () => {
   const target = await syntheticPerson(db, 'Identità sintetica da ripristinare', 'consulente');

@@ -51,7 +51,7 @@ async function loadMutableUser(tx: Tx, id: string) {
   return user;
 }
 
-export async function createInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, data: { email: string; name: string; role: RoleCode; active: boolean; passwordHash: string }) {
+export async function createInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, data: { id?: string; email: string; name: string; role: RoleCode; active: boolean; passwordHash: string }) {
   const actorUser = await requireAdminActor(tx, actor, actor.userId, 'user_create', { role: data.role, active: data.active, email: data.email });
   if (!actorUser) return denied('Solo un amministratore reale può creare utenti interni.');
   const user = await tx.user.create({ data });
