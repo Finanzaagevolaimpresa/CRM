@@ -109,12 +109,17 @@ test('an appended version invalidates a prior selected snapshot and never change
   assert.equal(current.paths.get(f.version.id), f.version.storagePath);
 });
 test('archived and private documents cannot acquire a new version from an ordinary stale form', async () => {
-  for (const data of [{ status: 'archiviato' as const }, { visibilityLevel: 'technical_private' }]) {
+  for (const data of [{ status: 'archiviato' as const }, { visibilityLevel: 'riservato' }]) {
     const f = await fixture(), c = await command(f); await db.document.update({ where: { id: f.document.id }, data });
     const beforeState = await footprint(f.document.id);
     await assert.rejects(appendDocumentVersion(db, f.actor, c, file()), denies);
     assert.deepEqual(await footprint(f.document.id), beforeState);
   }
+  // A technical acquisition cannot be fabricated by relabelling an ordinary row.
+  // The actual reviewed acquisition flow is exercised in its own native suite.
+  const f = await fixture(), beforeState = await footprint(f.document.id);
+  await assert.rejects(db.document.update({ where: { id: f.document.id }, data: { visibilityLevel: 'technical_admin_private_v1' } }), /TECHNICAL_CANONICAL_RETAINED/);
+  assert.deepEqual(await footprint(f.document.id), beforeState);
 });
 
 test('bounded version history paginates without losing the current revision or duplicating entries', async () => {

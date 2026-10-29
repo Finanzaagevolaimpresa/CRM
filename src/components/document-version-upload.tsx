@@ -50,10 +50,10 @@ export function DocumentVersionUpload({ documentId, expectedHash, fileName, mime
   return <section aria-label="Nuova versione documentale" data-document-version-ready={ready} className="space-y-3">
     <p>Il nuovo contenuto manterrà il nome <strong>{fileName}</strong>, il formato {mimeType}, la categoria e i collegamenti attuali. Le versioni precedenti restano nello storico.</p>
     <p>Le condivisioni selettive richiedono una nuova verifica dell’Admin. La nuova versione non viene concessa automaticamente. I documenti vincolati a contratti, pagamenti o acquisizioni seguono il rispettivo percorso.</p>
-    <form action={submit} className="grid gap-3">
-      <fieldset disabled={!ready || busy || !!pending || !!result?.ok} className="grid gap-3">
-        <label>File della nuova versione<input name="file" type="file" required accept={`.${fileName.split('.').at(-1)}`} className="block max-w-full rounded-xl border p-3" /></label>
-        <label className="flex gap-2"><input type="checkbox" name="confirm" required />Confermo il nuovo contenuto e la conservazione delle versioni precedenti.</label>
+    <form action={submit} className="grid min-w-0 gap-3">
+      <fieldset disabled={!ready || busy || !!pending || !!result?.ok} className="grid min-w-0 gap-3">
+        <label className="min-w-0">File della nuova versione<input name="file" type="file" required accept={`.${fileName.split('.').at(-1)}`} className="block min-w-0 w-full max-w-full rounded-xl border p-3" /></label>
+        <label className="flex min-w-0 gap-2"><input type="checkbox" name="confirm" required />Confermo il nuovo contenuto e la conservazione delle versioni precedenti.</label>
         <button className="rounded-xl bg-fai-blue px-4 py-3 font-bold text-white disabled:opacity-50" type="submit">Salva nuova versione</button>
       </fieldset>
     </form>
