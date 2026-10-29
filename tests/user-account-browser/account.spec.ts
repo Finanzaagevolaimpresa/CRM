@@ -66,6 +66,8 @@ test('admin account management, own profile/password, direct denials, revocation
   await admin.locator('form').filter({ has: admin.getByRole('button', { name: 'Crea utente', exact: true }) }).locator('select[name="role"]').selectOption('consulente');
   await admin.getByPlaceholder('Password temporanea').fill(password);
   await admin.getByRole('button', { name: 'Crea utente', exact: true }).click();
+  await expect(admin.getByText('Operazione account registrata. Riapri la scheda per verificare lo stato corrente.', { exact: true })).toBeVisible();
+  await admin.goto('/settings/users');
   await expect(admin.getByRole('cell', { name: operatorEmail, exact: true })).toBeVisible();
   const operatorUser = await db.user.findUniqueOrThrow({ where: { email: operatorEmail } });
   const adminUser = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });

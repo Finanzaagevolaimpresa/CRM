@@ -151,12 +151,12 @@ test('M4 readiness direct URLs and draft submissions follow the current originat
   await ap.goto(`/communications?kind=TECHNICAL&practice=${own.id}`); await fill(draft(ap));
   for (const [name, value] of Object.entries({ contextKind: 'READINESS', contextId: r.practice.id, messageId: message.id, expectedRevision: '1' }))
     await draft(ap).locator(`input[name="${name}"]`).evaluate((node: HTMLInputElement, next: string) => { node.value = next; }, value);
-  await submit(ap, draft(ap).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(ap).toHaveURL(/result=DENIED/);
+  await submit(ap, draft(ap).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(ap.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await footprint()).toEqual(before);
   // B's already rendered form loses authority as soon as the lead changes hands.
   await fill(draft(bp));
   await db.lead.update({ where: { id: r.lead.id }, data: { assignedToId: a.id } });
-  await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(bp).toHaveURL(/result=DENIED/);
+  await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(bp.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await footprint()).toEqual(before);
   const revoked = await bp.goto(target), revokedHtml = await revoked!.text();
   for (const marker of [subject, body, recipient, message.id]) expect(revokedHtml).not.toContain(marker);

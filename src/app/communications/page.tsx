@@ -15,7 +15,7 @@ import { CommunicationFiles } from '@/components/communication-files';
 import { PreservedWorkflowForm } from '@/components/preserved-workflow-form';
 import { hasPermission } from '@/lib/permission-evaluator';
 import { InternalCommunicationEditor } from '@/components/internal-communication-editor';
-import { listInternalCommunications, readCommunicationDirectory } from '@/lib/internal-communications';
+import { listInternalCommunications, listArchivedInternalCommunications, readCommunicationDirectory } from '@/lib/internal-communications';
 import { sanitizeFileName } from '@/lib/storage';
 import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server-candidate';
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
@@ -78,19 +78,25 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { da
   </PreservedWorkflowForm>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
   if (!context.success) {
     if (query.kind || query.practice || query.update || query.request || query.focus) notFound();
-    const threads = hasPermission(session,'communications.internal.read') ? await listInternalCommunications(prisma, session) : [];
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
+    const archived = query.archived === '1';
+    if (query.archived && (!archived || !authority)) notFound();
+    const threads = hasPermission(session,'communications.internal.read') ? archived
+      ? await listArchivedInternalCommunications(prisma, session) : await listInternalCommunications(prisma, session) : [];
     const directory = authority ? await readCommunicationDirectory(prisma, session) : [];
     return <div className="min-w-0 crm-space-y-5 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni" description="Scrivi dal lead, dal cliente o dalla pratica. Le conversazioni interne restano riservate ai partecipanti confermati." />
       <nav className="flex flex-wrap gap-4"><Link className="font-bold underline" href="/leads">Lead</Link><Link className="font-bold underline" href="/clients">Clienti</Link><Link className="font-bold underline" href="/practice-readiness">Pratiche da avviare</Link><Link className="font-bold underline" href="/technical-office/practices">Pratiche tecniche</Link></nav>
       {authority ? <Link className="font-bold underline" href="/communications/updates">Bozze da aggiornamenti</Link> : null}
-      {authority ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
-      <Card title="Conversazioni interne a cui partecipi"><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}><Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link></li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
+      {authority && <Link className="font-bold underline" href={archived ? '/communications' : '/communications?archived=1'}>{archived ? 'Conversazioni operative' : 'Archivio delle tue conversazioni'}</Link>}
+      {authority && !archived ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
+      <Card title={archived ? 'Conversazioni archiviate' : 'Conversazioni interne a cui partecipi'}><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}>{archived
+        ? <details className="rounded-xl border p-3"><summary className="font-semibold">{thread.title} · prepara il ripristino</summary><InternalCommunicationEditor id={thread.id} version={thread.version} title={thread.title} people={directory} stepUpActive={authority?.stepUpActive ?? false} restore /></details>
+        : <Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link>}</li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
       {session.role === 'admin' ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     </div>;
   }

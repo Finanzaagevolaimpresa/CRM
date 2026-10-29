@@ -3,13 +3,13 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
-import { previewInternalCommunicationAction, confirmInternalCommunicationAction } from '@/lib/internal-communication-actions';
+import { previewInternalCommunicationAction, confirmInternalCommunicationAction, archiveInternalCommunicationAction } from '@/lib/internal-communication-actions';
 import { communicationRecipientGroups } from '@/lib/communication-recipient-groups';
 
 type Person = { id: string; name: string; email: string; role: string };
 type Preview = Extract<Awaited<ReturnType<typeof previewInternalCommunicationAction>>, { status: 'PREVIEW' }>['preview'];
-export function InternalCommunicationEditor({ id: initialId, version: initialVersion = 0, title = '', selectedIds = [], people, stepUpActive }:
-  { id: string; version?: number; title?: string; selectedIds?: string[]; people: Person[]; stepUpActive: boolean }) {
+export function InternalCommunicationEditor({ id: initialId, version: initialVersion = 0, title = '', selectedIds = [], people, stepUpActive, restore = false }:
+  { id: string; version?: number; title?: string; selectedIds?: string[]; people: Person[]; stepUpActive: boolean; restore?: boolean }) {
   const router = useRouter(), pending = useRef(false), [id] = useState(initialId), [version] = useState(initialVersion);
   const [needsStepUp, setNeedsStepUp] = useState(!stepUpActive);
   const [preview, setPreview] = useState<Preview | null>(null), [busy, setBusy] = useState(false), [uncertain, setUncertain] = useState(false);
@@ -18,7 +18,7 @@ export function InternalCommunicationEditor({ id: initialId, version: initialVer
     if (pending.current || uncertain) return;
     pending.current = true; setBusy(true); setPreview(null); setError('');
     try {
-      const result = await previewInternalCommunicationAction({ id, expectedVersion: version, title: String(form.get('title') ?? ''),
+      const result = await previewInternalCommunicationAction({ id, expectedVersion: version, restore, title: String(form.get('title') ?? ''),
         selection: { userIds: form.getAll('participant').map(String), groups: form.getAll('group').map(String) } });
       if (result.status === 'PREVIEW') setPreview(result.preview);
       else setError('Persone o permessi sono cambiati. Aggiorna la pagina e verifica la selezione.');
@@ -37,6 +37,7 @@ export function InternalCommunicationEditor({ id: initialId, version: initialVer
     finally { pending.current = false; setBusy(false); }
   }
   return <section className="grid gap-3">
+    {restore && <p>Ripristino della conversazione archiviata: scegli di nuovo i partecipanti. Nessun accesso precedente viene riattivato automaticamente.</p>}
     <form action={prepare} onReset={event => event.preventDefault()} onChange={() => setPreview(null)} className="grid gap-3">
       <fieldset disabled={busy || uncertain} className="grid min-w-0 gap-3">
       <label>Titolo della comunicazione interna<input className="w-full rounded-xl border p-2" name="title" required maxLength={200} defaultValue={title} /></label>
@@ -61,5 +62,21 @@ export function InternalCommunicationEditor({ id: initialId, version: initialVer
     {error ? <p role="status">{error}</p> : null}
     {needsStepUp && <InlinePrivilegedConfirmation />}
     {uncertain && <a className="font-semibold underline" href={`/communications?kind=INTERNAL&practice=${id}`}>Apri la conversazione e verifica l’esito</a>}
+    {version > 0 && !restore && <details className="rounded-xl border p-3"><summary className="font-semibold">Archivia la conversazione</summary>
+      <form className="grid gap-3" onReset={event => event.preventDefault()} onSubmit={async event => {
+        event.preventDefault(); if (pending.current || uncertain) return;
+        const form = new FormData(event.currentTarget); pending.current = true; setBusy(true); setError('');
+        try {
+          const result = await archiveInternalCommunicationAction({ id, expectedVersion: version, confirmed: form.get('confirmed') === 'on', reason: form.get('reason') });
+          if (result.status === 'RECORDED') { router.push('/communications?archived=1'); router.refresh(); }
+          else if (result.status === 'STEP_UP_REQUIRED') { setNeedsStepUp(true); setError(result.message); }
+          else { setUncertain(true); setError('Esito da verificare nell’archivio prima di ripetere.'); }
+        } catch { setUncertain(true); setError('Risposta interrotta: verifica l’archivio prima di ripetere.'); }
+        finally { pending.current = false; setBusy(false); }
+      }}><p>Conserva messaggi e file e blocca l’accesso dei partecipanti. Al ripristino sceglierai di nuovo le persone autorizzate.</p>
+        <label>Motivazione dell’archiviazione<textarea name="reason" required minLength={3} maxLength={2000} className="block w-full rounded-xl border p-2" /></label>
+        <label><input type="checkbox" name="confirmed" required />Confermo l’archiviazione e la sospensione degli accessi.</label>
+        <button disabled={busy || uncertain} className="rounded-xl border p-2 font-semibold">Archivia conversazione</button>
+      </form><a className="underline" href="/communications?archived=1">Verifica l’archivio delle conversazioni</a></details>}
   </section>;
 }

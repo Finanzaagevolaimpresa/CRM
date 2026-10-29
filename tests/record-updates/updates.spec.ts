@@ -324,7 +324,8 @@ test('native email proposals for lead/client/practice are explicit unapproved dr
     const edit = page.locator('form[data-message-draft="' + saved.id + '"]');
     await edit.getByLabel('Testo esatto', { exact: true }).fill('Testo personale sintetico da approvare');
     await edit.getByRole('button', { name: 'Salva nuova versione da approvare', exact: true }).click();
-    await expect(page.getByRole('status')).toContainText('Operazione registrata');
+    await expect(page).toHaveURL(/result=RECORDED/);
+    await expect(page.getByText('Operazione registrata.', { exact: true })).toBeVisible();
     expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: saved.id } })).currentRevision).toBe(2);
   }
   await ac.close(); await oc.close();

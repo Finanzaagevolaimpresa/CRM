@@ -118,7 +118,7 @@ test('native received reply becomes a separately approved draft with current sco
   await form.locator('select[name="mailboxId"]').selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
   await form.getByRole('region',{name:'Destinatari A',exact:true}).getByLabel('Indirizzi esterni · separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
   await form.getByLabel('Oggetto',{exact:true}).fill('Stale conflict'); await form.getByLabel('Testo esatto',{exact:true}).fill('STALE FORM MUST FAIL');
-  await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page).toHaveURL(/result=DENIED/);
+  await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await db.approvedCommunication.count({where:{technicalPracticeId:f.practice.id}})).toBe(2);
   await page.goto(sourceUrl); await expect(form).toHaveCount(0); expect(await page.locator('body').textContent()).not.toContain(f.message.body);
   expect((await page.request.post(attachmentUrl,{headers:{origin},form:attachmentData})).status()).toBe(404);

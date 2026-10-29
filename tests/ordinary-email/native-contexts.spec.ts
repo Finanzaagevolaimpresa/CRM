@@ -95,6 +95,22 @@ test('native lead, standalone client and internal composition preserve context, 
   const review=page.locator('[data-ordinary-ready]').filter({has:page.locator('form[data-message-draft="'+internalMessage+'"]')});
   await review.getByRole('button',{name:'Anteprima email ordinaria'}).click();await expect(review).toContainText('non più disponibili');
 
+  await page.goto(target);await page.locator('summary').filter({hasText:'Gestisci partecipanti della conversazione interna'}).click();
+  await page.locator('summary').filter({hasText:'Archivia la conversazione'}).click();
+  await page.getByLabel('Motivazione dell’archiviazione',{exact:true}).fill('Archivio sintetico con storico conservato');
+  await page.getByLabel('Confermo l’archiviazione e la sospensione degli accessi.',{exact:true}).check();
+  await page.getByRole('button',{name:'Archivia conversazione',exact:true}).click();await expect(page).toHaveURL(/archived=1/);
+  expect((await participant.request.get(target)).status()).toBe(404);
+  expect(await db.internalCommunicationParticipant.count({where:{threadId,active:true}})).toBe(0);
+  expect(await db.approvedCommunication.count({where:{id:internalMessage}})).toBe(1);
+  await page.locator('summary').filter({hasText:'Native private conversation · prepara il ripristino'}).click();
+  await expect(page.locator('input[name="participant"][value="'+member.id+'"]')).not.toBeChecked();
+  await page.getByRole('button',{name:'Mostra riepilogo partecipanti',exact:true}).click();
+  await page.getByLabel('Confermo queste persone e l’accesso indicato.').check();await page.getByRole('button',{name:'Conferma partecipanti',exact:true}).click();
+  await expect(page).toHaveURL(/kind=INTERNAL&practice=/);
+  expect(await db.internalCommunicationParticipant.count({where:{threadId,active:true}})).toBe(1);
+  expect((await participant.request.get(target)).status()).toBe(404);
+
   await page.goto('/communications');await page.getByLabel('Titolo della comunicazione interna').fill('Native lost response conversation');
   await page.locator('input[name="participant"][value="'+member.id+'"]').check();await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();
   let posts=0,captured:{body:string;headers:Record<string,string>}|undefined;

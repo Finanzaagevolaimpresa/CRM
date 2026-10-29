@@ -8,7 +8,7 @@ import { prisma } from './prisma';
 import { assertOrdinaryEmailRequestOrigin } from './ordinary-email-request-contract';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { PrivilegedAdmissionRequired, privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
-import { previewInternalCommunication, confirmInternalCommunication } from './internal-communications';
+import { previewInternalCommunication, confirmInternalCommunication, archiveInternalCommunication } from './internal-communications';
 
 async function admission(confirm: boolean) {
   const session = await requireSession(), h = await headers();
@@ -38,5 +38,17 @@ export async function confirmInternalCommunicationAction(raw: unknown, evidenceH
     unstable_rethrow(error);
     // Includes a lost commit response. Reload the conversation before any retry.
     return { status: 'CHECK_CURRENT' as const };
+  }
+}
+
+export async function archiveInternalCommunicationAction(raw: unknown) {
+  try {
+    const a = await admission(true);
+    await archiveInternalCommunication(prisma, a.session, raw, a.credentials);
+    revalidatePath('/communications');
+    return { status: 'RECORDED' as const };
+  } catch (error) {
+    if (error instanceof PrivilegedAdmissionRequired) return { status: 'STEP_UP_REQUIRED' as const, message: error.formState.message };
+    unstable_rethrow(error); return { status: 'CHECK_CURRENT' as const };
   }
 }

@@ -56,6 +56,7 @@ export async function mutateApprovedMessageAction(form: FormData): Promise<Workf
     errorCode = error.code;
   }
   if (errorCode) return { ok: false, message: errorCode === 'CONFLICT' ? 'La versione è cambiata o l’operazione risulta già conclusa. Conserva questa bozza e confronta il messaggio registrato.'
+    : errorCode === 'DENIED' ? 'Accesso o contesto non più valido. La bozza è conservata; verifica i permessi prima di proseguire.'
     : errorCode === 'SENDER_NOT_READY' ? 'Il mittente non è qualificato per questa operazione. La bozza è conservata.' : 'Controlla campi, contesto, destinatari e permessi. La bozza è conservata.' };
   revalidatePath('/communications');
   return { ok: true, message: 'Operazione registrata.', href: `${target}&result=RECORDED&focus=${encodeURIComponent(value(form, 'messageId'))}` };

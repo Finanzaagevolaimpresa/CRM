@@ -16,7 +16,7 @@ type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
 export type InternalCommunicationCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken?: string };
 const inputSchema = z.object({ id: z.string().uuid(), expectedVersion: z.number().int().min(0),
-  title: z.string().trim().min(1).max(200), selection: communicationRecipientSelectionSchema.shape.to }).strict();
+  title: z.string().trim().min(1).max(200), selection: communicationRecipientSelectionSchema.shape.to, restore: z.boolean().default(false) }).strict();
 function deny(): never { throw new ApprovedCommunicationError('DENIED'); }
 function conflict(): never { throw new ApprovedCommunicationError('CONFLICT'); }
 async function clock(tx: Tx) { return (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0].now; }
@@ -59,14 +59,15 @@ async function proposed(tx: Tx, claimed: AuthSession, raw: unknown, credentials:
   const input = inputSchema.parse(raw), admitted = await personal(tx, claimed, credentials, write);
   await tx.$queryRaw`SELECT "id" FROM "InternalCommunicationThread" WHERE "id"=${input.id}::uuid FOR UPDATE`;
   const existing = await tx.internalCommunicationThread.findUnique({ where: { id: input.id } });
-  if (input.expectedVersion === 0 ? existing !== null : !existing || existing.deletedAt
+  if (input.expectedVersion === 0 ? existing !== null || input.restore : !existing || Boolean(existing.deletedAt) !== input.restore
     || existing.ownerUserId !== admitted.actor.userId || existing.version !== input.expectedVersion) conflict();
   if (existing) {
     const owner = await tx.internalCommunicationParticipant.findUnique({ where: { threadId_userId: { threadId: input.id, userId: admitted.actor.userId } } });
-    if (!owner?.active) deny();
+    if (!owner || (!input.restore && !owner.active)) deny();
   }
   const directory = await tx.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, deletedAt: true }, orderBy: { id: 'asc' } });
-  const selected = resolveCommunicationRecipients({ ...emptyCommunicationRecipientSelection(), to: input.selection }, directory, { to: [], cc: [], bcc: [] });
+  const selected = resolveCommunicationRecipients({ ...emptyCommunicationRecipientSelection(),
+    to: { ...input.selection, userIds: [...new Set([admitted.actor.userId, ...input.selection.userIds])] } }, directory, { to: [], cc: [], bcc: [] });
   const ids = [...new Set([admitted.actor.userId, ...selected.people.to.map(person => person.id)])].sort();
   const before = existing ? await tx.internalCommunicationParticipant.findMany({ where: { threadId: existing.id }, orderBy: { userId: 'asc' } }) : [];
   const evidenceHash = canonicalSha256({ input, ids, directoryHash: selected.evidenceHash,
@@ -95,7 +96,7 @@ export async function confirmInternalCommunication(db: Db, claimed: AuthSession,
     if (p.input.expectedVersion === 0) await tx.internalCommunicationThread.create({ data: { id: p.input.id,
       title: p.input.title, ownerUserId: p.admitted.actor.userId, version, createdAt: now, updatedAt: now } });
     else await tx.internalCommunicationThread.update({ where: { id: p.input.id, version: p.input.expectedVersion },
-      data: { title: p.input.title, version, updatedAt: now } });
+      data: { title: p.input.title, version, updatedAt: now, deletedAt: null } });
     for (const person of p.before) if (person.active && !p.ids.includes(person.userId))
       await tx.internalCommunicationParticipant.update({ where: { threadId_userId: { threadId: p.input.id, userId: person.userId } },
         data: { active: false, version: { increment: 1 }, updatedAt: now } });
@@ -107,9 +108,39 @@ export async function confirmInternalCommunication(db: Db, claimed: AuthSession,
     }
     await tx.auditLog.create({ data: { actorId: p.admitted.actor.userId, entityType: 'InternalCommunicationThread',
       entityId: p.input.id, event: 'internal_communication_participants_confirmed', after: { version,
-        participants: p.ids.length, evidenceHash, scope: 'INTERNAL_CONVERSATION_ONLY' } } });
+        participants: p.ids.length, evidenceHash, restored: p.input.restore, scope: 'INTERNAL_CONVERSATION_ONLY' } } });
     await p.admitted.finish();
     return { id: p.input.id, version };
+  }, { timeout: 30_000 });
+}
+
+export async function archiveInternalCommunication(db: Db, claimed: AuthSession, raw: unknown, credentials: InternalCommunicationCredentials) {
+  const input = z.object({ id: z.string().uuid(), expectedVersion: z.number().int().positive(), confirmed: z.literal(true), reason: z.string().trim().min(3).max(2000) }).strict().parse(raw);
+  return db.$transaction(async tx => {
+    const admitted = await personal(tx, claimed, credentials, true);
+    await tx.$queryRaw`SELECT "id" FROM "InternalCommunicationThread" WHERE "id"=${input.id}::uuid FOR UPDATE`;
+    const thread = await tx.internalCommunicationThread.findUnique({ where: { id: input.id } });
+    if (!thread || thread.deletedAt || thread.ownerUserId !== admitted.actor.userId || thread.version !== input.expectedVersion) conflict();
+    const participants = await tx.internalCommunicationParticipant.findMany({ where: { threadId: input.id }, orderBy: { userId: 'asc' } });
+    if (!participants.some(person => person.userId === admitted.actor.userId && person.active)) deny();
+    const now = await clock(tx), version = thread.version + 1;
+    await tx.internalCommunicationThread.update({ where: { id: input.id, version: thread.version }, data: { deletedAt: now, version, updatedAt: now } });
+    await tx.internalCommunicationParticipant.updateMany({ where: { threadId: input.id, active: true }, data: { active: false, version: { increment: 1 }, updatedAt: now } });
+    await tx.auditLog.create({ data: { actorId: admitted.actor.userId, entityType: 'InternalCommunicationThread', entityId: input.id,
+      event: 'internal_communication_archived', after: { version, reason: input.reason, previousParticipantsHash: canonicalSha256(participants.map(({ userId, active, version }) => ({ userId, active, version }))) } } });
+    await admitted.finish(); return { id: input.id, version };
+  }, { timeout: 30_000 });
+}
+
+export async function listArchivedInternalCommunications(db: Db, claimed: AuthSession) {
+  return db.$transaction(async tx => {
+    const actor = await reader(tx, claimed);
+    const authority = await tx.ordinaryEmailAuthority.findUnique({ where: { id: 'ordinary-email' } });
+    if (actor.role !== 'admin' || !authority?.enabled || authority.userId !== actor.userId) deny();
+    const rows = await tx.internalCommunicationThread.findMany({ where: { ownerUserId: actor.userId, deletedAt: { not: null } }, orderBy: { updatedAt: 'desc' },
+      take: 100, select: { id: true, title: true, version: true, updatedAt: true } });
+    if (actor.expiresAt <= await clock(tx)) deny();
+    return rows;
   }, { timeout: 30_000 });
 }
 
