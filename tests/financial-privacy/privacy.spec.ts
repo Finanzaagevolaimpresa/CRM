@@ -11,6 +11,9 @@ async function documentContextScreens(page: Page, name: string) {
   for (const [suffix, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
     await page.setViewportSize({ width, height });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    expect(await page.locator('form input:not([type=hidden]), form select, form button').evaluateAll(nodes => nodes.every(node => {
+      const r = node.getBoundingClientRect(); return !r.width || (r.left >= 0 && r.right <= innerWidth + 1);
+    }))).toBe(true);
     await page.screenshot({ path: join(root, `${name}-${suffix}.png`), fullPage: true, caret: 'initial' });
   }
 }

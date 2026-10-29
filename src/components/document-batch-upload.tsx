@@ -36,12 +36,12 @@ export function DocumentBatchUpload({ children, className, submitLabel = 'Carica
       if (allSucceeded) router.refresh();
     }
   }
-  return <form action={submit} className={className}>
+  return <form action={submit} className={`min-w-0 ${className ?? ''} [&_input:not([type=checkbox])]:min-w-0 [&_input:not([type=checkbox])]:w-full [&_select]:min-w-0 [&_select]:w-full [&_label]:min-w-0 [&_p]:min-w-0 [&_button]:min-w-0`}>
     <InteractiveReadyMarker />
     <fieldset disabled={busy} className="contents">
       {children}
-      <label className="grid gap-1 text-sm font-bold">Documenti da caricare
-        <input type="file" name="file" multiple required accept={documentUploadExtensions.join(',')} className="rounded-xl border p-3" onChange={event => {
+      <label className="grid min-w-0 gap-1 text-sm font-bold">Documenti da caricare
+        <input type="file" name="file" multiple required accept={documentUploadExtensions.join(',')} className="min-w-0 max-w-full rounded-xl border p-3" onChange={event => {
           setFiles(Array.from(event.target.files ?? [])); setResults({}); setAttempted(false); setError(null);
         }} />
       </label>

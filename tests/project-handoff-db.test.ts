@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { before, after } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson, syntheticSession } from './selective-sharing/fixtures';
 import { revokeInternalSession } from '../src/lib/internal-session-registry';
 import { withSerializableTransaction } from '../src/lib/serializable';
@@ -10,6 +10,7 @@ import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token
 import { readProjectHandoff, previewProjectHandoff, confirmProjectHandoff, readProjectHandoffReceipt } from '../src/lib/project-handoff';
 import { assertPracticeCreationSlot } from '../src/lib/practice-creation-slot';
 import { handoffProof, type ProjectHandoffInput } from '../src/lib/project-handoff-contract';
+import { createRegistrySessionToken, digestRegistrySessionToken } from '../src/lib/session';
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1' && process.env.PROJECT_HANDOFF_DB_TESTS === '1';
 const options = { skip: !enabled };
 const key = { version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), secret: process.env.PRIVILEGED_STEP_UP_SECRET! };
@@ -35,6 +36,39 @@ async function fixture() {
 const projected = (p: Awaited<ReturnType<typeof previewProjectHandoff>>) => ({ digest: p.digest, expiresAt: p.expiresAt, proof: p.proof });
 async function prepare(f: Awaited<ReturnType<typeof fixture>>) { return projected(await previewProjectHandoff(db, admin.session, f.input, key)); }
 async function noPractice(id: string) { assert.equal(await db.technicalPractice.count({ where: { projectId: id } }), 0); }
+async function exactSyntheticSession(id: string) {
+  const token = createRegistrySessionToken();
+  const row = await db.internalSession.create({ data: { id, userId: admin.user.id,
+    tokenDigest: Buffer.from(await digestRegistrySessionToken(token.bytes)), expiresAt: new Date(Date.now() + 3600_000) } });
+  return { ...admin, token: token.token, session: { ...admin.session, sessionId: row.id, expiresAt: Math.floor(row.expiresAt.getTime() / 1000) } };
+}
+
+test('receipt remains exact when a session UUID resembles a telephone number to the privacy filter', options, async () => {
+  const person = await exactSyntheticSession('03012345-1234-4123-8123-123456789012');
+  const [probe] = await db.$queryRaw<Array<{ value: string }>>`SELECT audit_redact_text_n04_v1(${person.session.sessionId!}) AS value`;
+  assert.notEqual(probe.value, person.session.sessionId);
+  const f = await fixture(), preview = projected(await previewProjectHandoff(db, person.session, f.input, key));
+  const saved = await confirmProjectHandoff(db, person.session, f.input, preview, proof(person));
+  assert.deepEqual(await readProjectHandoffReceipt(db, person.session, f.project.id, f.input.commandId), saved);
+  assert.deepEqual(await confirmProjectHandoff(db, person.session, f.input, preview, proof(person)), saved);
+  const audit = await db.auditLog.findUniqueOrThrow({ where: { id: f.input.commandId } });
+  assert.equal((audit.after as { version: number }).version, 2);
+  assert.doesNotMatch(JSON.stringify(audit.after), /REDACTED|03012345|sessionId/);
+  assert.equal(await db.technicalPractice.count({ where: { projectId: f.project.id } }), 1);
+});
+
+test('historical unaltered V1 receipts retain their original-session lookup', options, async () => {
+  const person = await exactSyntheticSession('abcdefab-abcd-4abc-abcd-abcdefabcdef');
+  const f = await fixture(), preview = projected(await previewProjectHandoff(db, person.session, f.input, key));
+  const saved = await confirmProjectHandoff(db, person.session, f.input, preview, proof(person));
+  const current = (await db.auditLog.findUniqueOrThrow({ where: { id: f.input.commandId } })).after as Record<string, Prisma.JsonValue>;
+  const rest = Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'sessionHash'));
+  const id = randomUUID();
+  await db.auditLog.create({ data: { id, actorId: person.user.id, event: 'project_practice_prepared', entityType: 'Project', entityId: f.project.id,
+    after: { ...rest, type: 'PROJECT_PRACTICE_PREPARATION_V1', version: 1, sessionId: person.session.sessionId! } } });
+  assert.deepEqual(await readProjectHandoffReceipt(db, person.session, f.project.id, id), saved);
+  await assert.rejects(readProjectHandoffReceipt(db, admin.session, f.project.id, id));
+});
 
 test('canonical preview is read-only; preparation preserves owners and creates no grant, task, document or message', options, async () => {
   const f = await fixture(), before = await Promise.all([db.technicalAssignment.count(), db.task.count(), db.document.count(), db.approvedCommunication.count()]);

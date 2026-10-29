@@ -18,6 +18,12 @@ export const projectHandoffReceipt = z.object({
   sessionId: z.string().uuid(), clientId: id, projectId: id, technicalPracticeId: id,
   decisionId: id, fingerprint: hash,
 }).strict();
+// Keep historical V1 receipts readable; new receipts bind the original session
+// with a digest so random UUID segments cannot resemble phone data in the audit.
+export const projectHandoffReceiptV2 = projectHandoffReceipt.omit({ sessionId: true }).extend({
+  type: z.literal('PROJECT_PRACTICE_PREPARATION_V2'), version: z.literal(2), sessionHash: hash,
+}).strict();
+export const storedProjectHandoffReceipt = z.union([projectHandoffReceiptV2, projectHandoffReceipt]);
 export class ProjectHandoffError extends Error {
   constructor(readonly code: 'DENIED' | 'STALE' | 'EXISTS' | 'EXPIRED') { super(`PROJECT_HANDOFF_${code}`); }
 }
