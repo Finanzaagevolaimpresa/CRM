@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import { PreAnalysisForm } from '@/components/preanalysis-form';
 import { Card, PageHeader, StatusBadge, TimestampMeta } from '@/components/ui';
 import { hasPermission, requirePermission } from '@/lib/auth';
@@ -28,6 +29,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   return <div className="crm-space-y-6">
     <PageHeader title="Dettaglio pre-analisi" description="Bozza interna accessibile nel fascicolo autorizzato, con revisione umana obbligatoria." />
+    <AdminRecordShortcut session={session} model="PreAnalysis" id={id} />
     <div className="flex flex-wrap gap-3"><SecondaryLink href={`/clients/${pre.clientId}#pre-analisi`}>← Torna al fascicolo cliente</SecondaryLink><SecondaryLink href={`/projects/${pre.projectId}`}>Torna al progetto</SecondaryLink></div>
     <Card title="Dati"><p>Cliente: {client?.displayName ?? '—'}</p><p>Progetto: {project?.title ?? '—'}</p><p>Stato: <StatusBadge status={pre.status} /></p><TimestampMeta createdAt={pre.createdAt} updatedAt={pre.updatedAt} createdBy={reviewer?.name ?? pre.reviewedById} updatedBy={approver?.name ?? pre.approvedById} /></Card>
     {editable ? <Card title="Bozza interna modificabile"><PreAnalysisForm action={updateManualPreAnalysis} hidden={{ id: pre.id, version: pre.updatedAt.toISOString() }} values={pre} /></Card> : <Card title="Contenuto in sola lettura"><p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{manualDraft ? 'Puoi consultare questa bozza, ma il tuo profilo non è autorizzato a modificarla per il progetto.' : 'Questa pre-analisi non è una bozza manuale non revisionata e non può essere modificata in questo percorso.'}</p><h3 className="font-bold">Sintesi interna</h3><p data-preanalysis-field="internalSummary" className="whitespace-pre-wrap text-sm text-fai-gray">{pre.internalSummary ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Scenario A</h3><p className="whitespace-pre-wrap">{pre.scenarioA ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Scenario B</h3><p className="whitespace-pre-wrap">{pre.scenarioB ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Condizioni bloccanti</h3><p className="whitespace-pre-wrap">{pre.blockingConditions ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Documenti richiesti</h3><p className="whitespace-pre-wrap">{pre.requiredDocuments ?? 'Nessun dato presente'}</p></Card>}

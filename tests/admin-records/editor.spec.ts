@@ -25,13 +25,13 @@ test('creating an account keeps every choice through expiry and confirms one per
   await expect(form.getByPlaceholder('Password temporanea')).toHaveValue(password);
   await expect(form.locator('select[name="role"]')).toHaveValue('commerciale');
   await form.getByRole('button', { name: 'Crea utente', exact: true }).click();
-  await expect(form.locator('..').getByRole('status')).toContainText('Operazione account registrata.');
+  await expect(form.locator('..').locator(':scope > [role="status"]')).toContainText('Operazione account registrata.');
   expect(await db.user.count({ where: { email } })).toBe(1);
   await expect(page).toHaveURL(/#account-command=/);
   await page.reload(); await page.getByRole('button', { name: 'Verifica esito account', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
   await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
-  await expect(page.getByRole('form', { name: 'Modifica profilo', exact: true }).getByRole('textbox', { name: 'Email', exact: true })).toHaveValue(email);
+  await expect(page.getByRole('form', { name: 'Modifica profilo', exact: true }).getByRole('textbox', { name: 'Email di accesso', exact: true })).toHaveValue(email);
 });
 
 test('a lost role-change response reopens its receipt and never repeats the command', async ({ page }) => {

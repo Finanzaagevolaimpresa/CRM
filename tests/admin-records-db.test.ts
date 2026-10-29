@@ -95,7 +95,9 @@ test('removed account restoration preserves identity, role and references while 
 
 test('manual analysis and dossier creation starts new unapproved drafts without invented AI provenance', options, async () => {
   const f = await fixture(), preId = randomUUID(), dossierId = randomUUID(), clientDossierId = randomUUID();
-  await save(await command('PreAnalysis', preId, { clientId: f.client.id, projectId: f.project.id, internalSummary: 'Analisi manuale sintetica' }, 'CREATE'));
+  const preReceipt = await save(await command('PreAnalysis', preId, { clientId: f.client.id, projectId: f.project.id, internalSummary: 'Analisi manuale sintetica' }, 'CREATE'));
+  assert.equal(preReceipt.id, preId);
+  assert(await db.preAnalysis.findUnique({ where: { id: preId } }), 'Manual preanalysis must be persisted before its dossier can link it');
   await save(await command('Dossier', dossierId, { clientId: f.client.id, projectId: f.project.id, preAnalysisId: preId, title: 'Dossier manuale sintetico', type: 'nota_interna', markdownContent: 'Bozza sintetica', jsonContent: '{}' }, 'CREATE'));
   await save(await command('ClientDossier', clientDossierId, { clientId: f.client.id, projectId: f.project.id, title: 'Bozza cliente sintetica', content: 'Testo da revisionare' }, 'CREATE'));
   const pre = await db.preAnalysis.findUniqueOrThrow({ where: { id: preId } }), dossier = await db.dossier.findUniqueOrThrow({ where: { id: dossierId } });
@@ -116,6 +118,26 @@ test('contract archive and restoration preserve the signed proof and refuse fabr
   const unsigned = await db.contract.create({ data: { clientId: f.client.id, contractNumber: randomUUID(), serviceName: 'Bozza', serviceDescription: 'Non firmato', taxableAmount: 100, vatAmount: 22, totalAmount: 122 } });
   await assert.rejects(save(await command('Contract', unsigned.id, { status: 'firmato' })), /HISTORY/);
   assert.equal((await db.contract.findUniqueOrThrow({ where: { id: unsigned.id } })).status, 'da_preparare');
+});
+
+test('archiving and restoring approved analyses retains exact evidence and cannot invent a review or restore changed content', options, async () => {
+  const f = await fixture(), approvedAt = new Date('2026-01-01T00:00:00Z');
+  const pre = await db.preAnalysis.create({ data: { projectId: f.project.id, clientId: f.client.id, status: 'approvata_internamente', approvedAt, approvedById: admin.user.id, internalSummary: 'Prova approvata' } });
+  const dossier = await db.dossier.create({ data: { projectId: f.project.id, clientId: f.client.id, title: 'Dossier approvato', type: 'nota', status: 'approvato_internamente', approvedAt, approvedById: admin.user.id } });
+  const ai = await db.aiOutput.create({ data: { aiRunId: 'synthetic-existing-run-reference', clientId: f.client.id, title: 'Output approvato', content: 'Prova immutata', status: 'approved', approvedAt, approvedById: admin.user.id } });
+  for (const [model, id, status, archive] of [['PreAnalysis', pre.id, pre.status, 'archiviata'], ['Dossier', dossier.id, dossier.status, 'archiviato'], ['AiOutput', ai.id, ai.status, 'archived']] as const) {
+    await save(await command(model, id, { status: archive }));
+    const archived = await loadAdminRecord(db, admin.session, model, id); assert.equal(archived.values.status, archive);
+    assert(archived.fields.filter(field => field.name !== 'status').every(field => field.readOnly));
+    await save(await command(model, id, { status }));
+    assert.equal((await loadAdminRecord(db, admin.session, model, id)).values.status, status);
+  }
+  assert.equal((await db.preAnalysis.findUniqueOrThrow({ where: { id: pre.id } })).approvedAt?.toISOString(), approvedAt.toISOString());
+  await save(await command('AiOutput', ai.id, { status: 'archived' }));
+  await db.aiOutput.update({ where: { id: ai.id }, data: { content: 'Variazione concorrente sintetica' } });
+  await assert.rejects(save(await command('AiOutput', ai.id, { status: 'approved' })), /HISTORY/);
+  const draft = await db.preAnalysis.create({ data: { projectId: f.project.id, clientId: f.client.id } });
+  await assert.rejects(save(await command('PreAnalysis', draft.id, { status: 'approvata_internamente' })), /HISTORY/);
 });
 
 test('offer correction validates context and totals, preserves sent conditions and restores the same archived record', options, async () => {

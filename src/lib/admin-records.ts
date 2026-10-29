@@ -41,6 +41,10 @@ function delegate(tx: Tx, model: string): Delegate {
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 export const adminRecordVersion = (value: unknown) => canonicalSha256(JSON.parse(JSON.stringify(value)));
 const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
+const archives: Record<string, { status: string; draft: string }> = {
+  PreAnalysis: { status: 'archiviata', draft: 'raccolta_dati' }, Dossier: { status: 'archiviato', draft: 'bozza_consulente' },
+  AiOutput: { status: 'archived', draft: 'needs_review' },
+};
 export const adminRecordCommand = z.object({ commandId: z.string().uuid(), model: z.string().min(1).max(80), id: identifier,
   operation: z.enum(['CREATE', 'UPDATE', 'TRASH', 'RESTORE', 'RECTIFY']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().trim().min(3).max(2000), values: z.record(z.string(), z.string().max(100_000)),
@@ -92,6 +96,7 @@ export function parseAdminRecordValues(policy: AdminRecordPolicy, values: Record
   if (['Project', 'ProjectExpense'].includes(policy.model) && result.priority && !['bassa', 'media', 'alta', 'urgente'].includes(String(result.priority))) fail('INVALID');
   if (policy.model === 'Client' && !['attivo', 'sospeso', 'archiviato'].includes(String(result.status))) fail('INVALID');
   if (policy.model === 'Contract' && creating && result.status === 'firmato') fail('HISTORY');
+  if (creating && archives[policy.model] && result.status !== archives[policy.model].draft) fail('HISTORY');
   if (policy.model === 'CommercialLeadSlaPolicyVersion' && (!['STAGED', 'ACTIVE'].includes(String(result.status))
     || !Number.isSafeInteger(result.responseTargetSeconds) || Number(result.responseTargetSeconds) < 60 || Number(result.responseTargetSeconds) > 2_592_000)) fail('INVALID');
   return result;
@@ -214,6 +219,7 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
 }
 
 async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, changed: string[]) {
+  if (archives[policy.model] && changed.every(key => key === 'status')) return;
   if (policy.model === 'CommercialLeadSlaPolicyVersion') fail('HISTORY');
   if (policy.model === 'CommercialOffer' && changed.some(key => !['notes', 'followUpAt', 'followUpNote', 'outcomeNote'].includes(key))
     && (before.status !== 'bozza' || await tx.practiceOfferRevision.count({ where: { commercialOfferId: before.id } }))) fail('HISTORY');
@@ -227,6 +233,16 @@ async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, ch
   if (policy.model === 'Payment' && changed.some(key => !['method', 'dueDate', 'notes'].includes(key))
     && (before.collectedAt || before.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(before.status))
       || await tx.clientService.count({ where: { paymentId: before.id } }))) fail('HISTORY');
+}
+async function archiveRestoreStatus(tx: Tx, model: string, row: Row): Promise<string | null> {
+  const archive = archives[model]; if (!archive || row.status !== archive.status) return null;
+  const previous = await tx.adminRecordRevision.findFirst({ where: { model, recordId: row.id, operation: 'UPDATE',
+    after: { path: ['status'], equals: archive.status }, NOT: { before: { path: ['status'], equals: archive.status } } },
+    orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }] });
+  if (!previous?.before || !previous.after) return null;
+  const unchanged = (value: unknown) => Object.fromEntries(Object.entries(value as Row).filter(([key]) => !['status', 'updatedAt'].includes(key)));
+  if (adminRecordVersion(unchanged(row)) !== adminRecordVersion(unchanged(previous.after))) return null;
+  return String((previous.before as Row).status);
 }
 async function readDeleted(tx: Tx, model: string, id: string) {
   const latest = await tx.adminRecordRevision.findFirst({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }] });
@@ -259,6 +275,10 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       const values = parseAdminRecordValues(policy, command.values, command.operation === 'CREATE');
       const changed = Object.keys(values).filter(key => adminRecordVersion(before?.[key] ?? null) !== adminRecordVersion(values[key]));
       if (before) await assertEditable(tx, policy, before, changed);
+      if (before && archives[policy.model] && changed.includes('status')) {
+        if (changed.some(key => key !== 'status') || (values.status !== archives[policy.model].status
+          && values.status !== await archiveRestoreStatus(tx, policy.model, before))) fail('HISTORY');
+      }
       if (policy.model === 'Contract' && before && changed.includes('status')) {
         const signed = Boolean(before.signedAt || before.signedDocumentId || before.status === 'firmato');
         if (values.status === 'firmato') {
@@ -390,12 +410,14 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
     if (policy.model === 'Payment' && (row.collectedAt || row.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(row.status))
       || await tx.clientService.count({ where: { paymentId: row.id } }))) editable = ['method', 'dueDate', 'notes'];
     if (policy.model === 'CommercialOffer' && (row.status !== 'bozza' || await tx.practiceOfferRevision.count({ where: { commercialOfferId: row.id } }))) editable = ['notes', 'followUpAt', 'followUpNote', 'outcomeNote'];
+    if (archives[policy.model] && !editable.includes('status')) editable.push('status');
   }
   for (const name of policy.fields) {
     const field = metadata(policy.model).fields.find(item => item.name === name)!;
     if (!field || field.kind === 'object') fail('INVALID');
     const related = relation(policy.model, name);
-    const initial = row?.[name] ?? (field.hasDefaultValue && typeof field.default !== 'object' ? field.default : null);
+    const initial = !row && name === 'status' && archives[policy.model] ? archives[policy.model].draft
+      : row?.[name] ?? (field.hasDefaultValue && typeof field.default !== 'object' ? field.default : null);
     values[name] = initial == null ? '' : initial instanceof Date ? initial.toISOString() : field.type === 'Json' ? JSON.stringify(initial, null, 2) : String(initial);
     const descriptor: AdminField = { name, label: adminFieldLabels[name] ?? name.replace(/([A-Z])/g, ' $1').toLowerCase(),
       required: field.isRequired && !field.hasDefaultValue, readOnly: !editable.includes(name),
@@ -432,6 +454,11 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
         }
         if (parents.length > 1000) descriptor.help = 'Elenco limitato ai primi 1000 record per tipo. Usa il contesto specifico per ulteriori collegamenti.';
       }
+    } else if (name === 'status' && archives[policy.model]) {
+      const archive = archives[policy.model], restored = row ? await archiveRestoreStatus(tx, policy.model, row) : null;
+      descriptor.type = 'select'; descriptor.options = [...new Set(row ? [String(row.status), archive.status, ...(restored ? [restored] : [])] : [archive.draft])]
+        .map(value => ({ value, label: value === archive.status ? 'Archivia conservando le evidenze' : restored === value ? 'Ripristina lo stato precedente · ' + value.replaceAll('_', ' ') : value.replaceAll('_', ' ') }));
+      descriptor.help = 'L’archiviazione conserva contenuto, autori e approvazioni. Il ripristino è ammesso solo allo stato registrato prima dell’archiviazione, senza altre modifiche.';
     } else if (field.kind === 'enum') {
       descriptor.type = 'select'; descriptor.options = Prisma.dmmf.datamodel.enums.find(item => item.name === field.type)!.values
         .filter(item => policy.model !== 'Project' || item.name !== 'archiviato').map(item => ({ value: item.name, label: item.name.replaceAll('_', ' ') }));

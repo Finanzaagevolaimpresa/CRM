@@ -65,6 +65,15 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await expect(messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })).toBeVisible();
   await captureManual(admin, 'S07-versione-esatta', 'admin', 'Messaggio sintetico in approvazione con destinatari, testo e allegato della versione esatta.', messageHeading, [messageBody, messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })]);
   await admin.getByLabel('Approvo questo messaggio esatto', { exact: false }).check();
+  await ac.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
+  const inlineApproval = admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inlineApproval).toBeVisible();
+  expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('PENDING');
+  await expect(admin.getByLabel('Approvo questo messaggio esatto', { exact: false })).toBeChecked();
+  await inlineApproval.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inlineApproval.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inlineApproval).toContainText('Identità confermata.');
   await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('APPROVED');
   await operator.reload();
