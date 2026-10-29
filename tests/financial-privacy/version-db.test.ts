@@ -10,13 +10,25 @@ import { DocumentVersionError } from '../../src/lib/document-version-contract';
 import { readOrdinaryDocument } from '../../src/lib/ordinary-document-download';
 import { selectClientDocuments } from '../../src/lib/selective-client-documents';
 const db = new PrismaClient();
+const fixtureSessionIds: string[] = [];
 before(async () => { assert.equal(process.env.CI, 'true'); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
-after(async () => db.$disconnect());
+after(async () => {
+  try {
+    // The following native browser activates the registry against the same
+    // ephemeral database. Revoke only sessions owned by this synthetic suite.
+    if (fixtureSessionIds.length) {
+      await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+      await db.internalSession.updateMany({ where: { id: { in: fixtureSessionIds }, revokedAt: null }, data: { revokedAt: new Date() } });
+      assert.equal(await db.internalSession.count({ where: { id: { in: fixtureSessionIds }, revokedAt: null } }), 0);
+    }
+  } finally { await db.$disconnect(); }
+});
 const oldBytes = '%PDF-1.4\nSYNTHETIC ORIGINAL\n%%EOF', newBytes = '%PDF-1.4\nSYNTHETIC NEW VERSION\n%%EOF';
 async function fixture(role: 'admin' | 'commerciale' = 'admin') {
   const user = await db.user.create({ data: { name: 'Synthetic version operator', email: `version-${randomUUID()}@example.test`, role, passwordHash: 'not-login-enabled', active: true } });
   await db.userPermissionOverride.createMany({ data: ['document.upload', 'document.download'].map(permission => ({ userId: user.id, permission, allowed: true })) });
   const session = await db.internalSession.create({ data: { userId: user.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3600_000) } });
+  fixtureSessionIds.push(session.id);
   const client = await db.client.create({ data: { displayName: 'Synthetic document version client', type: 'societa', salesOwnerId: user.id } });
   const file = new File([oldBytes], 'source.pdf', { type: 'application/pdf' });
   const saved = await savePrivateDocumentFile({ file, clientId: client.id, fileName: file.name });
