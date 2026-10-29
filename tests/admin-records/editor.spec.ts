@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { syntheticSession } from '../selective-sharing/fixtures';
 import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -233,7 +234,7 @@ test('account profile choices survive privileged expiry and commit only after in
   await expect(inline).toContainText('Identità confermata.');
   await form.getByRole('button', { name: 'Salva profilo', exact: true }).click();
   await expect(form).toContainText('Profilo aggiornato.');
-  await page.reload();
+  await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   await expect(form.getByRole('textbox', { name: 'Nome', exact: true })).toHaveValue('Tecnico sintetico corretto');
 });
 
@@ -268,13 +269,34 @@ test('selective client sharing keeps recipient and fields across expiry and gran
 test('Admin restores a removed identity through its archive while access stays disabled', async ({ page }) => {
   await login(page);
   const target = await db.user.findUniqueOrThrow({ where: { email: f.technicianEmail } });
-  await db.user.update({ where: { id: target.id }, data: { active: false, deletedAt: new Date() } });
   await page.goto(`/settings/users/${target.id}`);
+  await page.getByRole('checkbox', { name: 'Conservo storico e attività nella coda amministrativa.', exact: true }).check();
+  await page.getByRole('button', { name: 'Rimuovi account', exact: true }).click();
+  await expect.poll(async () => Boolean((await db.user.findUniqueOrThrow({ where: { id: target.id } })).deletedAt)).toBe(true);
+  await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Ripristino l’identità conservando l’accesso disattivato.', exact: true }).check();
   await page.getByRole('button', { name: 'Ripristina account disattivato', exact: true }).click();
   await expect.poll(async () => (await db.user.findUniqueOrThrow({ where: { id: target.id } })).deletedAt).toBe(null);
-  await page.reload();
+  await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   await expect(page.getByRole('form', { name: 'Modifica profilo', exact: true })).toBeVisible();
   expect((await db.user.findUniqueOrThrow({ where: { id: target.id } })).active).toBe(false);
   expect(await db.auditLog.count({ where: { entityId: target.id, event: 'user_restored_inactive' } })).toBe(1);
+  expect(await db.auditLog.count({ where: { entityId: target.id, event: 'user_removed' } })).toBe(1);
+});
+
+test('Admin selects one open access session and preserves the others', async ({ page }) => {
+  await login(page);
+  const target = await db.user.create({ data: { name: 'Account accessi sintetico', email: 'sessions-' + Date.now() + '@example.test', role: 'consulente', passwordHash: 'synthetic-not-for-login' } });
+  await syntheticSession(db, target); await syntheticSession(db, target);
+  await page.goto('/settings/users/' + target.id);
+  const panel = page.getByRole('region', { name: 'Sessioni aperte dell’account', exact: true });
+  const form = panel.getByRole('form', { name: 'Revoca singolo accesso 1', exact: true });
+  const selected = await form.locator('input[name="targetSessionId"]').inputValue();
+  await form.getByRole('button', { name: 'Revoca questo accesso', exact: true }).click();
+  await expect(form).toContainText('Operazione account registrata.');
+  expect((await db.internalSession.findUniqueOrThrow({ where: { id: selected } })).revokedAt).not.toBeNull();
+  expect(await db.internalSession.count({ where: { userId: target.id, revokedAt: null } })).toBe(1);
+  await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
+  await expect(panel.locator('input[name="targetSessionId"]')).toHaveCount(1);
+  await expect(panel.locator('input[name="targetSessionId"][value="' + selected + '"]')).toHaveCount(0);
 });

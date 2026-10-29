@@ -12,7 +12,9 @@ import { RecordUpdateError } from './record-update-contract';
 import { SerializableConflictError } from './serializable';
 
 const codes = { CREATE: 'USER_CREATE', ACTIVATE: 'USER_ACTIVATE', DEACTIVATE: 'USER_DEACTIVATE', ROLE: 'USER_ROLE_UPDATE',
-  OVERRIDES: 'USER_PERMISSION_OVERRIDE_UPDATE', RESET_OVERRIDES: 'USER_PERMISSION_OVERRIDE_RESET' } as const;
+  OVERRIDES: 'USER_PERMISSION_OVERRIDE_UPDATE', RESET_OVERRIDES: 'USER_PERMISSION_OVERRIDE_RESET',
+  PROFILE: 'USER_ACCOUNT_UPDATE', PASSWORD_RESET: 'USER_ACCOUNT_UPDATE', REMOVE: 'USER_ACCOUNT_UPDATE',
+  RESTORE: 'USER_ACCOUNT_UPDATE', REVOKE_SESSIONS: 'USER_ACCOUNT_UPDATE', REVOKE_SESSION: 'USER_ACCOUNT_UPDATE' } as const;
 export async function submitAdminUserCommand(form: FormData): Promise<AdminUserCommandState> {
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false, message: 'Accedi con l’account Admin. Le scelte nel modulo sono conservate.' };
@@ -24,13 +26,18 @@ export async function submitAdminUserCommand(form: FormData): Promise<AdminUserC
     if (!key) return { ok: false, message: 'Conferma privilegiata non disponibile. Nessun comando eseguito.' };
     const values = operation === 'CREATE' ? { name: form.get('name'), email: form.get('email'), password: form.get('password'), role: form.get('role'), active: form.get('active') === 'on' }
       : operation === 'ROLE' ? { role: form.get('role') }
-      : operation === 'OVERRIDES' ? { overrides: Array.from(form.entries()).filter(([name]) => name.startsWith('permission:')).map(([name, value]) => ({ permission: name.slice(11), value })) } : {};
+      : operation === 'OVERRIDES' ? { overrides: Array.from(form.entries()).filter(([name]) => name.startsWith('permission:')).map(([name, value]) => ({ permission: name.slice(11), value })) }
+      : operation === 'PROFILE' ? { name: form.get('name'), email: form.get('email') }
+      : operation === 'PASSWORD_RESET' ? { password: form.get('password'), confirmation: form.get('confirmation') }
+      : operation === 'REMOVE' ? { retainHistory: form.get('retainHistory') === 'on' }
+      : operation === 'RESTORE' ? { restoreInactive: form.get('restoreInactive') === 'on' }
+      : operation === 'REVOKE_SESSION' ? { sessionId: form.get('targetSessionId') } : {};
     const receipt = await executeAdminUserCommand(prisma, session, identity, values, { key,
       sessionToken: store.get(process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session')?.value ?? '', stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' });
     // These authenticated pages read current data on every request. Keep the
     // current form and receipt URL stable until the explicit reopening link:
     // a server-action route refresh can discard the in-flight receipt fragment.
-    return { ok: true, message: 'Operazione account registrata. Riapri la scheda per verificare lo stato corrente.', ...receipt };
+    return { ok: true, message: (operation === 'PROFILE' ? 'Profilo aggiornato. ' : '') + 'Operazione account registrata. Riapri la scheda per verificare lo stato corrente.', ...receipt };
   } catch (error) {
     if (error instanceof PrivilegedAdmissionRequired) return error.formState;
     if (error instanceof ZodError) return { ok: false, message: 'Controlla i campi. La password iniziale richiede almeno 12 caratteri e al massimo 72 byte.' };

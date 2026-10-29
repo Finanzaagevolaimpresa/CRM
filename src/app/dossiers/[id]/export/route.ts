@@ -39,4 +39,3 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     'Content-Disposition': 'attachment; filename="' + name + '-v' + dossier.version + (format === 'docx' ? '.docx' : '.md') + '"',
     'X-Dossier-Version': String(dossier.version), 'X-Dossier-Content-Hash': digest } });
 }
-

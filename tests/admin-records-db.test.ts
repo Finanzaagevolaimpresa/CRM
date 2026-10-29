@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import bcrypt from 'bcryptjs';
 import test, { before, after } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
@@ -146,6 +147,57 @@ test('account creation records one receipt, replays a lost response and never pe
   const row = await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: input.commandId } });
   const serialized = JSON.stringify(row, (_name, value) => typeof value === 'bigint' ? value.toString() : value);
   for (const sensitive of [values.password, values.email, values.name, (await db.user.findUniqueOrThrow({ where: { id: input.userId } })).passwordHash]) assert(!serialized.includes(sensitive));
+});
+
+test('profile, password reset and account lifecycle retain one receipt and preserve identity without leaking submitted data', options, async () => {
+  const target = await syntheticPerson(db, 'Account sintetico amministrato', 'consulente');
+  const identity = async (operation: string) => ({ operation, commandId: randomUUID(), userId: target.user.id,
+    expectedVersion: adminUserVersion(await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } })) });
+  const profile = await identity('PROFILE'), values = { name: 'Nome rettificato sintetico', email: randomUUID() + '@example.test' };
+  await assert.rejects(executeAdminUserCommand(db, admin.session, profile, values, proof(admin, 1801)));
+  await executeAdminUserCommand(db, admin.session, profile, values, proof());
+  await executeAdminUserCommand(db, admin.session, profile, values, proof());
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).email, values.email);
+  assert((await db.internalSession.findUniqueOrThrow({ where: { id: target.session.sessionId! } })).revokedAt);
+  assert.equal(await db.auditLog.count({ where: { entityId: target.user.id, event: 'user_profile_updated' } }), 1);
+  const reset = await identity('PASSWORD_RESET'), password = 'synthetic-reset-password-only-00000';
+  await executeAdminUserCommand(db, admin.session, reset, { password, confirmation: password }, proof());
+  const passwordHash = (await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).passwordHash;
+  assert(await bcrypt.compare(password, passwordHash));
+  await executeAdminUserCommand(db, admin.session, reset, { password, confirmation: password }, proof());
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).passwordHash, passwordHash);
+  const removed = await identity('REMOVE');
+  await assert.rejects(executeAdminUserCommand(db, admin.session, removed, { retainHistory: false }, proof()));
+  await executeAdminUserCommand(db, admin.session, removed, { retainHistory: true }, proof());
+  assert((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).deletedAt);
+  const restored = await identity('RESTORE');
+  await executeAdminUserCommand(db, admin.session, restored, { restoreInactive: true }, proof());
+  await executeAdminUserCommand(db, admin.session, restored, { restoreInactive: true }, proof());
+  const after = await db.user.findUniqueOrThrow({ where: { id: target.user.id } });
+  assert.equal(after.deletedAt, null); assert.equal(after.active, false); assert.equal(after.email, values.email); assert.equal(after.passwordHash, passwordHash);
+  for (const input of [profile, reset, removed, restored]) assert.equal((await reconcileAdminUserCommand(db, admin.session, input))?.userId, target.user.id);
+  const journal = await db.adminRecordRevision.findMany({ where: { model: 'User', recordId: target.user.id } });
+  assert.equal(journal.length, 4);
+  const serialized = JSON.stringify(journal, (_key, value) => typeof value === 'bigint' ? String(value) : value);
+  for (const secret of [password, passwordHash, values.email, values.name]) assert(!serialized.includes(secret));
+});
+
+test('single-session revocation is bound to the selected account and does not close other access sessions', options, async () => {
+  const target = await syntheticPerson(db, 'Account con più accessi', 'consulente'), second = await syntheticSession(db, target.user);
+  const outsider = await syntheticPerson(db, 'Altro account isolato', 'consulente');
+  const input = { commandId: randomUUID(), operation: 'REVOKE_SESSION', userId: target.user.id,
+    expectedVersion: adminUserVersion(await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } })) };
+  await assert.rejects(executeAdminUserCommand(db, admin.session, input, { sessionId: outsider.session.sessionId }, proof()), /STALE/);
+  await executeAdminUserCommand(db, admin.session, input, { sessionId: target.session.sessionId }, proof());
+  await executeAdminUserCommand(db, admin.session, input, { sessionId: target.session.sessionId }, proof());
+  assert((await db.internalSession.findUniqueOrThrow({ where: { id: target.session.sessionId! } })).revokedAt);
+  assert.equal((await db.internalSession.findUniqueOrThrow({ where: { id: second.session.sessionId! } })).revokedAt, null);
+  assert.equal((await db.internalSession.findUniqueOrThrow({ where: { id: outsider.session.sessionId! } })).revokedAt, null);
+  assert.equal(await db.auditLog.count({ where: { entityId: target.session.sessionId, event: 'session_revoked' } }), 1);
+  const all = { ...input, commandId: randomUUID(), operation: 'REVOKE_SESSIONS' };
+  await executeAdminUserCommand(db, admin.session, all, {}, proof());
+  assert((await db.internalSession.findUniqueOrThrow({ where: { id: second.session.sessionId! } })).revokedAt);
+  assert.equal((await db.internalSession.findUniqueOrThrow({ where: { id: outsider.session.sessionId! } })).revokedAt, null);
 });
 
 test('account role and permission commands reject stale changes, non-Admin actors and forbidden financial overrides', options, async () => {

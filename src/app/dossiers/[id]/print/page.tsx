@@ -19,4 +19,3 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <style>{`@media print { body * { visibility: hidden; } #dossier-print, #dossier-print * { visibility: visible; } #dossier-print { position: absolute; inset: 0; width: 100%; padding: 0; } [data-print-control] { display: none !important; } }`}</style>
   </article>;
 }
-
