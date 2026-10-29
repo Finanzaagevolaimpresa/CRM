@@ -8,7 +8,7 @@ import { SelectiveProjectView } from './selective-project-view';
 const initial: SharingState = { ok: false, message: '' };
 type Grant = { id: string; recipientId: string; revision: number; revoked: boolean; suspended: boolean; expiresAt: string | null };
 export function SelectiveProjectSharing({ projectId, recipients, documents, grants }: {
-  projectId: string; recipients: { id: string; name: string; role: string }[];
+  projectId: string; recipients: { id: string; name: string; email: string; role: string }[];
   documents: { versionId: string; title: string; fileName: string; version: number }[]; grants: Grant[];
 }) {
   const [recipientId, setRecipient] = useState('');
@@ -27,7 +27,7 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-5 rounded-xl border bg-white p-5">
       <h2 className="text-xl font-bold">Condividi accesso</h2>
       <label className="block">Persona esistente<select required value={recipientId} onChange={event => setRecipient(event.target.value)} className="block rounded border p-2">
-        <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
+        <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email} · {person.role}</option>)}</select></label>
       <fieldset><legend className="font-semibold">Informazioni selezionate</legend><div className="grid gap-2 md:grid-cols-2">
         {(Object.entries(selectiveProjectFields) as [SelectiveProjectField, string][]).map(([key, label]) => <label key={key}><input type="checkbox" checked={fields.includes(key)}
           onChange={event => setFields(old => event.target.checked ? [...old, key] : old.filter(value => value !== key))} /> {label}</label>)}
@@ -43,7 +43,7 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
       <p role="status">{preview.message}</p>
     </form>
     {preview.preview && previewGeneration === generation && !confirmation.ok && <>
-      <div className="rounded border border-amber-500 p-4"><h2 className="font-semibold">Impatto prima della conferma — {preview.preview.recipientName}</h2>
+      <div className="rounded border border-amber-500 p-4"><h2 className="font-semibold">Impatto prima della conferma — {preview.preview.recipientName} · {preview.preview.recipientEmail}</h2>
         <p>{preview.preview.impact.previouslyFullProjectAccess ? 'La persona dispone già di accesso ordinario al progetto: verrà sostituito dalla sola selezione.' : 'La persona potrà consultare soltanto la selezione approvata.'}</p>
         <p>Ruoli globali, assegnazioni, perimetri cliente e override non amplieranno questa selezione. Modifica, caricamento, invio e assegnazione saranno bloccati sul progetto. Gli altri fascicoli mantengono i propri permessi.</p>
         {preview.preview.impact.replacesPreviousSelection && <p>Questa conferma sostituirà la precedente selezione.</p>}

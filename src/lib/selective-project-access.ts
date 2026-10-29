@@ -92,7 +92,10 @@ async function projectContext(tx: Tx, projectId: string) {
   if (!project || project.deletedAt || project.status === 'archiviato') denied();
   const client = await tx.client.findUnique({ where: { id: project.clientId } });
   if (!client || client.deletedAt) denied();
-  return { ...project, client };
+  const people = await tx.user.findMany({ where: { id: { in: [project.consultantId, client.salesOwnerId].filter((id): id is string => Boolean(id)) } },
+    select: { id: true, name: true } });
+  return { ...project, client, technicalOwnerName: people.find(person => person.id === project.consultantId)?.name ?? null,
+    commercialOwnerName: people.find(person => person.id === client.salesOwnerId)?.name ?? null };
 }
 
 async function allowedVersion(tx: Tx, current: Awaited<ReturnType<typeof recipient>>['actor'], project: Awaited<ReturnType<typeof projectContext>>, versionId: string) {
@@ -149,7 +152,7 @@ export async function previewSelectiveAccess(db: Db, claimed: AuthSession, raw: 
     const payload = { snapshot: state.snapshot, authorityRevision: binding.revision, actorId: current.userId, sessionId: current.sessionId!,
       keyVersion: key.version, stateHash: state.stateHash, expires: state.clock.getTime() + 5 * 60_000 };
     const token = Buffer.from(JSON.stringify({ payload, proof: selectiveProof(key, 'preview', payload) })).toString('base64url');
-    return { token, projection: projection(state.project, state.snapshot), recipientName: state.target.user.name,
+    return { token, projection: projection(state.project, state.snapshot), recipientName: state.target.user.name, recipientEmail: state.target.user.email,
       impact: { previouslyFullProjectAccess: state.hadFullAccess, replacesPreviousSelection: Boolean(state.previous),
         role: state.target.user.role, clientGrant: Boolean(state.target.actor.clientReadScope?.includes(state.project.clientId)) } };
   });

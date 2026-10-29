@@ -39,7 +39,7 @@ export async function OperationalWorkList({ session, kind, path, title, query: r
   const states = catalogue ? Object.keys(selectOperationalWork(catalogue.records).stateCounts).sort() : [];
   const records = catalogue?.records ?? [];
   const options = (key: 'client' | 'technicalOwner' | 'commercialOwner') => [...new Map(records.flatMap(row =>
-    row[key] ? [[row[key]!.id, row[key]!] as const] : [])).values()].sort((a, b) => a.name.localeCompare(b.name));
+    row[key]?.id ? [[row[key]!.id, { id: row[key]!.id!, name: row[key]!.name }] as const] : [])).values()].sort((a, b) => a.name.localeCompare(b.name));
   const priorities = [...new Set(records.flatMap(row => row.priority ? [row.priority] : []))].sort();
   return <div className="crm-space-y-6"><PageHeader title={title}
     description="Responsabilità ordinarie e incarichi personali validi, senza duplicati. L’apertura non registra presa in carico o avvio del servizio." />

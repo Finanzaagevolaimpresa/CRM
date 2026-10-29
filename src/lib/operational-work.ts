@@ -101,7 +101,9 @@ export async function loadOperationalWorkCatalogue(db: PrismaClient, claimed: Au
         const field = (key: string) => row.fields.find(item => item.key === key)?.value ?? null;
         records.push({ id: row.target.targetId, kind, admission: 'SELECTIVE', href: technicalWorkPath(row.target),
           title: field('title'), status: field('status'), priority: field('priority'), dueDate: field('dueDate'),
-          client: null, technicalOwner: null, commercialOwner: null,
+          client: null,
+          technicalOwner: field('technicalOwnerName') ? { id: null, name: field('technicalOwnerName')! } : null,
+          commercialOwner: field('commercialOwnerName') ? { id: null, name: field('commercialOwnerName')! } : null,
           responsibility: row.responsibility, expiresAt: row.expiresAt });
       }
       return { records, selectiveAvailable: true, observedAt: (await technicalAssignmentClock(tx)).toISOString() };

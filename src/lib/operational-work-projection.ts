@@ -4,8 +4,8 @@ export type OperationalWorkRow = {
   id: string; kind: TechnicalTargetReference['kind']; admission: 'ORDINARY' | 'SELECTIVE';
   href: string; title: string | null; status: string | null; priority: string | null; dueDate: string | null;
   client: { id: string; name: string } | null;
-  technicalOwner: { id: string; name: string } | null;
-  commercialOwner: { id: string; name: string } | null;
+  technicalOwner: { id: string | null; name: string } | null;
+  commercialOwner: { id: string | null; name: string } | null;
   responsibility: string | null; expiresAt: string | null;
 };
 export type OperationalWorkQuery = {

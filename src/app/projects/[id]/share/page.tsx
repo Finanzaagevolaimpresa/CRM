@@ -13,7 +13,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const project = await prisma.project.findFirst({ where: { id, deletedAt: null, status: { not: 'archiviato' } } });
   if (!project || !await prisma.client.findFirst({ where: { id: project.clientId, deletedAt: null }, select: { id: true } })) notFound();
   const [recipients, candidates, grants] = await Promise.all([
-    prisma.user.findMany({ where: { active: true, deletedAt: null, id: { not: session.userId } }, orderBy: [{ name: 'asc' }, { id: 'asc' }], select: { id: true, name: true, role: true } }),
+    prisma.user.findMany({ where: { active: true, deletedAt: null, id: { not: session.userId } }, orderBy: [{ name: 'asc' }, { id: 'asc' }], select: { id: true, name: true, email: true, role: true } }),
     prisma.document.findMany({ where: { projectId: id, clientId: project.clientId, deletedAt: null, visibilityLevel: 'interno', mimeType: { in: ['application/pdf', 'text/plain', 'image/png', 'image/jpeg'] } } }),
     prisma.selectiveProjectGrant.findMany({ where: { projectId: id }, orderBy: { approvedAt: 'desc' }, select: { id: true, recipientId: true, revision: true, revokedAt: true, expiresAt: true, approvedAt: true } }),
   ]);

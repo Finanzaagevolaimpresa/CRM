@@ -19,6 +19,7 @@ import { technicalAssignmentFailure } from '../src/lib/technical-assignment-fail
 import { settleTechnicalAssignmentAttempt } from '../src/lib/technical-assignment-service';
 import { TechnicalAssignmentAttemptClosedError } from '../src/lib/technical-assignment-errors';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
+import { loadOperationalWorkCatalogue } from '../src/lib/operational-work';
 
 // New PostgreSQL execution is confined to the approved ephemeral CI job.
 const enabled = process.env.RUN_TECHNICAL_ASSIGNMENT_DB_TESTS === '1';
@@ -45,6 +46,31 @@ test('no sharing/email/Admin authority substitutes the distinct empty technical 
   const other = await syntheticPerson(db, 'Admin senza binding sintetico');
   await assert.rejects(readTechnicalAssignmentManagement(db, other.session, target));
   assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).operational, true);
+});
+
+test('project priority and named owners are visible only when individually selected, including the operational list', options, async () => {
+  const f = await fixture(), target = technicalTarget(f, 'Project');
+  await assignTechnical(db, admin, target, f.techB, { statusOnly: true });
+  const first = await readTechnicalWork(db, f.techB.session, target);
+  assert.deepEqual(first.fields.map(row => row.key), ['status']);
+  const input = await assignmentInput(db, admin, target, f.techB, { statusOnly: true });
+  assert.equal(input.selection.kind, 'Project');
+  if (input.selection.kind !== 'Project') throw new Error('fixture target');
+  input.selection.readableFields = ['status', 'priority', 'technicalOwnerName', 'commercialOwnerName'];
+  const ref = { ...target, recipientId: f.techB.user.id };
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true);
+  const view = await readTechnicalWork(db, f.techB.session, target);
+  assert.equal(view.fields.find(field => field.key === 'technicalOwnerName')?.value, f.techA.user.name);
+  assert.equal(view.fields.find(field => field.key === 'commercialOwnerName')?.value, f.salesA.user.name);
+  const row = (await loadOperationalWorkCatalogue(db, f.techB.session, 'Project')).records.find(item => item.id === target.targetId)!;
+  assert.equal(row.priority, f.project.priority);
+  assert.deepEqual(row.technicalOwner, { id: null, name: f.techA.user.name });
+  assert.deepEqual(row.commercialOwner, { id: null, name: f.salesA.user.name });
+  assert.equal(row.client, null);
+  assert(!JSON.stringify(view.fields).includes(f.salesA.user.id));
+  await revokeTechnical(db, admin, target, f.techB);
+  assert(!(await loadOperationalWorkCatalogue(db, f.techB.session, 'Project')).records.some(item => item.id === target.targetId));
 });
 
 test('Admin thirty-minute proof works after five minutes and a revoked login still denies every operation', options, async () => {
