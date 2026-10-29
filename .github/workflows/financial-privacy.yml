@@ -63,6 +63,14 @@ jobs:
           grep -Eq '^# pass 3$' "$FINANCIAL_PRIVACY_EVIDENCE/technical-hold-db.tap"
           grep -Eq '^# fail 0$' "$FINANCIAL_PRIVACY_EVIDENCE/technical-hold-db.tap"
           grep -Eq '^# skipped 0$' "$FINANCIAL_PRIVACY_EVIDENCE/technical-hold-db.tap"
+      - name: Exact document versions, concurrency, receipts and revocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/financial-privacy/version-db.test.ts | tee "$FINANCIAL_PRIVACY_EVIDENCE/document-version-db.tap"
+          grep -Eq '^# pass 10$' "$FINANCIAL_PRIVACY_EVIDENCE/document-version-db.tap"
+          grep -Eq '^# fail 0$' "$FINANCIAL_PRIVACY_EVIDENCE/document-version-db.tap"
+          grep -Eq '^# skipped 0$' "$FINANCIAL_PRIVACY_EVIDENCE/document-version-db.tap"
       - name: Compile production bundle against the synthetic database
         env: { NODE_ENV: production }
         run: npm run build

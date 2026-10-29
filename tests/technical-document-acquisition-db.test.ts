@@ -16,6 +16,8 @@ import { readTechnicalUploadReviewQueue, previewTechnicalUploadReview, confirmTe
 import { previewTechnicalDocumentAcquisition, confirmTechnicalDocumentAcquisition, readTechnicalDocumentAcquisitionOutcome } from '../src/lib/technical-document-acquisition-service';
 import { listPersonalAcquiredDocuments, readPersonalAcquiredDocument } from '../src/lib/technical-document-acquired-access';
 import { readOrdinaryDocument } from '../src/lib/ordinary-document-download';
+import { appendDocumentVersion, documentVersionPage } from '../src/lib/document-version-service';
+import { DocumentVersionError } from '../src/lib/document-version-contract';
 import { previewClientSharing, readSharedClientDocument, readClientSharing } from '../src/lib/selective-client-access';
 import { grantClient } from './selective-clients/fixtures';
 import { readPrivateDocumentBounded } from '../src/lib/storage';
@@ -176,6 +178,13 @@ test('contract and payment classification cannot be selected for technicians or 
 });
 test('canonical source, classification and version cannot be relabelled, replaced or deleted through generic writers', options, async () => {
   const f = await fixture(), { receipt } = await acquire(f), d = await db.document.findUniqueOrThrow({ where: { id: receipt.documentId } });
+  const beforeVersions = await count();
+  const deniedVersion = (e: unknown) => e instanceof DocumentVersionError && e.code === 'DENIED';
+  await assert.rejects(documentVersionPage(db, admin.session, d.id), deniedVersion);
+  await assert.rejects(appendDocumentVersion(db, admin.session, {
+    documentId: d.id, requestId: randomUUID(), expectedHash: 'a'.repeat(64), confirmed: true,
+  }, new File(['Nuova versione non ammessa'], d.fileName, { type: d.mimeType })), deniedVersion);
+  assert.deepEqual(await count(), beforeVersions);
   for (const data of [{ visibilityLevel: 'interno' }, { title: 'Sostituito' }, { documentCategory: 'altro' }, { clientId: f.otherClient.id }, { deletedAt: new Date() }])
     await assert.rejects(db.document.update({ where: { id: d.id }, data }));
   await assert.rejects(db.document.delete({ where: { id: d.id } }));

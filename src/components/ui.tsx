@@ -114,10 +114,12 @@ export function MetaCell({
   createdAt,
   updatedAt,
   owner,
+  timeZone,
 }: {
   createdAt?: Date | string | null;
   updatedAt?: Date | string | null;
   owner?: string | null;
+  timeZone?: "Europe/Rome";
 }) {
   return (
     <div className="crm-space-y-1 text-xs leading-5 text-slate-500">
@@ -125,13 +127,13 @@ export function MetaCell({
         <span className="font-black uppercase tracking-wide text-slate-600">
           Creato il
         </span>{" "}
-        {formatDateTime(createdAt)}
+        {formatDateTime(createdAt, timeZone)}
       </div>
       <div>
         <span className="font-black uppercase tracking-wide text-slate-600">
           Aggiornato il
         </span>{" "}
-        {formatDateTime(updatedAt ?? createdAt)}
+        {formatDateTime(updatedAt ?? createdAt, timeZone)}
       </div>
       {owner !== undefined && (
         <div>

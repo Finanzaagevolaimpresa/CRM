@@ -10,11 +10,34 @@ const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as 
 async function documentContextScreens(page: Page, name: string) {
   for (const [suffix, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
     await page.setViewportSize({ width, height });
+    // A navigation can expose its links before the responsive stylesheet has
+    // settled. Do not capture that transient full-page size as visual evidence.
+    await expect(page.locator('main.crm-page-main')).toHaveCSS('padding', suffix === 'desktop' ? '32px' : '16px');
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    const dimensions = await page.evaluate(() => ({
+      width: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, document.body.offsetWidth,
+        document.documentElement.offsetWidth, document.body.clientWidth, document.documentElement.clientWidth),
+      height: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.body.offsetHeight,
+        document.documentElement.offsetHeight, document.body.clientHeight, document.documentElement.clientHeight),
+      viewportWidth: innerWidth, viewportHeight: innerHeight,
+    }));
+    expect(dimensions.viewportWidth).toBe(width); expect(dimensions.viewportHeight).toBe(height);
+    expect(dimensions.width).toBe(width);
+    // Desktop scrolling belongs to the application panel, not an expanding body.
+    if (suffix === 'desktop') expect(dimensions.height).toBe(height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     expect(await page.locator('form input:not([type=hidden]), form select, form button').evaluateAll(nodes => nodes.every(node => {
       const r = node.getBoundingClientRect(); return !r.width || (r.left >= 0 && r.right <= innerWidth + 1);
     }))).toBe(true);
-    await page.screenshot({ path: join(root, `${name}-${suffix}.png`), fullPage: true, caret: 'initial' });
+    const screenshot = await page.screenshot({ path: join(root, `${name}-${suffix}.png`), fullPage: true, caret: 'initial' });
+    // PNG IHDR records the actual capture dimensions; preserve them next to the
+    // DOM measurement and fail rather than silently crop an anomalous archive.
+    const captured = { width: screenshot.readUInt32BE(16), height: screenshot.readUInt32BE(20) };
+    writeFileSync(join(root, `${name}-${suffix}-dimensions.json`), JSON.stringify({ synthetic: true, dimensions, captured }));
+    expect(captured).toEqual({ width: dimensions.width, height: dimensions.height });
   }
 }
 async function login(page: Page, role: string) {
@@ -377,6 +400,102 @@ async function technicalFootprint(clientId: string) {
   const audits = await db.auditLog.findMany({ where: { entityId: { in: practices.map(p => p.id) } }, orderBy: { id: 'asc' } });
   return { practices, audits };
 }
+
+test('native document versions preserve old bytes, expose exact history and reconcile a lost response without resending', async ({ browser }) => {
+  const admin = fixture.fixtures.find(f => f.role === 'admin' && !f.denied)!;
+  const tech = fixture.fixtures.find(f => f.role === 'consulente' && !f.denied)!;
+  const other = fixture.fixtures.find(f => f.role === 'backoffice' && !f.denied)!;
+  const original = 'VERSION_ONE_SYNTHETIC', replacement = 'VERSION_TWO_SYNTHETIC';
+  const validUntil = new Date(Date.now() + 7 * 86400_000);
+  const saved = await savePrivateDocumentFile({ file: new File([original], 'history.txt', { type: 'text/plain' }), clientId: tech.clientId, clientServiceId: tech.serviceId, fileName: 'history.txt' });
+  const doc = await db.document.create({ data: { ...saved, fileName: 'history.txt', type: 'text/plain', mimeType: 'text/plain', title: 'Storico versioni sintetico',
+    clientId: tech.clientId, projectId: tech.projectId, clientServiceId: tech.serviceId, uploadedById: admin.userId, validUntil } });
+  const persistedCreatedAt = new Date('2026-10-25T01:30:45.123Z');
+  const first = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum: saved.checksum, storagePath: saved.storagePath, createdAt: persistedCreatedAt } });
+  const ac = await browser.newContext({ timezoneId: 'Asia/Tokyo' }), tc = await browser.newContext(), oc = await browser.newContext();
+  const a = await ac.newPage(), t = await tc.newPage(), o = await oc.newPage();
+  try {
+    await login(a, admin.key); await login(t, tech.key); await login(o, other.key);
+    const path = `/documents/${doc.id}/versions`;
+    await a.goto(path);
+    await expect(a.locator(`time[datetime="${persistedCreatedAt.toISOString()}"]`)).toHaveText('25/10/26, 02:30 · Europe/Rome');
+    const region = a.getByRole('region', { name: 'Nuova versione documentale', exact: true });
+    await expect(region).toHaveAttribute('data-document-version-ready', 'true');
+    await region.getByLabel('File della nuova versione', { exact: true }).setInputFiles({ name: 'history-new.txt', mimeType: 'text/plain', buffer: Buffer.from(replacement) });
+    await region.getByRole('checkbox').check();
+    await documentContextScreens(a, 'document-version-prepared');
+    let intercepted = 0;
+    await a.route('**/documents/**/versions', async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      intercepted++; await route.fetch(); await route.abort('failed');
+    });
+    await region.getByRole('button', { name: 'Salva nuova versione', exact: true }).click();
+    await expect(region).toContainText('Esito non confermato');
+    await expect.poll(() => db.documentVersion.count({ where: { documentId: doc.id } })).toBe(2);
+    await expect(region.getByRole('button', { name: 'Salva nuova versione', exact: true })).toBeDisabled();
+    await a.unroute('**/documents/**/versions');
+    await a.reload();
+    await expect(region.getByRole('button', { name: 'Salva nuova versione', exact: true })).toBeDisabled();
+    await region.getByRole('button', { name: 'Verifica esito caricamento', exact: true }).click();
+    await expect(region).toContainText('Versione 2 registrata: ricevuta verificata.');
+    expect(intercepted).toBe(1);
+    expect(await db.auditLog.count({ where: { entityId: doc.id, event: 'document_version_upload' } })).toBe(1);
+    await region.getByRole('link', { name: 'Riapri lo storico aggiornato', exact: true }).click();
+    await expect(a.getByRole('link', { name: 'Visualizza versione 1', exact: true })).toBeVisible();
+    await expect(a.getByRole('link', { name: 'Visualizza versione 2', exact: true })).toBeVisible();
+    await expect(a.locator(`time[datetime="${persistedCreatedAt.toISOString()}"]`)).toHaveText('25/10/26, 02:30 · Europe/Rome');
+    expect((await db.documentVersion.findUniqueOrThrow({ where: { id: first.id } })).createdAt.toISOString()).toBe(persistedCreatedAt.toISOString());
+    await documentContextScreens(a, 'document-version-history');
+    await a.goto('/documents');
+    const row = a.getByRole('row').filter({ hasText: doc.title });
+    await expect(row).toHaveCount(1);
+    const expiry = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short' }).format(validUntil);
+    await expect(row).toContainText(expiry + ' · Europe/Rome');
+    expect((await db.document.findUniqueOrThrow({ where: { id: doc.id } })).validUntil?.toISOString()).toBe(validUntil.toISOString());
+    await t.goto(path);
+    const popup = tc.waitForEvent('page'); await t.getByRole('link', { name: 'Visualizza versione 1', exact: true }).click();
+    const view = await popup; await expect(view.locator('body')).toContainText(original);
+    const latest = await db.documentVersion.findFirstOrThrow({ where: { documentId: doc.id, version: 2 } });
+    expect((await t.request.get(`/documents/${doc.id}/download?versionId=${first.id}`)).status()).toBe(200);
+    expect((await (await t.request.get(`/documents/${doc.id}/download?versionId=${latest.id}`)).body()).toString()).toBe(replacement);
+    expect((await o.goto(path))?.status()).toBe(404);
+    expect(await o.content()).not.toContain(doc.title);
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: false } });
+    expect((await view.reload())?.status()).toBe(403);
+    expect((await t.goto(path))?.status()).toBe(404);
+    expect((await t.request.get(`/documents/${doc.id}/download?versionId=${latest.id}`)).status()).toBe(403);
+    expect(await db.documentVersion.count({ where: { documentId: doc.id } })).toBe(2);
+    await view.close();
+  } finally {
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: true } });
+    await ac.close(); await tc.close(); await oc.close();
+  }
+});
+
+test('commercial native version upload remains on the owned client and rejects a revoked open form', async ({ page }) => {
+  const sales = fixture.fixtures.find(f => f.role === 'commerciale' && !f.denied)!;
+  const original = 'COMMERCIAL_VERSION_ONE', replacement = 'COMMERCIAL_VERSION_TWO';
+  const saved = await savePrivateDocumentFile({ file: new File([original], 'commercial-history.txt', { type: 'text/plain' }), clientId: sales.clientId, fileName: 'commercial-history.txt' });
+  const doc = await db.document.create({ data: { ...saved, fileName: 'commercial-history.txt', type: 'text/plain', mimeType: 'text/plain', title: 'Versioni commerciali sintetiche', clientId: sales.clientId, uploadedById: sales.userId } });
+  await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum: saved.checksum, storagePath: saved.storagePath } });
+  await login(page, sales.key); await page.goto(`/documents/${doc.id}/versions`);
+  const region = page.getByRole('region', { name: 'Nuova versione documentale', exact: true });
+  await expect(region).toHaveAttribute('data-document-version-ready', 'true');
+  await region.getByLabel('File della nuova versione', { exact: true }).setInputFiles({ name: 'next.txt', mimeType: 'text/plain', buffer: Buffer.from(replacement) });
+  await region.getByRole('checkbox').check(); await region.getByRole('button', { name: 'Salva nuova versione', exact: true }).click();
+  await expect(region).toContainText('Versione 2 registrata.');
+  await region.getByRole('link', { name: 'Riapri lo storico aggiornato', exact: true }).click();
+  await region.getByLabel('File della nuova versione', { exact: true }).setInputFiles({ name: 'denied.txt', mimeType: 'text/plain', buffer: Buffer.from('MUST_NOT_PERSIST') });
+  await region.getByRole('checkbox').check();
+  try {
+    await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: false } });
+    await region.getByRole('button', { name: 'Salva nuova versione', exact: true }).click();
+    await expect(region).toContainText('Documento non disponibile per questa operazione.');
+    expect(await db.documentVersion.count({ where: { documentId: doc.id } })).toBe(2);
+    expect(await db.auditLog.count({ where: { entityId: doc.id, event: 'document_version_upload' } })).toBe(1);
+    await documentContextScreens(page, 'document-version-revoked');
+  } finally { await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: true } }); }
+});
 
 for (const role of ['admin', 'consulente']) for (const action of ['create', 'edit', 'status'] as const) {
   test(`P2-01 ${role}: real ${action} action on a page opened before suspension preserves rows and audit`, async ({ page }) => {
