@@ -306,12 +306,18 @@ test('practice upload retains exact context and ordinary technician opens the fi
     await expect(viewer.locator('body')).toContainText(file.buffer.toString());
     const download = await t.request.get(`/documents/${doc.id}/download`);
     expect(download.status()).toBe(200); expect(await download.body()).toEqual(file.buffer);
-    expect((await o.request.get(`/documents/${doc.id}/view`)).status()).toBe(404);
-    expect((await o.request.get(`/documents/${doc.id}/download`)).status()).toBe(404);
+    for (const intent of ['view', 'download']) {
+      const denied = await o.request.get(`/documents/${doc.id}/${intent}`);
+      expect(denied.status()).toBe(403); expect(await denied.text()).toBe('Documento non disponibile');
+      expect(denied.headers()['cache-control']).toContain('no-store');
+    }
     const before = await db.auditLog.count({ where: { actorId: tech.userId, entityId: doc.id, event: { in: ['document_view', 'document_download'] } } });
     await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: false } });
-    expect((await viewer.reload())?.status()).toBe(404);
-    expect((await t.request.get(`/documents/${doc.id}/download`)).status()).toBe(404);
+    expect((await viewer.reload())?.status()).toBe(403);
+    await expect(viewer.locator('body')).toHaveText('Documento non disponibile');
+    const revokedDownload = await t.request.get(`/documents/${doc.id}/download`);
+    expect(revokedDownload.status()).toBe(403); expect(await revokedDownload.text()).toBe('Documento non disponibile');
+    expect(revokedDownload.headers()['cache-control']).toContain('no-store');
     expect(await db.auditLog.count({ where: { actorId: tech.userId, entityId: doc.id, event: { in: ['document_view', 'document_download'] } } })).toBe(before);
     await viewer.close();
     writeFileSync(join(root, 'document-context-ordinary-proof.json'), JSON.stringify({ synthetic: true, exactContext: true, persistedOnce: true,

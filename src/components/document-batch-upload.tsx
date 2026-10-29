@@ -24,8 +24,17 @@ export function DocumentBatchUpload({ children, className, submitLabel = 'Carica
     busyRef.current = true;
     setBusy(true);
     setAttempted(true);
-    try { await uploadSelection(files, form, uploadDocumentForBatch, ({ index, result }) => setResults(previous => ({ ...previous, [index]: result }))); }
-    finally { busyRef.current = false; setBusy(false); router.refresh(); }
+    let allSucceeded = true;
+    try { await uploadSelection(files, form, uploadDocumentForBatch, ({ index, result }) => {
+      allSucceeded = allSucceeded && result.ok;
+      setResults(previous => ({ ...previous, [index]: result }));
+    }); }
+    finally {
+      busyRef.current = false; setBusy(false);
+      // A refresh after a revocation can unmount this form and hide its result.
+      // Keep rejected and uncertain outcomes visible without resending files.
+      if (allSucceeded) router.refresh();
+    }
   }
   return <form action={submit} className={className}>
     <InteractiveReadyMarker />

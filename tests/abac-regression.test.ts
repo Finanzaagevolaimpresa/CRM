@@ -157,7 +157,7 @@ test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', 
 });
 
 test('documenti e checklist invocano le guardie ABAC prima delle scritture', () => {
-  assertGuardsBeforeMutation('uploadDocument', ['requirePermission'], 'storeUploadedDocument');
+  assertGuardsBeforeMutation('uploadDocument', ['getSession', 'hasPermission'], 'storeUploadedDocument');
   const uploadPath = resolve(process.cwd(), 'src/lib/document-upload.ts');
   const uploadSource = ts.createSourceFile(uploadPath, readFileSync(uploadPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   // The guarded service owns file, document, version and atomic success receipt.

@@ -14,7 +14,7 @@ import { appendResponsibilityDecision, requireUnboundServiceAssignment } from '.
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
-import { hasPermission, requirePermission, type AuthSession } from './auth';
+import { getSession, hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
@@ -893,7 +893,8 @@ export async function createProjectExpense(form: FormData) {
 }
 
 export async function uploadDocument(form: FormData) {
-  const actor = await requirePermission('document.upload');
+  const actor = await getSession();
+  if (!actor || !hasPermission(actor, 'document.upload')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   try { return await storeUploadedDocument(prisma, actor, form); }
   catch (error) {
     if (error instanceof Error && /^(File |Estensione |Nome file |Dimensione file |Il file non è)/.test(error.message)) throw new UserFacingActionError(error.message);

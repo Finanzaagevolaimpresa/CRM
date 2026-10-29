@@ -180,6 +180,7 @@ test('Rome wall input persists the right instant from foreign browser zones and 
   expect(await db.auditLog.count()).toBe(auditBefore + 1);
   await admin.reload();
   await ordinary.getByLabel('Scadenza operativa · Europe/Rome', { exact: true }).fill('2027-07-10T18:00');
+  await expect(ordinary.locator('input[type="hidden"][name="dueDate"]')).toHaveValue('2027-07-10T16:00:00.000Z');
   await ordinary.getByRole('button', { name: 'Salva dati', exact: true }).click();
   await expect.poll(async () => (await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).dueDate?.toISOString()).toBe('2027-07-10T16:00:00.000Z');
   await admin.reload();
