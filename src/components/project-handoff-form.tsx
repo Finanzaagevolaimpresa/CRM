@@ -35,7 +35,7 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
       title, practiceType, targetEntity: entity, commercialOwnerId: commercial || null, technicalOwnerId: technical || null };
     try {
       const result = await previewProjectHandoffAction(input);
-      if (result.ok) { setCommand(input); setCommandId(input.commandId); setPreview(result.preview); }
+      if (result.ok) { setCommand(input); setCommandId(input.commandId); setPreview(result.preview); setNeedsStepUp(false); }
       else setMessage(result.message);
     } catch { setMessage('Riepilogo non disponibile. Nessun salvataggio richiesto.'); }
     finally { setBusy(false); }
@@ -46,7 +46,7 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
     try {
       const { digest, expiresAt, proof } = preview;
       const result = await confirmProjectHandoffAction(command, { digest, expiresAt, proof });
-      if (result.ok) { setPracticeId(result.result.practiceId); setMessage('Pratica preparata. La presa in carico e l’avvio del servizio restano da verificare.'); }
+      if (result.ok) { setPracticeId(result.result.practiceId); setNeedsStepUp(false); setMessage('Pratica preparata. La presa in carico e l’avvio del servizio restano da verificare.'); }
       else {
         setMessage(result.message); setUncertain(!result.definite);
         setNeedsStepUp(result.stepUpRequired);

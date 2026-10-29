@@ -15,6 +15,7 @@ import { technicalPrivateItemAdmission, technicalPrivateItemCommand, technicalPr
 import { previewTechnicalPrivateItemCreation } from './technical-private-item-proof';
 import { prepareTechnicalPrivateItemRecord } from './technical-private-item-journal';
 import { loadTechnicalPrivateItemRecord, persistTechnicalPrivateItem } from './technical-private-item-persistence';
+import { lockPrivateItemAttempt, readPrivateItemClosure, persistPrivateItemClosure } from './technical-private-item-attempt';
 
 type Tx = Prisma.TransactionClient;
 function deny(): never { throw new TechnicalAssignmentError('DENIED'); }
@@ -77,8 +78,11 @@ async function outcome(tx: Tx, state: TechnicalAssignmentTransaction, target: Te
   commandId: string, command?: TechnicalPrivateItemCommand) {
   const saved = await loadTechnicalPrivateItemRecord(tx, state, commandId);
   if (!saved) return null;
-  if (saved.receipt.actorId !== state.current.userId || saved.receipt.sessionId !== state.current.sessionId
-    || saved.receipt.authorityRevision !== state.authority.revision || saved.admission.actorEpoch !== state.actor.recordUpdateEpoch
+  // Historical consultation by the same currently admitted personal Admin is
+  // independent of the original login. A mutation/replay still requires the
+  // original session, actor epoch, authority revision and exact command.
+  if (saved.receipt.actorId !== state.current.userId || (command && (saved.receipt.sessionId !== state.current.sessionId
+    || saved.receipt.authorityRevision !== state.authority.revision || saved.admission.actorEpoch !== state.actor.recordUpdateEpoch))
     || canonicalJson(saved.command.target) !== canonicalJson(target)
     || (command && saved.receipt.requestDigest !== technicalPrivateItemRequestDigest(command))) stale();
   return saved.receipt;
@@ -90,7 +94,9 @@ export async function confirmPrivateTechnicalItem(db: PrismaClient, claimed: Aut
   const command = technicalPrivateItemCommand.parse(raw);
   if (canonicalJson(raw) !== canonicalJson(command)) stale();
   return withTechnicalPrivateItemDecision(db, claimed, command.target.kind, proof, async (tx, state) => {
+    await lockPrivateItemAttempt(tx, command.commandId);
     const locked = await lockedTarget(tx, state, command.target, true);
+    if (await readPrivateItemClosure(tx, state, command.target, command.commandId)) stale();
     const previous = await outcome(tx, state, command.target, command.commandId, command);
     if (previous) return previous;
     const current = admission(state, command.target, locked);
@@ -108,8 +114,21 @@ export async function readPrivateTechnicalItemOutcome(db: PrismaClient, claimed:
   const target = technicalTargetReference.parse(rawTarget);
   z.string().uuid().parse(commandId);
   return withTechnicalAssignmentManagementRead(db, claimed, target.kind, null, async (tx, state) => {
+    await lockPrivateItemAttempt(tx, commandId);
     await lockedTarget(tx, state, target, false);
     const receipt = await outcome(tx, state, target, commandId);
-    return receipt ? { status: 'RECORDED' as const, receipt } : { status: 'NOT_OBSERVED' as const };
+    return receipt ? { status: 'RECORDED' as const, receipt } : await readPrivateItemClosure(tx, state, target, commandId) ?? { status: 'NOT_OBSERVED' as const };
+  });
+}
+
+/** Serializes with confirmation. A negative observation becomes a durable
+ * closure before the UI permits a new operation; late original requests fail. */
+export async function closePrivateTechnicalItemAttempt(db: PrismaClient, claimed: AuthSession, proof: TechnicalAssignmentPersonalProof,
+  rawTarget: unknown, commandId: string, confirmed: boolean) {
+  if (confirmed !== true) deny(); const target = technicalTargetReference.parse(rawTarget); z.string().uuid().parse(commandId);
+  return withTechnicalPrivateItemDecision(db, claimed, target.kind, proof, async (tx, state) => {
+    await lockPrivateItemAttempt(tx, commandId); await lockedTarget(tx, state, target, true);
+    const receipt = await outcome(tx, state, target, commandId);
+    return receipt ? { status: 'RECORDED' as const, receipt } : persistPrivateItemClosure(tx, state, target, commandId);
   });
 }

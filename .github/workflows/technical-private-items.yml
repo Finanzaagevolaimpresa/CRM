@@ -91,8 +91,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/technical-private-items-db.test.ts | tee "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 13' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 13' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 14' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 14' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
       - name: Prepare isolated native browser

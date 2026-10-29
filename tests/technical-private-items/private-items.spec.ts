@@ -144,11 +144,29 @@ test('lost native response recovers the single creation receipt without another 
   await page.getByRole('button', { name: 'Crea elemento privato', exact: true }).click(); await complete;
   await page.unroute('**/assignments/create**'); expect(forwarded).toBe(1);
   expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(1);
-  await page.reload(); await expect(page.getByRole('button', { name: 'Crea elemento privato', exact: true })).toHaveCount(0);
+  const recoveryUrl = page.url(); await login(page, fixture.adminEmail, true); await page.goto(recoveryUrl);
+  await expect(page.getByRole('button', { name: 'Crea elemento privato', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Verifica esito della creazione', exact: true }).click();
   await expect(page.getByText('Creazione già registrata. L’elemento resta privato finché non scegli chi potrà utilizzarlo.', { exact: true })).toBeVisible();
   await screenshot(page, 'private-creation-recovery');
   expect(await db.auditLog.count({ where: { id: command.commandId } })).toBe(1);
+  const absent = await preview(page, row, 'Task', 'Richiesta interrotta prima del server');
+  let late: { url: string; body: Buffer; headers: Record<string, string> } | undefined;
+  await page.route('**/assignments/create**', async route => {
+    const request = route.request(); if (request.method() !== 'POST' || !request.headers()['next-action']) return route.continue();
+    late = { url: request.url(), body: request.postDataBuffer()!, headers: { 'next-action': request.headers()['next-action'], 'content-type': request.headers()['content-type'], origin: new URL(request.url()).origin } };
+    await route.abort('failed');
+  });
+  await page.getByRole('button', { name: 'Crea elemento privato', exact: true }).click();
+  await expect.poll(() => Boolean(late)).toBe(true); await page.unroute('**/assignments/create**'); await page.reload();
+  await page.getByRole('button', { name: 'Verifica esito della creazione', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Riconcilia e chiudi la creazione non registrata', exact: true })).toBeVisible();
+  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Riconcilia e chiudi la creazione non registrata', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Prepara una nuova creazione', exact: true })).toBeVisible();
+  expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: absent.commandId } })).toBe(0);
+  await page.request.post(late!.url, { headers: late!.headers, data: late!.body });
+  expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: absent.commandId } })).toBe(0);
+  expect(await db.auditLog.count({ where: { id: 'technical-private-attempt:' + absent.commandId } })).toBe(1);
 });
 test('revocation of the open Admin session prevents native confirmation and creates no private row', async ({ page }) => {
   const row = fixture.rows[3]; await login(page, fixture.adminEmail, true);

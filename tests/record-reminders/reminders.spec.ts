@@ -231,7 +231,8 @@ test('Admin personal confirmation, current session and direct-route permissions 
   await login(page, f.admin, false); await login(tech, f.techA); await login(other, f.otherAdmin, false);
   const before = await readOnlyCounts(); await open(page, row);
   await select(page, row.taskId, futureMinute(), [f.techA]);
-  await expect(page.getByRole('status')).toContainText('Operazione non registrata');
+  await expect(page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  await expect(page.getByText('Conferma la tua identità. Le scelte del promemoria restano disponibili; nessuna operazione è stata eseguita.', { exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Riepilogo promemoria', exact: true })).toHaveCount(0);
   expect((await tech.goto(setupPath(row)))?.status()).toBe(404);
   expect((await tech.goto('/notifications/reminders'))?.status()).toBe(404);

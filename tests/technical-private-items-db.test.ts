@@ -7,7 +7,7 @@ import { syntheticAuthority, syntheticPerson, syntheticSession } from './selecti
 import { leadProof, type Person } from './selective-leads/fixtures';
 import { technicalFixture, technicalTarget, assignTechnical, revokeTechnical, type TechnicalFixture } from './technical-assignments/fixtures';
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem,
-  readPrivateTechnicalItemOutcome } from '../src/lib/technical-private-item-service';
+  readPrivateTechnicalItemOutcome, closePrivateTechnicalItemAttempt } from '../src/lib/technical-private-item-service';
 import { readTechnicalAssignmentManagement } from '../src/lib/technical-assignment-management';
 import { readTechnicalWorkItem, previewTechnicalWorkItem, confirmTechnicalWorkItem } from '../src/lib/technical-work-item-service';
 import { technicalWorkItemCommand } from '../src/lib/technical-work-item-command';
@@ -40,6 +40,25 @@ async function prepare(f: TechnicalFixture, kind: TechnicalPrivateItemCommand['k
 }
 type Prepared = Awaited<ReturnType<typeof prepare>>;
 const confirm = (p: Prepared, client = db) => confirmPrivateTechnicalItem(client, p.person.session, p.proof, p.command, p.preview.token, true);
+test('private creation reconciliation durably closes absent writes, serializes competing confirmation and reads a recorded receipt after a fresh login', options, async () => {
+  const f = await technicalFixture(db, admin), p = await prepare(f);
+  const close = () => closePrivateTechnicalItemAttempt(db, admin.session, p.proof, p.target, p.command.commandId, true);
+  assert.equal((await readPrivateTechnicalItemOutcome(db, admin.session, p.target, p.command.commandId)).status, 'NOT_OBSERVED');
+  assert.equal((await close()).status, 'CLOSED_WITHOUT_RECEIPT'); assert.equal((await close()).status, 'CLOSED_WITHOUT_RECEIPT');
+  await assert.rejects(confirm(p)); assert.equal(await db.task.count({ where: { id: p.command.itemId } }), 0);
+  assert.equal(await db.auditLog.count({ where: { id: 'technical-private-attempt:' + p.command.commandId } }), 1);
+  const second = await prepare(f), fresh = { ...admin, ...await syntheticSession(db, admin.user) };
+  await confirm(second);
+  assert.equal((await readPrivateTechnicalItemOutcome(db, fresh.session, second.target, second.command.commandId)).status, 'RECORDED');
+  assert.equal((await closePrivateTechnicalItemAttempt(db, fresh.session, leadProof(fresh), second.target, second.command.commandId, true)).status, 'RECORDED');
+  assert.equal(await db.auditLog.count({ where: { id: 'technical-private-attempt:' + second.command.commandId } }), 0);
+  const race = await prepare(f);
+  await Promise.allSettled([confirm(race), closePrivateTechnicalItemAttempt(db, admin.session, race.proof, race.target, race.command.commandId, true)]);
+  const final = await closePrivateTechnicalItemAttempt(db, admin.session, race.proof, race.target, race.command.commandId, true);
+  assert(['RECORDED', 'CLOSED_WITHOUT_RECEIPT'].includes(final.status));
+  assert.equal(await db.technicalPrivateItemOrigin.count({ where: { commandId: race.command.commandId } }), final.status === 'RECORDED' ? 1 : 0);
+  if (final.status !== 'RECORDED') await assert.rejects(confirm(race));
+});
 async function count() { return { origins: await db.technicalPrivateItemOrigin.count(), tasks: await db.task.count(),
   checks: await db.documentChecklistItem.count(), audits: await db.auditLog.count(), assignments: await db.technicalAssignment.count(),
   notifications: await db.recordUpdateDelivery.count(), emails: await db.approvedCommunication.count() }; }
@@ -161,11 +180,17 @@ test('a changed context or archived target invalidates preview even when restore
   const current = await prepare(f); await confirm(current);
   assert.equal(await db.task.count({ where: { id: p.command.itemId } }), 0);
 });
-test('a new session may not read or replay another session receipt even for the same personal Admin', options, async () => {
+test('a fresh active session of the same personal Admin can reconcile history but cannot replay another session command', options, async () => {
   const f = await technicalFixture(db, admin), p = await prepare(f); await confirm(p);
   const fresh = { ...await syntheticSession(db, admin.user), user: admin.user };
-  await assert.rejects(readPrivateTechnicalItemOutcome(db, fresh.session, p.target, p.command.commandId));
+  const recorded = await readPrivateTechnicalItemOutcome(db, fresh.session, p.target, p.command.commandId);
+  assert.equal(recorded.status, 'RECORDED');
+  if (recorded.status === 'RECORDED') assert.equal(recorded.receipt.sessionId, admin.session.sessionId);
   await assert.rejects(confirm({ ...p, person: fresh, proof: leadProof(fresh) }));
+  const outsider = await syntheticPerson(db, 'Altro Admin senza autorità personale', 'admin');
+  await assert.rejects(readPrivateTechnicalItemOutcome(db, outsider.session, p.target, p.command.commandId));
+  await db.internalSession.update({ where: { id: fresh.session.sessionId! }, data: { revokedAt: new Date() } });
+  await assert.rejects(readPrivateTechnicalItemOutcome(db, fresh.session, p.target, p.command.commandId));
   assert.deepEqual(await readPrivateTechnicalItemOutcome(db, admin.session, p.target, randomUUID()), { status: 'NOT_OBSERVED' });
 });
 test('database failure at the audit boundary rolls back canonical row, generation and origin together', options, async () => {

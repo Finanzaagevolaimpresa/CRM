@@ -8,7 +8,7 @@ import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation, PrivilegedAdmissionRequired } from './privileged-access';
 import { TechnicalAssignmentError } from './technical-assignment-transaction';
 import { technicalTargetReference, technicalManagementPath } from './technical-assignment-display';
-import { previewPrivateTechnicalItem, confirmPrivateTechnicalItem, readPrivateTechnicalItemOutcome } from './technical-private-item-service';
+import { previewPrivateTechnicalItem, confirmPrivateTechnicalItem, readPrivateTechnicalItemOutcome, closePrivateTechnicalItemAttempt } from './technical-private-item-service';
 import type { TechnicalPrivateItemState } from './technical-private-item-ui-state';
 
 function json(form: FormData, field: string) {
@@ -58,6 +58,16 @@ export async function checkPrivateTechnicalItem(_state: TechnicalPrivateItemStat
       String(form.get('commandId') ?? ''));
     return outcome.status === 'RECORDED'
       ? { ok: true, message: 'Creazione già registrata. L’elemento resta privato finché non scegli chi potrà utilizzarlo.', outcome }
+      : outcome.status === 'CLOSED_WITHOUT_RECEIPT' ? { ok: true, message: 'Tentativo chiuso senza creazione. Le richieste tardive dello stesso comando sono bloccate.', outcome }
       : { ok: false, uncertain: true, message: 'Ricevuta non osservata. Attendi la riconciliazione senza ripetere la creazione.', outcome };
   } catch { return { ok: false, uncertain: true, message: 'Esito non disponibile con la sessione e il contesto correnti. Non ripetere la creazione.' }; }
+}
+export async function closePrivateTechnicalItemAction(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
+  const session = await requireSession();
+  try { await origin(); await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true });
+    const outcome = await closePrivateTechnicalItemAttempt(prisma, session, await proof(), json(form, 'target'), String(form.get('commandId') ?? ''), form.get('confirmed') === 'on');
+    return { ok: true, outcome, message: outcome.status === 'RECORDED' ? 'Creazione già registrata. Nessun nuovo elemento creato.'
+      : 'Tentativo chiuso senza creazione. Le richieste tardive dello stesso comando sono bloccate.' };
+  } catch (error) { return error instanceof PrivilegedAdmissionRequired ? error.formState
+    : { ok: false, uncertain: true, message: 'Riconciliazione non confermata. Conserva il riferimento e riprova soltanto la verifica.' }; }
 }

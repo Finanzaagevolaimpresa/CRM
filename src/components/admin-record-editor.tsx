@@ -62,12 +62,12 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
               value={values[field.name]} entityType={field.dependsOn ? values[field.dependsOn] : undefined} onChange={change} />
               : field.type === 'date' ? <RomeDateTimeInput label={field.label} value={values[field.name]} onChange={change} required={field.required} className={fieldClass} />
               : <label className="block font-semibold">{field.label}
-                {field.type === 'boolean' ? <select className={fieldClass} value={values[field.name]} onChange={event => change(event.target.value)}><option value="true">Sì</option><option value="false">No</option></select>
-                  : field.type === 'select' ? <select className={fieldClass} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)}>
+                {field.type === 'boolean' ? <select aria-label={field.label} className={fieldClass} value={values[field.name]} onChange={event => change(event.target.value)}><option value="true">Sì</option><option value="false">No</option></select>
+                  : field.type === 'select' ? <select aria-label={field.label} className={fieldClass} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)}>
                     <option value="">Nessuna selezione</option>{field.options?.filter(option => !field.dependsOn || option.group === values[field.dependsOn])
                       .map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-                  : ['longtext', 'json'].includes(field.type) ? <textarea className={fieldClass} rows={5} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)} />
-                    : <input className={fieldClass} required={field.required} type={field.type === 'number' ? 'number' : 'text'}
+                  : ['longtext', 'json'].includes(field.type) ? <textarea aria-label={field.label} className={fieldClass} rows={5} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)} />
+                    : <input aria-label={field.label} className={fieldClass} required={field.required} type={field.type === 'number' ? 'number' : 'text'}
                       step={field.type === 'number' ? 'any' : undefined} value={values[field.name]} onChange={event => change(event.target.value)} />}
               </label>}
             {field.help && <p className="text-sm">{field.help}</p>}
