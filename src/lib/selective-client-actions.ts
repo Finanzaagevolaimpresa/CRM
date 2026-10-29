@@ -6,13 +6,14 @@ import { ZodError } from 'zod';
 import { requirePermission } from './auth';
 import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { requireEnforcedPrivilegedMutation, privilegedStepUpCookieName } from './privileged-access';
+import { PrivilegedAdmissionRequired, requireEnforcedPrivilegedMutation, privilegedStepUpCookieName } from './privileged-access';
 import { confirmClientSharing, previewClientSharing, revokeClientSharing, readClientSharingReceipt, ClientSharingError } from './selective-client-access';
 
-export type ClientSharingState = { ok: boolean; message: string; uncertain?: boolean;
+export type ClientSharingState = { ok: boolean; message: string; stepUpRequired?: boolean; uncertain?: boolean;
   preview?: Awaited<ReturnType<typeof previewClientSharing>>;
   receipt?: NonNullable<Awaited<ReturnType<typeof readClientSharingReceipt>>> };
 function failure(error: unknown): ClientSharingState {
+  if (error instanceof PrivilegedAdmissionRequired) return error.formState;
   if (error instanceof ZodError) return { ok: false, message: 'Selezione non valida. Prepara una nuova anteprima.' };
   if (error instanceof ClientSharingError) return { ok: false, message: error.code === 'STALE'
     ? 'Dati, destinatario o permessi cambiati. Ricarica la scheda e prepara una nuova anteprima.'
@@ -37,8 +38,8 @@ export async function prepareClientSharing(_previous: ClientSharingState, form: 
 }
 export async function confirmClientSharingAction(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
   const session = await requirePermission('client.write');
-  await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_CLIENT_ACCESS_CONFIRM');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_CLIENT_ACCESS_CONFIRM', { inline: true });
     if (form.get('confirmed') !== 'on') throw new ClientSharingError('DENIED');
     const receipt = await confirmClientSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')),
       String(form.get('token') ?? ''), await credentials());
@@ -48,8 +49,8 @@ export async function confirmClientSharingAction(_previous: ClientSharingState, 
 }
 export async function revokeClientSharingAction(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
   const session = await requirePermission('client.write');
-  await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_CLIENT_ACCESS_REVOKE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_CLIENT_ACCESS_REVOKE', { inline: true });
     if (form.get('confirmed') !== 'on') throw new ClientSharingError('DENIED');
     const receipt = await revokeClientSharing(prisma, session, { grantId: String(form.get('grantId') ?? ''),
       revision: Number(form.get('revision')), commandId: String(form.get('commandId') ?? '') }, await credentials());

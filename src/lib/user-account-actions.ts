@@ -7,7 +7,7 @@ import { redirect } from 'next/navigation';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { withSerializableTransaction } from './serializable';
-import { clearPrivilegedStepUpCookie, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { PrivilegedAdmissionRequired, clearPrivilegedStepUpCookie, requireEnforcedPrivilegedMutation } from './privileged-access';
 import { accountProfileSchema, passwordChangeSchema, passwordResetSchema, type AccountFormState } from './user-account-contract';
 import { changeAccountPassword, resetAccountPassword, revokeAccountSessions, updateAccountProfile } from './user-account-service';
 import { internalSessionMode } from './session';
@@ -32,7 +32,8 @@ async function mutate(operation: Operation, form: FormData): Promise<AccountForm
   let privilegedAdmission = false;
   if (adminOperation) {
     if (session.role !== 'admin') return { ok: false, message: 'Solo un amministratore può modificare l’email di accesso o altri account.' };
-    await requireEnforcedPrivilegedMutation(session, 'USER_ACCOUNT_UPDATE');
+    try { await requireEnforcedPrivilegedMutation(session, 'USER_ACCOUNT_UPDATE', { inline: true }); }
+    catch (error) { if (error instanceof PrivilegedAdmissionRequired) return error.formState; throw error; }
     privilegedAdmission = true;
   }
   let result: AccountFormState & { sessionRevoked?: boolean };

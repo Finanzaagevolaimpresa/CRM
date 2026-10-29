@@ -1,4 +1,5 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 import { useActionState, useState } from 'react';
 import { confirmSharing, prepareSharingPreview, revokeSharing, type SharingState } from '@/lib/selective-project-actions';
@@ -42,7 +43,7 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
       <button type="submit" disabled={preparing || !recipientId} className="rounded bg-blue-900 px-4 py-2 text-white">{preparing ? 'Preparazione…' : 'Anteprima come utente'}</button>
       <p role="status">{preview.message}</p>
     </form>
-    {preview.preview && previewGeneration === generation && !confirmation.ok && <>
+    {!preparing && preview.preview && previewGeneration === generation && !confirmation.ok && <>
       <div className="rounded border border-amber-500 p-4"><h2 className="font-semibold">Impatto prima della conferma — {preview.preview.recipientName} · {preview.preview.recipientEmail}</h2>
         <p>{preview.preview.impact.previouslyFullProjectAccess ? 'La persona dispone già di accesso ordinario al progetto: verrà sostituito dalla sola selezione.' : 'La persona potrà consultare soltanto la selezione approvata.'}</p>
         <p>Ruoli globali, assegnazioni, perimetri cliente e override non amplieranno questa selezione. Modifica, caricamento, invio e assegnazione saranno bloccati sul progetto. Gli altri fascicoli mantengono i propri permessi.</p>
@@ -57,13 +58,14 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
       </form>
     </>}
     <p role="status">{confirmation.message}</p>
+    {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
     <section><h2 className="text-xl font-bold">Concessioni precedenti</h2>{grants.map(row => <Revoke key={`${row.id}:${row.revision}`} grant={row} name={recipients.find(person => person.id === row.recipientId)?.name ?? 'Persona non attiva'} />)}</section>
   </div>;
 }
 function Revoke({ grant, name }: { grant: Grant; name: string }) {
   const [state, action, pending] = useActionState(revokeSharing, initial);
-  return <form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.suspended ? 'Sospesa: serve una nuova anteprima e conferma personale' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
+  return <div><form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.suspended ? 'Sospesa: serve una nuova anteprima e conferma personale' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
     <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} />
     {!grant.revoked && !state.ok && <button disabled={pending} className="underline">Revoca accesso</button>}<p role="status">{grant.revoked ? 'Accesso revocato.' : state.message}</p>
-  </form>;
+  </form>{state.stepUpRequired && <InlinePrivilegedConfirmation />}</div>;
 }

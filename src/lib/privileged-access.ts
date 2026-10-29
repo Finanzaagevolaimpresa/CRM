@@ -139,10 +139,25 @@ export async function requirePrivilegedMutation(
   return session;
 }
 
+export class PrivilegedAdmissionRequired extends Error {
+  constructor(readonly status: 'required' | 'unavailable') { super(`PRIVILEGED_ADMISSION_${status.toUpperCase()}`); }
+  get formState() {
+    return { ok: false as const, stepUpRequired: this.status === 'required',
+      message: this.status === 'required'
+        ? 'Conferma la tua identità qui sotto. Le scelte sono conservate; poi conferma nuovamente l’operazione.'
+        : 'Conferma privilegiata non disponibile. Le scelte sono conservate; nessuna operazione è stata eseguita.' };
+  }
+}
+
 export async function requireEnforcedPrivilegedMutation(
   session: AuthSession,
   action: PrivilegedMutationCode,
+  options: { inline?: boolean } = {},
 ) {
+  function deny(status: 'required' | 'unavailable'): never {
+    if (options.inline) throw new PrivilegedAdmissionRequired(status);
+    redirect(`/settings/security?status=${status}`);
+  };
   let mode: 'disabled' | 'enforced';
   try {
     mode = privilegedAccessMode();
@@ -151,21 +166,21 @@ export async function requireEnforcedPrivilegedMutation(
       code: 'CONFIGURATION_INVALID',
       action,
     });
-    redirect('/settings/security?status=unavailable');
+    deny('unavailable');
   }
   if (mode !== 'enforced') {
     await auditStepUp(session.userId, 'blocked_privileged_step_up', {
       code: 'ENFORCEMENT_REQUIRED',
       action,
     });
-    redirect('/settings/security?status=unavailable');
+    deny('unavailable');
   }
   if (!await mutationOriginAllowed()) {
     await auditStepUp(session.userId, 'blocked_privileged_step_up', {
       code: 'ORIGIN_DENIED',
       action,
     });
-    redirect('/settings/security?status=required');
+    deny('required');
   }
   const store = await cookies();
   const sessionToken = store.get(sessionCookieName)?.value;
@@ -176,7 +191,7 @@ export async function requireEnforcedPrivilegedMutation(
       code: 'KEY_UNAVAILABLE',
       action,
     });
-    redirect('/settings/security?status=unavailable');
+    deny('unavailable');
   }
   if (!sessionToken || !stepUpToken || !verifyPrivilegedStepUpToken({
     token: stepUpToken,
@@ -189,7 +204,7 @@ export async function requireEnforcedPrivilegedMutation(
       code: 'STEP_UP_REQUIRED',
       action,
     });
-    redirect('/settings/security?status=required');
+    deny('required');
   }
   return session;
 }

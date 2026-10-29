@@ -1,4 +1,5 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
@@ -48,7 +49,7 @@ export function SelectivePracticeSharing({ practiceId, recipients, grants, initi
     expiresAt: expiresTime !== null && validExpiry ? new Date(expiresTime).toISOString() : null };
   const locked = confirming || confirmation.ok || !!confirmation.uncertain;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
-  const prepared = previewGeneration === generation && preview.preview;
+  const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId && preview.preview;
   return <div className="min-w-0 space-y-6" data-testid="practice-sharing" data-interactive-ready={ready}>
     {!operational && <p role="status">La pratica o un contesto collegato è sospeso o archiviato. Puoi revocare le selezioni esistenti; nuove concessioni richiedono un contesto operativo.</p>}
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-4">
@@ -93,7 +94,7 @@ export function SelectivePracticeSharing({ practiceId, recipients, grants, initi
       <p>{prepared.input.expiresAt ? `Scadenza: ${new Date(prepared.input.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza, revocabile in questa pagina.'}</p>
       <dl className="grid min-w-0 gap-3 rounded-xl bg-white p-4 sm:grid-cols-2">{prepared.fields.map(field => <div key={field.key} className="min-w-0"><dt className="font-semibold">{field.label}</dt><dd className="break-words whitespace-pre-wrap">{field.value}</dd></div>)}</dl>
       {!!prepared.documents.length && <div className="space-y-2 rounded-xl bg-white p-4"><h3 className="font-semibold">Versioni collegate alla pratica e visibili al destinatario</h3>{prepared.documents.map(document => <p key={document.versionId} className="break-words">{document.title} · versione {document.version} · {document.fileName} · {selectedDocumentAccessLabel(document, document.download)}</p>)}</div>}
-      <form action={confirm} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
+      <form action={confirm} onReset={event => event.preventDefault()} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
         <input type="hidden" name="selection" value={JSON.stringify(prepared.input)} /><input type="hidden" name="token" value={prepared.token} />
         <label className="flex items-start gap-2"><input required type="checkbox" name="confirmed" disabled={locked} />Confermo personalmente i campi, le versioni dei documenti, il destinatario e l’effetto sui permessi.</label>
         <p className="text-sm">È necessaria la conferma di sicurezza del profilo personale autorizzato.</p>
@@ -102,6 +103,7 @@ export function SelectivePracticeSharing({ practiceId, recipients, grants, initi
       <Receipt commandId={prepared.input.commandId} practiceId={practiceId} />
     </section>}
     <p role="status">{confirmation.message}</p>
+    {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
     {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => router.refresh()}>Ricarica lo stato corrente</button>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Selezioni e revoche</h2>
       {!grants.length && <p>Nessuna selezione registrata per questa pratica.</p>}
@@ -122,6 +124,7 @@ function Revoke({ grant, practiceId }: { grant: Grant; practiceId: string }) {
       <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
       <button disabled={pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
     </form>}
-    <p role="status">{state.message}</p>{!grant.revoked && <Receipt commandId={grant.commandId} practiceId={practiceId} />}
+    <p role="status">{state.message}</p>
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}{!grant.revoked && <Receipt commandId={grant.commandId} practiceId={practiceId} />}
   </div>;
 }

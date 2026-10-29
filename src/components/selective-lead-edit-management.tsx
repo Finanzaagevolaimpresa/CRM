@@ -1,10 +1,11 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 import { useActionState, useState } from 'react';
 import type { readLeadEditingManagement, previewLeadEditingSelection, readLeadEditingDecision } from '@/lib/selective-lead-edit-management';
 import { selectiveLeadEditableFields, type SelectiveLeadEditableField } from '@/lib/selective-lead-edit-policy';
 
-export type LeadEditManagementState = { ok: boolean; message: string; uncertain?: boolean;
+export type LeadEditManagementState = { ok: boolean; message: string; stepUpRequired?: boolean; uncertain?: boolean;
   preview?: Awaited<ReturnType<typeof previewLeadEditingSelection>>;
   receipt?: NonNullable<Awaited<ReturnType<typeof readLeadEditingDecision>>> };
 type Management = Awaited<ReturnType<typeof readLeadEditingManagement>>;
@@ -45,7 +46,7 @@ export function SelectiveLeadEditManagement({ data, initialCommandId, recoverCom
     readGrantId: person.readGrantId, readGrantRevision: person.readGrantRevision, readGrantProof: person.readGrantProof,
     revision: person.revision, commandId, fields, expiresAt: expiry !== null && validExpiry ? new Date(expiry).toISOString() : null } : null;
   const locked = confirming || result.ok || !!result.uncertain || !!recoverCommandId;
-  const prepared = previewGeneration === generation ? preview.preview : undefined;
+  const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId ? preview.preview : undefined;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   return <div className="min-w-0 space-y-6">
     <p>Abilita la modifica soltanto per una persona che dispone già di una selezione di lettura valida. Scegli separatamente i campi che potrà cambiare.</p>
@@ -89,6 +90,7 @@ export function SelectiveLeadEditManagement({ data, initialCommandId, recoverCom
       {result.uncertain && <Decision commandId={prepared.input.commandId} leadId={data.leadId} action={receiptAction} />}
     </section>}
     <p role="status">{result.message}</p>
+    {result.stepUpRequired && <InlinePrivilegedConfirmation />}
     {result.ok && <a className="font-semibold underline" href={`/leads/${data.leadId}/sharing/editing`}>Ricarica lo stato corrente</a>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Permessi di modifica registrati</h2>
       {!data.grants.length && <p>Nessuna abilitazione registrata.</p>}
@@ -112,6 +114,7 @@ function Revoke({ grant, blocked, leadId, action, receiptAction }: {
       <button className="font-semibold text-red-800 underline" disabled={blocked || pending || state.uncertain}>Revoca modifica</button>
     </form>}
     <p role="status">{state.message}</p>
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}
     {state.uncertain && <Decision commandId={commandId} leadId={leadId} action={receiptAction} />}
   </div>;
 }

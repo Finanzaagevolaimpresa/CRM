@@ -1,4 +1,5 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 import { useActionState, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
@@ -43,7 +44,7 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
     expiresAt: expiresTime !== null && validExpiry ? new Date(expiresTime).toISOString() : null };
   const locked = !ready || confirming || confirmation.ok || !!confirmation.uncertain;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
-  const prepared = previewGeneration === generation && preview.preview;
+  const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId && preview.preview;
   return <div className="min-w-0 space-y-6" data-testid="lead-sharing" data-interactive-ready={ready}>
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
@@ -69,7 +70,7 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
       <p>Alla revoca o alla scadenza, l’accesso precedente non si riattiva. Il ruolo Admin e le assegnazioni non ampliano la selezione.</p>
       <p>{prepared.input.expiresAt ? `Scadenza: ${new Date(prepared.input.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza, revocabile in questa pagina.'}</p>
       <dl className="grid min-w-0 gap-3 rounded-xl bg-white p-4 sm:grid-cols-2">{prepared.fields.map(field => <div key={field.key} className="min-w-0"><dt className="font-semibold">{field.label}</dt><dd className="break-words whitespace-pre-wrap">{field.value}</dd></div>)}</dl>
-      <form action={confirm} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
+      <form action={confirm} onReset={event => event.preventDefault()} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
         <input type="hidden" name="selection" value={JSON.stringify(prepared.input)} /><input type="hidden" name="token" value={prepared.token} />
         <label className="flex items-start gap-2"><input required type="checkbox" name="confirmed" disabled={locked} />Confermo personalmente i campi, il destinatario e l’effetto sui permessi.</label>
         <p className="text-sm">È necessaria la conferma di sicurezza del profilo personale autorizzato.</p>
@@ -78,6 +79,7 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
       <Receipt commandId={prepared.input.commandId} />
     </section>}
     <p role="status">{confirmation.message}</p>
+    {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
     {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => router.refresh()}>Ricarica lo stato corrente</button>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Selezioni e revoche</h2>
       {!grants.length && <p>Nessuna selezione registrata per questo lead.</p>}
@@ -98,6 +100,7 @@ function Revoke({ grant }: { grant: Grant }) {
       <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={!ready || pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
       <button disabled={!ready || pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
     </form>}
-    <p role="status">{state.message}</p>{!grant.revoked && <Receipt commandId={grant.commandId} />}
+    <p role="status">{state.message}</p>
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}{!grant.revoked && <Receipt commandId={grant.commandId} />}
   </div>;
 }

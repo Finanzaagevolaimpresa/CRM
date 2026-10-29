@@ -149,10 +149,19 @@ export async function settleTechnicalAssignmentAttempt(db: PrismaClient, claimed
   rawReference: TechnicalAssignmentReference, commandId: string) {
   const reference = technicalAssignmentReference.parse(rawReference);
   z.string().uuid().parse(commandId);
-  return withTechnicalAssignmentAttemptSettlement(db, claimed, reference.kind, reference.recipientId, async (tx, state) => {
+  let stage = 'admission';
+  try { return await withTechnicalAssignmentAttemptSettlement(db, claimed, reference.kind, reference.recipientId, async (tx, state) => {
+    stage = 'context';
     await lockedState(tx, state, reference, true, true);
+    stage = 'receipt';
     const receipt = await previousOutcome(tx, state, reference, commandId);
     if (receipt) return { status: 'RECORDED' as const, receipt };
+    stage = 'closure';
     return persistTechnicalAttemptClosure(tx, state, reference, commandId);
-  });
+  }); } catch (error) {
+    // Fixed diagnostic codes only: no subject, command, token or submitted data.
+    console.warn('TECHNICAL_ATTEMPT_SETTLEMENT_FAILED', stage,
+      error instanceof TechnicalAssignmentError ? error.code : 'UNAVAILABLE');
+    throw error;
+  }
 }

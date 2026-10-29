@@ -5,7 +5,7 @@ import { z, ZodError } from 'zod';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { PrivilegedAdmissionRequired, privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
 import { previewRecordUpdate, confirmRecordUpdate, readRecordUpdateReceipt } from './record-updates';
 import { readSelectedRecordNotice } from './record-reminder-notifications';
 import { RecordUpdateError } from './record-update-contract';
@@ -26,8 +26,8 @@ export async function previewRecordUpdateAction(raw: unknown) {
 }
 export async function confirmRecordUpdateAction(raw: unknown, digest: string) {
   const session = await requireSession();
-  await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true });
     const key = await loadActivePrivilegedStepUpKey(prisma);
     if (!key) throw new RecordUpdateError('DENIED');
     const store = await cookies();
@@ -41,7 +41,10 @@ export async function confirmRecordUpdateAction(raw: unknown, digest: string) {
     revalidatePath(`${base}/${input.recordId}`);
     revalidatePath(`/record-updates/${input.kind}/${input.recordId}`);
     return { ok: true as const, result };
-  } catch (error) { return { ok: false as const, message: errorMessage(error) }; }
+  } catch (error) {
+    if (error instanceof PrivilegedAdmissionRequired) return error.formState;
+    return { ok: false as const, stepUpRequired: false, uncertain: !(error instanceof ZodError || error instanceof SerializableConflictError || error instanceof RecordUpdateError), message: errorMessage(error) };
+  }
 }
 export async function verifyRecordUpdateResultAction(commandId: string) {
   const session = await requireSession();

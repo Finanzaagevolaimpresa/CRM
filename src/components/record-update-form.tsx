@@ -1,6 +1,7 @@
 'use client';
 import { useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import { ProjectParameterFields } from './project-parameter-fields';
 import { communicationRecipientGroups } from '@/lib/communication-recipient-groups';
 import { recordUpdateEvents, recordUpdateEventLabels, recordUpdateChangedLabels, type RecordUpdateEvent, type RecordUpdateMode } from '@/lib/record-update-labels';
@@ -39,6 +40,7 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
   const [confirmed, setConfirmed] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [consent, setConsent] = useState(false);
+  const [stepUpRequired, setStepUpRequired] = useState(false);
   const toggle = (values: string[], value: string) => values.includes(value) ? values.filter(x => x !== value) : [...values, value];
   const locked = busy || Boolean(preview) || confirmed || uncertain;
   const originator = setup.people.find(person => person.id === setup.originatorId);
@@ -61,7 +63,11 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
     try {
       const result = await confirmRecordUpdateAction(command, preview.digest);
       if (result.ok) { setConfirmed(true); setMessage('Operazione registrata. Gli avvisi sono disponibili soltanto ai destinatari ancora autorizzati.'); }
-      else { setMessage(result.message); setUncertain(true); }
+      else {
+        setMessage(result.message); setStepUpRequired(result.stepUpRequired);
+        setUncertain('uncertain' in result && result.uncertain);
+        if (!result.stepUpRequired && !('uncertain' in result && result.uncertain)) { setPreview(null); setConsent(false); }
+      }
     } catch { setUncertain(true); setMessage('Risposta non ricevuta. Verifica l’esito prima di un nuovo salvataggio.'); }
     finally { setBusy(false); }
   }
@@ -140,6 +146,7 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
       <p className="text-xs text-slate-600">È richiesta la conferma amministrativa personale attiva nelle impostazioni di sicurezza.</p>
     </section>}
     {message && <p role="status" className="rounded-xl bg-slate-100 p-3 text-sm">{message}</p>}
+    {stepUpRequired && <InlinePrivilegedConfirmation />}
     {uncertain && !confirmed && <button type="button" className={buttonClass} disabled={busy} onClick={verify}>Verifica esito</button>}
     {(confirmed || uncertain) && <a className="inline-block font-bold underline" href={setup.href}>Torna alla scheda aggiornata</a>}
     {setup.emailDraftsAvailable && <Link href="/communications/updates" className="block font-bold underline">Bozze da aggiornamenti</Link>}

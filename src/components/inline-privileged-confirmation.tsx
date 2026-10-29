@@ -1,8 +1,12 @@
 'use client';
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { establishPrivilegedStepUpInline } from '@/lib/privileged-access-actions';
 
 export function InlinePrivilegedConfirmation() {
+  const [attempt, setAttempt] = useState(0);
+  return <Confirmation key={attempt} again={() => setAttempt(value => value + 1)} />;
+}
+function Confirmation({ again }: { again: () => void }) {
   const [state, action, pending] = useActionState(establishPrivilegedStepUpInline, { ok: false, message: '' });
   return <section aria-label="Conferma identità senza lasciare il lavoro" className="space-y-3 rounded-xl border border-amber-400 bg-amber-50 p-4">
     <h2 className="font-bold">Conferma identità senza lasciare il lavoro</h2>
@@ -14,5 +18,6 @@ export function InlinePrivilegedConfirmation() {
         {pending ? 'Verifica in corso…' : 'Conferma identità e conserva le scelte'}</button>
     </form>}
     <p role="status">{state.message}</p>
+    {state.ok && <button type="button" className="font-semibold underline" onClick={again}>Riconferma identità se la finestra è scaduta</button>}
   </section>;
 }

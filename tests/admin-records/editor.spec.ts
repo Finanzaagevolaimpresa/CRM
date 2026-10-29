@@ -113,3 +113,46 @@ test('an unobserved attempt is durably closed before another command and the edi
   await expect(technician.getByRole('button', { name: 'Salva operazione', exact: true })).toHaveCount(0);
   await expect(technician.getByText(f.projects[4].title, { exact: true })).toHaveCount(0); await restricted.close();
 });
+
+test('account profile choices survive privileged expiry and commit only after inline reconfirmation', async ({ page, context }) => {
+  await login(page);
+  const target = await db.user.findUniqueOrThrow({ where: { email: f.technicianEmail } });
+  await page.goto(`/settings/users/${target.id}`);
+  const form = page.getByRole('form', { name: 'Modifica profilo', exact: true });
+  await form.getByRole('textbox', { name: 'Nome', exact: true }).fill('Tecnico sintetico corretto');
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await form.getByRole('button', { name: 'Salva profilo', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible();
+  await expect(form.getByRole('textbox', { name: 'Nome', exact: true })).toHaveValue('Tecnico sintetico corretto');
+  expect((await db.user.findUniqueOrThrow({ where: { id: target.id } })).name).toBe(target.name);
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await form.getByRole('button', { name: 'Salva profilo', exact: true }).click();
+  await expect(form).toContainText('Profilo aggiornato.');
+  await page.reload();
+  await expect(form.getByRole('textbox', { name: 'Nome', exact: true })).toHaveValue('Tecnico sintetico corretto');
+});
+
+test('selective client sharing keeps recipient and fields across expiry and grants only that selection', async ({ page, context }) => {
+  await login(page);
+  const target = await db.user.findUniqueOrThrow({ where: { email: f.technicianEmail } });
+  await page.goto(`/clients/${f.clientId}/sharing`);
+  await page.getByRole('combobox', { name: 'Persona esistente', exact: true }).selectOption(target.id);
+  const choice = page.getByRole('checkbox', { name: 'Denominazione', exact: true });
+  await choice.check();
+  await page.getByRole('button', { name: 'Anteprima come destinatario', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Riepilogo e anteprima', exact: true })).toBeVisible();
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await page.getByRole('checkbox', { name: /Confermo personalmente i campi del cliente/ }).check();
+  await page.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible(); await expect(choice).toBeChecked();
+  await expect(page.getByRole('combobox', { name: 'Persona esistente', exact: true })).toHaveValue(target.id);
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await page.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Accesso confermato:' })).toBeVisible();
+});
