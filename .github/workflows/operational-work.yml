@@ -1,0 +1,110 @@
+name: Unified authorized operational work
+on:
+  pull_request:
+    paths: ['prisma/**', 'package*.json', 'src/lib/operational-*', 'src/lib/technical-*', 'src/lib/selective-*', 'src/lib/access-control.ts', 'src/components/operational-*', 'src/app/dashboard/**', 'src/app/projects/**', 'src/app/technical-office/**', 'src/app/technical-work/**', 'tests/operational-work*', 'tests/operational-work/**', '.github/workflows/operational-work.yml']
+permissions: { contents: read }
+concurrency:
+  group: operational-work-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualify:
+    name: Unified operational work ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-r04-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-r04-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      RUN_OPERATIONAL_WORK_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-operational-auth-0000000000000
+      AUTH_COOKIE_NAME: fai_operational_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-operational-step-up-0000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3052
+      OPERATIONAL_BROWSER_CONFIRMED: '1'
+      TECHNICAL_BROWSER_PASSWORD: synthetic-operational-password-0000000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bind exact source and ephemeral database
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/operational-work"
+          mkdir -p "$evidence" "$RUNNER_TEMP/operational-documents"
+          echo "OPERATIONAL_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/operational-documents" >> "$GITHUB_ENV"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npx prisma migrate deploy
+          node scripts/m4/verify-schema.mjs > "$evidence/schema.json"
+          node --import tsx --test tests/operational-work-projection.test.ts tests/operational-time.test.ts
+      - name: Mixed current admission, hidden fields, pagination, revocation and session denial
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/operational-work-db.test.ts | tee "$OPERATIONAL_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 7' "$OPERATIONAL_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 7' "$OPERATIONAL_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$OPERATIONAL_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$OPERATIONAL_EVIDENCE/postgresql.tap"
+      - name: Prepare isolated ordinary and selective actors and documents
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/operational-work/provision.ts
+      - name: Native five views, real permitted bytes and role isolation
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3052 > "$OPERATIONAL_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3052/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$OPERATIONAL_EVIDENCE/playwright.json" npx playwright test --config tests/operational-work/playwright.config.ts --reporter=line,json | tee "$OPERATIONAL_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.OPERATIONAL_EVIDENCE+"/playwright.json"); if(r.stats.expected!==4 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind final source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$OPERATIONAL_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: operational-work-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/operational-work
+            test-results
+          if-no-files-found: error
+          retention-days: 14

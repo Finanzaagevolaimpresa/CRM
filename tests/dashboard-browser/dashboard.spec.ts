@@ -189,7 +189,8 @@ test('invalid or repeated practice filters show no records, and current permissi
   await page.context().clearCookies();
   await login(page, f.emails.technical);
   await page.goto('/technical-office/practices?dashboard=attive');
-  await expect(page.getByRole('table').getByRole('link', { name: /^Pratica sintetica/ })).toHaveCount(18);
+  await expect(page.locator('[data-operational-record]').filter({ has: page.getByRole('heading', { name: /^Pratica sintetica/ }) })).toHaveCount(18);
+  await expect(page.getByText('18 pratiche nel filtro autorizzato.', { exact: true })).toBeVisible();
   const technical = await db.user.findUniqueOrThrow({ where: { email: f.emails.technical } });
   expect(technical.role).toBe('consulente');
   await db.userPermissionOverride.create({ data: { userId: technical.id, permission: 'technical.read', allowed: false } });

@@ -9,9 +9,14 @@ import { canEditClient, canViewProject } from '@/lib/access-control';
 import { notFound } from 'next/navigation';
 import { listManagedProjectLifecycle } from '@/lib/project-lifecycle';
 import { ProjectLifecycleControls } from '@/components/project-lifecycle-controls';
-export default async function Page({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
+import { OperationalWorkList } from '@/components/operational-work-list';
+import { isOperationalTechnician } from '@/lib/operational-work';
+export default async function Page({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requirePermission('project.read');
-  const view = (await searchParams).view;
+  const query = await searchParams;
+  const view = query.view;
+  if (isOperationalTechnician(session.role) && view !== 'archive' && view !== 'trash' && query.new !== '1')
+    return <OperationalWorkList session={session} kind="Project" title="Progetti" path="/projects" query={query} />;
   const tabs = <nav aria-label="Stato progetti" className="flex flex-wrap gap-4">
     <Link href="/projects" className="font-bold underline">Progetti operativi</Link>
     {hasPermission(session, 'project.write') && <><Link href="/projects?view=archive" className="font-bold underline">Archivio</Link><Link href="/projects?view=trash" className="font-bold underline">Cestino</Link></>}
