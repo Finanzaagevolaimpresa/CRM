@@ -21,6 +21,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   return <div className="crm-space-y-6">
     <PageHeader title={`Azienda — ${company.name}`} description="Dati camerali, sede, ATECO, DURC, fatturato e persone collegate." />
     <SecondaryLink href={`/clients/${company.clientId}`}>← Torna al fascicolo cliente</SecondaryLink>
+    {session.role === 'admin' && <SecondaryLink href={`/admin/records/Company/${id}`}>Correggi dati, collegamenti e ripristino</SecondaryLink>}
     {canWrite && <div className="flex flex-wrap gap-3"><SecondaryLink href={`/companies/${id}/edit`}>Modifica azienda</SecondaryLink><SecondaryLink href={`/companies/${id}/people`}>Gestisci referenti</SecondaryLink></div>}
     <Card title="Dati azienda"><Table headers={['Campo','Valore']} rows={companyProfileFields.map(field => [field.label, values[field.name] || '—'])} /><TimestampMeta createdAt={company.createdAt} updatedAt={company.updatedAt} /></Card>
     <Card id="referenti" title="Titolari, soci e amministratori">{personRows.length === 0 ? <EmptyState title="Nessuna persona collegata" /> : <Table headers={['Persona','Ruolo','Email','Telefono','Quota']} rows={people.flatMap(link => { const person = personById.get(link.personId); return person ? [[`${person.firstName} ${person.lastName}`, link.role, person.email ?? '—', person.phone ?? '—', link.ownershipPercent !== null ? `${link.ownershipPercent}%` : '—']] : []; })} />}</Card>

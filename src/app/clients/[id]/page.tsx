@@ -314,6 +314,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   return <div className="client-detail-page crm-space-y-8">
     {clientHasOperationalHold(client.status) ? <Card title="Operatività sospesa"><p>{CLIENT_OPERATIONAL_HOLD_MESSAGE}</p></Card> : null}
     <PageHeader title={`Fascicolo Cliente Interno — ${client.displayName}`} description="Scheda operativa interna FAI: servizi acquistati, documenti per sezione, output AI in bozza con revisione umana obbligatoria e audit."/><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2">{session.role === 'admin' && hasPermission(session, 'practice_communications.write') ? <SecondaryLink href={`/communications?kind=CLIENT&practice=${client.id}`}>Scrivi email</SecondaryLink> : null}
+    {session.role === 'admin' && <SecondaryLink href={`/admin/records/Client/${client.id}`}>Correggi dati e gestisci ripristino</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/CLIENT/${client.id}`}>Chi aggiornare</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-reminders/CLIENT/${client.id}`}>Programma promemoria CRM</SecondaryLink>}
     {sharingAvailable && <SecondaryLink href={`/clients/${client.id}/sharing`}>Condividi accesso selettivo</SecondaryLink>}

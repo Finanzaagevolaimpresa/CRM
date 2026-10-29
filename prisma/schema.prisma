@@ -371,6 +371,7 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  administrativeRevisions AdminRecordRevision[]
   historicalLeadContacts CommercialLeadHistoricalContact[] @relation("HistoricalContactActor")
   historicalLeadConversions CommercialLeadHistoricalConversion[] @relation("HistoricalConversionActor")
   adminRequests AdminRequest[] @relation("AdminRequestAuthor")
@@ -463,6 +464,7 @@ model User {
 }
 
 model InternalSession {
+  administrativeRevisions AdminRecordRevision[]
   historicalLeadContacts CommercialLeadHistoricalContact[]
   historicalLeadConversions CommercialLeadHistoricalConversion[]
   ordinaryEmailDecisions OrdinaryEmailDecision[]
@@ -4105,4 +4107,27 @@ model RecordUpdateReminderCancellation {
   command RecordUpdateCommand @relation("ReminderCancellationCommand", fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   reminder RecordUpdateReminder @relation(fields: [reminderCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
   audit AuditLog @relation("ReminderCancellationAudit", fields: [auditId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+// Administrative corrections retain their original operational values. This
+// journal never changes approvals, signatures, delivery or personal acceptance.
+model AdminRecordRevision {
+  commandId String @id @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  model String
+  recordId String
+  operation String
+  requestHash String @db.Char(64)
+  beforeHash String @db.Char(64)
+  afterHash String @db.Char(64)
+  before Json
+  after Json
+  reason String
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@index([model, recordId, createdAt, commandId])
+  @@index([actorId, createdAt])
 }

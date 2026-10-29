@@ -1,0 +1,160 @@
+import assert from 'node:assert/strict';
+import test, { before, after } from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { PrismaClient, Prisma } from '@prisma/client';
+import { syntheticAuthority, syntheticPerson, syntheticSession, syntheticSharingCase } from './selective-sharing/fixtures';
+import { previewSelectiveAccess, confirmSelectiveAccess } from '../src/lib/selective-project-access';
+import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
+import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
+import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt,
+  type AdminRecordCommand } from '../src/lib/admin-records';
+
+const enabled = process.env.RUN_DB_TESTS === '1' && process.env.ADMIN_RECORD_DB_TESTS === '1';
+const options = { skip: !enabled }, db = new PrismaClient();
+const key = { version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), secret: process.env.PRIVILEGED_STEP_UP_SECRET! };
+type Person = Awaited<ReturnType<typeof syntheticPerson>>;
+let admin: Person;
+before(async () => { if (enabled) { await assertAiOrchestratorEphemeralDatabaseIdentity(db); admin = await syntheticAuthority(db); } });
+after(async () => db.$disconnect());
+function proof(person = admin, secondsAgo = 0) {
+  return { key, sessionToken: person.token, stepUpToken: createPrivilegedStepUpToken({ key, userId: person.user.id,
+    sessionToken: person.token, role: person.user.role, nowSeconds: Math.floor(Date.now() / 1000) - secondsAgo }) };
+}
+async function fixture() {
+  const client = await db.client.create({ data: { displayName: `Cliente Admin sintetico ${randomUUID()}`, type: 'societa' } });
+  const project = await db.project.create({ data: { clientId: client.id, title: 'Progetto sintetico', priority: 'media' } });
+  return { client, project };
+}
+async function command(model: string, id: string, patch: Record<string, string> = {}, operation: AdminRecordCommand['operation'] = 'UPDATE', actor = admin) {
+  const form = await loadAdminRecord(db, actor.session, model, id, operation === 'CREATE');
+  return { commandId: randomUUID(), model, id, expectedVersion: form.version, operation, reason: 'Rettifica sintetica isolata',
+    values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
+}
+const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+test('Admin corrects priority and amounts after fifteen minutes, then reopens exact persisted values and history', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { priority: 'urgente', requestedAmount: '12345.67' });
+  await save(input, admin, 900);
+  const reopened = await loadAdminRecord(db, admin.session, 'Project', f.project.id);
+  assert.equal(reopened.values.priority, 'urgente'); assert.equal(reopened.values.requestedAmount, '12345.67');
+  assert.equal(reopened.history[0].id, input.commandId); assert(reopened.history[0].actor.includes(admin.user.email));
+  assert.equal(await db.auditLog.count({ where: { id: `admin-record:${input.commandId}` } }), 1);
+});
+test('expired proof and revoked login reject atomically while the same unchanged draft works after reconfirmation', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Titolo dopo riconferma' });
+  await assert.rejects(save(input, admin, 1801)); assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+  await save(input);
+  const person = await syntheticPerson(db, 'Admin revocabile');
+  const later = await command('Project', f.project.id, { title: 'Non applicato' }, 'UPDATE', person);
+  await db.internalSession.update({ where: { id: person.session.sessionId }, data: { revokedAt: new Date() } });
+  await assert.rejects(save(later, person));
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).title, 'Titolo dopo riconferma');
+});
+test('creation, lost response replay, trash and restoration keep one identity and exact decimal values', options, async () => {
+  const f = await fixture(), id = randomUUID();
+  const input = await command('ProjectExpense', id, { projectId: f.project.id, category: 'software', description: 'Costo sintetico', amount: '10.25', estimated: 'true', potentiallyEligible: 'false', priority: 'media' }, 'CREATE');
+  await save(input); assert.equal((await save(input)).replayed, true);
+  assert.equal(await db.projectExpense.count({ where: { id } }), 1);
+  await save(await command('ProjectExpense', id, {}, 'TRASH'));
+  assert.equal(await db.projectExpense.count({ where: { id } }), 0);
+  assert((await listAdminRecords(db, admin.session, 'ProjectExpense', id, 1, true)).rows.some(row => row.id === id && row.deleted));
+  await save(await command('ProjectExpense', id, {}, 'RESTORE'));
+  assert.equal((await db.projectExpense.findUniqueOrThrow({ where: { id } })).amount.toString(), '10.25');
+  assert.equal((await listAdminRecords(db, admin.session, 'ProjectExpense', id, 1, true)).rows.length, 0);
+});
+test('soft trash and restore preserve the client identity, links and complete original metadata', options, async () => {
+  const f = await fixture(); await save(await command('Client', f.client.id, {}, 'TRASH'));
+  assert((await loadAdminRecord(db, admin.session, 'Client', f.client.id)).deleted);
+  await save(await command('Client', f.client.id, {}, 'RESTORE'));
+  const row = await db.client.findUniqueOrThrow({ where: { id: f.client.id } });
+  assert.equal(row.deletedAt, null); assert.equal(row.displayName, f.client.displayName);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, f.client.id);
+});
+test('stale concurrent edits do not silently overwrite the accepted change', options, async () => {
+  const f = await fixture(), first = await command('Project', f.project.id, { title: 'Prima correzione' }), second = { ...first, commandId: randomUUID(), values: { ...first.values, title: 'Seconda correzione' } };
+  const results = await Promise.allSettled([save(first), save(second)]);
+  assert.equal(results.filter(row => row.status === 'fulfilled').length, 1);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: { in: [first.commandId, second.commandId] } } }), 1);
+});
+test('inconsistent parent links and reparenting graphs with dependent records are refused', options, async () => {
+  const a = await fixture(), b = await fixture();
+  const company = await db.company.create({ data: { clientId: b.client.id, name: 'Altra azienda sintetica' } });
+  await assert.rejects(save(await command('Project', a.project.id, { companyId: company.id })), /CONTEXT/);
+  await db.projectExpense.create({ data: { projectId: a.project.id, category: 'software', description: 'Voce collegata', amount: '1' } });
+  await assert.rejects(save(await command('Project', a.project.id, { clientId: b.client.id })), /DEPENDENCIES/);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: a.project.id } })).clientId, a.client.id);
+});
+test('non-Admin and explicit write denials cannot use the editor or receipt oracle', options, async () => {
+  const f = await fixture(), other = await syntheticPerson(db, 'Tecnico sintetico', 'consulente');
+  await assert.rejects(loadAdminRecord(db, other.session, 'Project', f.project.id));
+  await assert.rejects(readAdminRecordReceipt(db, other.session, randomUUID()));
+  const limited = await syntheticPerson(db, 'Admin con divieto');
+  await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'project.write', allowed: false } });
+  await assert.rejects(save(await command('Project', f.project.id, { title: 'Vietato' }), limited));
+});
+test('a selected project closes ordinary Admin editor access to its child expenses and document metadata', options, async () => {
+  const f = await syntheticSharingCase(db, admin), preview = await previewSelectiveAccess(db, admin.session, f.input);
+  await confirmSelectiveAccess(db, admin.session, preview.token, true);
+  const expense = await db.projectExpense.create({ data: { projectId: f.project.id, category: 'software', description: 'Spesa riservata', amount: 100 } });
+  await assert.rejects(loadAdminRecord(db, f.reader.session, 'ProjectExpense', expense.id));
+  assert.equal((await listAdminRecords(db, f.reader.session, 'ProjectExpense', expense.id)).rows.length, 0);
+  await assert.rejects(loadAdminRecord(db, f.reader.session, 'Document', f.documents[0].doc.id));
+  const input = await command('ProjectExpense', expense.id, { amount: '200' });
+  await assert.rejects(save(input, f.reader));
+});
+test('a denial of assignment permission does not prevent correcting unrelated lead notes', options, async () => {
+  const limited = await syntheticPerson(db, 'Admin senza assegnazione servizi');
+  await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'service.assign', allowed: false } });
+  const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico' } });
+  await save(await command('Lead', lead.id, { notes: 'Nota corretta' }, 'UPDATE', limited), limited);
+  assert.equal((await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).notes, 'Nota corretta');
+});
+test('signed contracts remain immutable while a rectification adds evidence without rewriting the signature', options, async () => {
+  const f = await fixture(), signedAt = new Date();
+  const row = await db.contract.create({ data: { clientId: f.client.id, contractNumber: randomUUID(), serviceName: 'Sintetico', serviceDescription: 'Contratto test', taxableAmount: 100, vatAmount: 22, totalAmount: 122, signedAt, status: 'firmato' } });
+  await assert.rejects(save(await command('Contract', row.id, { totalAmount: '244', taxableAmount: '200', vatAmount: '44' })), /HISTORY/);
+  await save(await command('Contract', row.id, {}, 'RECTIFY'));
+  const current = await db.contract.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(current.signedAt?.toISOString(), signedAt.toISOString()); assert.equal(current.totalAmount.toString(), '122');
+});
+test('previous values are restored through a new correction, preserving both historical revisions', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Titolo rettificato' }); await save(input);
+  const draft = await loadAdminRecord(db, admin.session, 'Project', f.project.id, false, input.commandId);
+  assert.equal(draft.values.title, f.project.title);
+  await save({ ...await command('Project', f.project.id), values: draft.values });
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).title, f.project.title);
+  assert.equal(await db.adminRecordRevision.count({ where: { model: 'Project', recordId: f.project.id } }), 2);
+});
+test('receipt survives a fresh login for the same Admin but cannot be read by another Admin', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Esito persistito' }); await save(input);
+  const next = await syntheticSession(db, admin.user), other = await syntheticPerson(db, 'Altro Admin');
+  assert.equal((await readAdminRecordReceipt(db, next.session, input.commandId))?.id, f.project.id);
+  await assert.rejects(readAdminRecordReceipt(db, other.session, input.commandId));
+});
+test('durably closing an absent attempt prevents a later delayed request from changing records', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Tentativo ritardato' });
+  const closed = await closeAdminRecordAttempt(db, admin.session, { commandId: input.commandId, model: input.model, id: input.id });
+  assert(closed.closed); await assert.rejects(save(input), /CLOSED/);
+  assert((await readAdminRecordReceipt(db, admin.session, input.commandId))?.closed);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: input.id } })).title, f.project.title);
+});
+test('closing a committed attempt returns its receipt and never changes the successful outcome', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Conservato' }); await save(input);
+  assert.equal((await closeAdminRecordAttempt(db, admin.session, { commandId: input.commandId, model: input.model, id: input.id })).closed, false);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 1);
+});
+test('audit failure rolls back the correction and revision together', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Rollback sintetico' });
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_AUDIT_FAILURE'); } } } }) as unknown as PrismaClient;
+  await assert.rejects(saveAdminRecord(failing, admin.session, input, proof()), /SYNTHETIC_AUDIT_FAILURE/);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: input.id } })).title, f.project.title);
+});
+test('the database rejects revision tampering and unauthorized journal writers', options, async () => {
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Prova immutabile' }); await save(input);
+  await assert.rejects(db.adminRecordRevision.update({ where: { commandId: input.commandId }, data: { reason: 'Alterazione vietata' } }));
+  await assert.rejects(db.adminRecordRevision.delete({ where: { commandId: input.commandId } }));
+  const technician = await syntheticPerson(db, 'Tecnico non autorizzato', 'consulente');
+  await assert.rejects(db.adminRecordRevision.create({ data: { commandId: randomUUID(), actorId: technician.user.id, sessionId: technician.session.sessionId!,
+    model: 'Project', recordId: f.project.id, operation: 'RECTIFY', requestHash: 'a'.repeat(64), beforeHash: 'a'.repeat(64), afterHash: 'a'.repeat(64),
+    before: Prisma.JsonNull, after: Prisma.JsonNull, reason: 'Non consentito' } }));
+});

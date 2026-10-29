@@ -38,6 +38,6 @@ test('PostgreSQL preserva i record global canonici PR85 nella catena additiva di
   assert.equal(control.externalProvidersEnabled, false);
   assert.equal(orchestrator.provider, 'mock');
   assert.equal(orchestrator.syntheticDataOnly, true);
-  assert.equal(Number(migrations[0]?.count), 71);
+  assert.equal(Number(migrations[0]?.count), 72);
   assert.equal(await db().aiOrchestratorSetting.count({ where: { id: 'singleton' } }), 0);
 });

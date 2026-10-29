@@ -55,6 +55,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   return <div className="crm-space-y-6">
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
+    {session.role === 'admin' && <SecondaryLink href={`/admin/records/Project/${project.id}`}>Correggi tutti i dati operativi</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/PROJECT/${project.id}`}>Chi aggiornare</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-reminders/PROJECT/${project.id}`}>Programma promemoria CRM</SecondaryLink>}
     {canShare && <SecondaryLink href={`/projects/${id}/share`}>Condividi accesso</SecondaryLink>}
@@ -70,6 +71,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <p>Investimento: {project.totalInvestment ? `€ ${Number(project.totalInvestment).toLocaleString('it-IT')}` : '—'}</p>
       <p>Richiesto: {project.requestedAmount ? `€ ${Number(project.requestedAmount).toLocaleString('it-IT')}` : '—'}</p>
       <p>Stato: <StatusBadge status={project.status} /></p>
+      <p>Priorità: {project.priority}</p>
+      <p>Responsabile tecnico: {consultant?.name ?? 'Non assegnato'}</p>
       <p className="mt-2 whitespace-pre-wrap text-sm text-fai-gray">{project.description ?? 'Nessun dato presente'}</p>
       <TimestampMeta createdAt={project.createdAt} updatedAt={project.updatedAt} updatedBy={consultant?.name ?? project.consultantId} />
     </Card>

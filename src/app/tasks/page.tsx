@@ -43,6 +43,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
         title="Attività e scadenze"
         description="Attività interne, priorità, assegnazioni e deadline operative."
       />
+      {session.role === 'admin' && <div className="flex flex-wrap gap-4"><Link href="/admin/records/Task/new" className="underline">Crea attività</Link><Link href="/admin/records/Task" className="underline">Modifica attività, assegnazioni e ripristino</Link></div>}
       {todayOnly && <p role="status">Filtro dashboard: attività aperte in scadenza oggi. <Link href="/tasks" className="underline">Rimuovi filtro</Link></p>}
       <Card title="Elenco operativo">
         {visibleItems.length === 0 ? (

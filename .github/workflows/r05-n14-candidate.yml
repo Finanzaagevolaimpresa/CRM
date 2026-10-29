@@ -80,7 +80,7 @@ jobs:
             assert.equal(receipt.sourceCommit, process.env.VNX03_EXPECTED_SOURCE_COMMIT);
             assert.equal(receipt.sourceTree, process.env.VNX03_EXPECTED_SOURCE_TREE);
             assert.equal(receipt.profile, 'candidate-schema71');
-            assert.equal(receipt.migrations, 71);
+            assert.equal(receipt.migrations, 72);
             assert.equal(receipt.productionContact, false);
             if (file === 'n14-runtime.json') {
               assert.equal(receipt.adminAssignmentBrowserCompleted, true);

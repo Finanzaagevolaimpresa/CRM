@@ -33,6 +33,7 @@ const sections: NavSection[] = [
     title: "Operatività",
     items: [
       { label: "Dashboard", href: "/dashboard" },
+      { label: "Controllo Admin", href: "/admin/records", adminOnly: true },
       { label: "Il mio account", href: "/settings/account" },
       { label: "Notifiche", href: "/notifications" },
       { label: "Le mie assegnazioni", href: "/assignments", requiredAnyPermissions: ["lead.read", "technical.read"] },

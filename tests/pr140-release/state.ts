@@ -250,7 +250,7 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 71);
+    assert.equal(data.ledger.length, 72);
     assert.equal(data.reminders.length, 5); assert.equal(data.reminderCancellations.length, 1);
     assert.equal(data.reminderAudits.length, 6);
     assert.equal(data.historicalContacts.length, 2); assert.equal(data.historicalConversions.length, 1);
