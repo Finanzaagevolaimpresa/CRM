@@ -5,7 +5,8 @@ node --input-type=module -e 'const u=new URL(process.env.DATABASE_URL);if(u.host
 db="${DATABASE_URL%%\?*}"
 test "$(psql "$db" -Atc "SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()")" = FAI_CRM_EPHEMERAL_TEST_ONLY_V1
 evidence="$HISTORY_EVIDENCE/migration70"
-mkdir -p "$evidence/baseline69"
+mkdir -p "$evidence/baseline69" "$evidence/schema70"
+git archive f1818bde23496b310a297b4f0ed3260bdce85e33 prisma | tar -x -C "$evidence/schema70"
 git archive e8104aa0f2ceea2f44d5da51b8f4ff7c2e1f6adf prisma | tar -x -C "$evidence/baseline69"
 npx prisma migrate deploy --schema "$evidence/baseline69/prisma/schema.prisma"
 node --import tsx tests/n14-historical-contact/migration-state.ts
@@ -35,7 +36,7 @@ footprint "$evidence/after-fault.txt"
 constraint > "$evidence/constraint-after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 cmp "$evidence/constraint-before.txt" "$evidence/constraint-after-fault.txt"
-npm run prisma:migrate:deploy
+npx prisma migrate deploy --schema "$evidence/schema70/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 70
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261027220000_historical_lead_contact_v1' ORDER BY migration_name" > "$evidence/prefix69-after.txt"
 cmp "$evidence/prefix69-before.txt" "$evidence/prefix69-after.txt"
@@ -44,7 +45,7 @@ cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT (SELECT count(*) FROM "CommercialLeadHistoricalContact")+(SELECT count(*) FROM "CommercialLeadHistoricalConversion")')" = 0
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq N14_HISTORICAL_SCHEMA69_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/schema70/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"

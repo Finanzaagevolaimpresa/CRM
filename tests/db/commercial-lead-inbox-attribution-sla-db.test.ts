@@ -178,7 +178,7 @@ test('N14 migration 42 is transactional, additive and business-empty by construc
   assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
 });
 
-test('current schema70 catalog preserves N14 and initializes historical contact journals empty', {
+test('current schema71 catalog preserves N14 and initializes historical contact journals empty', {
   skip: !runDbTests,
   timeout: 240_000,
 }, async () => {
@@ -226,7 +226,7 @@ test('current schema70 catalog preserves N14 and initializes historical contact 
         )) AS "historicalAudit"
     `,
   ]);
-  assert.equal(Number(migrationRows[0]?.count), 70);
+  assert.equal(Number(migrationRows[0]?.count), 71);
   assert.deepEqual(catalogRows.map(({ name }) => name), [
     'CommercialLeadActivity',
     'CommercialLeadHistoricalContact',
@@ -695,7 +695,7 @@ test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy L
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 70);
+  assert.equal(names.length, 71);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[41], migrationName);

@@ -73,7 +73,7 @@ jobs:
           grep -Fq 'division by zero' "$evidence/migration-fault.log"
           test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT to_regclass('public.\"SelectiveProjectGrant\"') IS NULL")" = t
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 70
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveAccessAuthority"')" = 0
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveProjectGrant"')" = 0
           psql "${DATABASE_URL%%\?*}" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name LIMIT 49' > "$evidence/prefix49-after.txt"

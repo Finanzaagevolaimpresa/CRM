@@ -47,6 +47,15 @@ class HistoricalObserver(unittest.TestCase):
     def test_complete_69_to_70_preserves_actual_rows_and_audit(self):
         self.assertTrue(g.transition(self.state(69), self.state(70), self.raw))
 
+    def test_historical_source_prefix_does_not_admit_a_newer_database(self):
+        self.assertEqual(len(self.manifest), 70)
+        self.assertEqual(g.digest(self.manifest), g.MANIFEST70_SHA256)
+        ledger = self.ledger(70) + [dict(migration_name='20261028180000_record_deadline_reminders_v1',
+                                       checksum='a' * 64, finished=True, rolled_back=False,
+                                       applied_steps_count=1)]
+        with self.assertRaises(g.Stop):
+            g.bind_snapshot(self.observed(70), 70, ledger, self.manifest, self.raw)
+
     def test_prior_policy_response_attribution_and_audit_changes_are_denied(self):
         for name in g.LEGACY:
             with self.subTest(name=name):

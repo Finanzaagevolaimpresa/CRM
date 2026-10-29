@@ -1491,6 +1491,7 @@ model Payment {
 }
 
 model Task {
+  deadlineReminders RecordUpdateReminder[]
   id              String       @id @default(cuid())
   technicalPrivate Boolean     @default(false)
   clientId        String?
@@ -2515,6 +2516,8 @@ model ActivityLog {
 }
 
 model AuditLog {
+  reminderAudit RecordUpdateReminder? @relation("ReminderAudit")
+  reminderCancellationAudit RecordUpdateReminderCancellation? @relation("ReminderCancellationAudit")
   historicalContactAssignments CommercialLeadHistoricalContact[] @relation("HistoricalContactAssignment")
   historicalContactAudit CommercialLeadHistoricalContact? @relation("HistoricalContactAudit")
   historicalConversionAudit CommercialLeadHistoricalConversion? @relation("HistoricalConversionAudit")
@@ -3630,6 +3633,8 @@ model RecordUpdateRule {
 }
 
 model RecordUpdateCommand {
+  reminder RecordUpdateReminder? @relation("ReminderCommand")
+  reminderCancellation RecordUpdateReminderCancellation? @relation("ReminderCancellationCommand")
   mode String @default("CRM") @db.VarChar(24)
   emailAuthorityRevision Int?
   id String @id @db.Uuid
@@ -3650,6 +3655,7 @@ model RecordUpdateCommand {
 }
 
 model RecordUpdateEvent {
+  reminder RecordUpdateReminder?
   id String @id @default(uuid()) @db.Uuid
   kind String @db.VarChar(20)
   recordId String
@@ -4067,4 +4073,36 @@ model CommercialLeadHistoricalConversion {
   contact CommercialLeadHistoricalContact @relation(fields: [contactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   client Client @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   audit AuditLog @relation("HistoricalConversionAudit", fields: [auditId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+
+model RecordUpdateReminder {
+  commandId String @id @db.Uuid
+  eventId String @unique @db.Uuid
+  auditId String @unique
+  taskId String
+  availableAt DateTime @db.Timestamptz(3)
+  confirmedAt DateTime @db.Timestamptz(3)
+  keyVersion Int
+  journal Json
+  proof String @db.Char(64)
+  command RecordUpdateCommand @relation("ReminderCommand", fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  event RecordUpdateEvent @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  audit AuditLog @relation("ReminderAudit", fields: [auditId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cancellation RecordUpdateReminderCancellation?
+  @@index([taskId, confirmedAt])
+  @@index([availableAt(sort: Desc), commandId(sort: Desc)])
+}
+
+model RecordUpdateReminderCancellation {
+  commandId String @id @db.Uuid
+  reminderCommandId String @unique @db.Uuid
+  auditId String @unique
+  canceledAt DateTime @db.Timestamptz(3)
+  journal Json
+  proof String @db.Char(64)
+  command RecordUpdateCommand @relation("ReminderCancellationCommand", fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  reminder RecordUpdateReminder @relation(fields: [reminderCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  audit AuditLog @relation("ReminderCancellationAudit", fields: [auditId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }
