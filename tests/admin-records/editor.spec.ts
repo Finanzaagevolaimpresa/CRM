@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -8,6 +9,33 @@ import { romeDateTimeInput } from '../../src/lib/rome-date-time';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
+
+test('legacy dossier exports contain current saved content and retain the exact reader perimeter', async ({ page, browser }) => {
+  const dossier = await db.dossier.create({ data: { clientId: f.clientId, projectId: f.projects[0].id,
+    title: 'Dossier export sintetico', type: 'verifica', status: 'bozza_consulente',
+    markdownContent: 'Contenuto sintetico conservato nel dossier', jsonContent: { criterio: 'sintetico', valore: 42 } } });
+  await login(page); await page.goto('/dossiers/' + dossier.id);
+  await expect(page.getByRole('link', { name: 'Scarica DOCX', exact: true })).toBeVisible();
+  const exported = await page.request.get('/dossiers/' + dossier.id + '/export?format=docx');
+  expect(exported.status()).toBe(200);
+  const bytes = await exported.body();
+  expect(bytes.subarray(0, 2).toString()).toBe('PK');
+  expect(bytes.includes(Buffer.from(dossier.markdownContent!))).toBe(true);
+  expect(exported.headers()['x-dossier-content-hash']).toBe(createHash('sha256').update(bytes).digest('hex'));
+  expect(exported.headers()['cache-control']).toBe('private, no-store');
+  const markdown = await page.request.get('/dossiers/' + dossier.id + '/export?format=markdown');
+  expect(markdown.status()).toBe(200); expect(await markdown.text()).toContain('"valore": 42');
+  await page.getByRole('link', { name: 'Stampa / salva PDF', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stampa / salva PDF', exact: true })).toBeVisible();
+  await expect(page.locator('#dossier-print')).toContainText(dossier.markdownContent!);
+  expect(await db.dossier.findUniqueOrThrow({ where: { id: dossier.id } })).toEqual(dossier);
+  expect(await db.auditLog.count({ where: { entityId: dossier.id, event: 'legacy_dossier_export' } })).toBe(2);
+  const context = await browser.newContext(), outsider = await context.newPage();
+  await login(outsider, f.technicianEmail, false);
+  expect((await outsider.request.get('/dossiers/' + dossier.id + '/export?format=docx')).status()).toBe(404);
+  expect(await db.auditLog.count({ where: { entityId: dossier.id, event: 'legacy_dossier_export' } })).toBe(2);
+  await context.close();
+});
 
 test('payment adjustment selects an exact evidence version and reopens the preserved collection and linked service state', async ({ page }) => {
   const admin = await db.user.findUniqueOrThrow({ where: { email: f.adminEmail } });
@@ -19,7 +47,7 @@ test('payment adjustment selects an exact evidence version and reopens the prese
   await proof.getByRole('button', { name: 'Cerca collegamenti', exact: true }).click();
   const version = proof.getByLabel('Documento e versione a prova della rettifica', { exact: true });
   await expect(version.locator(`option[value="${payment.version.id}"]`)).toHaveCount(1); await version.selectOption(payment.version.id);
-  await proof.getByLabel('Data effettiva della rettifica documentata', { exact: true }).fill(romeDateTimeInput(new Date(payment.effectiveAt)));
+  await proof.getByLabel('Data effettiva della rettifica documentata · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(payment.effectiveAt)));
   await proof.getByRole('checkbox').check(); await reason(page); await save(page);
   await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
   await expect(page.getByLabel('Stato', { exact: true })).toHaveValue('stornato');

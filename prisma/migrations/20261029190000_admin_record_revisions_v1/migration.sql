@@ -54,17 +54,44 @@ CREATE TRIGGER "AdminRecordRevision_no_truncate" BEFORE TRUNCATE ON "AdminRecord
   FOR EACH STATEMENT EXECUTE FUNCTION fai_admin_record_revision_guard();
 
 CREATE FUNCTION fai_admin_record_revision_audit_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE a "AuditLog"%ROWTYPE;
+DECLARE a "AuditLog"%ROWTYPE; expected_audit jsonb;
 BEGIN
   SELECT * INTO a FROM "AuditLog" WHERE id='admin-record:'||NEW."commandId"::text;
+  -- Audit privacy minimization also applies to UUIDs containing phone-like
+  -- digit runs. Bind the exact command through the immutable row ID and compare
+  -- the same minimized JSON; never change or bypass the privacy filter.
+  expected_audit := audit_sanitize_json_n04_v1(jsonb_build_object('commandId',NEW."commandId"::text));
+  IF NEW.operation<>'CLOSE' THEN
+    expected_audit := audit_sanitize_json_n04_v1(jsonb_build_object('commandId',NEW."commandId"::text,
+      'action',NEW.operation,'beforeHash',NEW."beforeHash",'afterHash',NEW."afterHash"));
+  END IF;
   IF NOT FOUND OR a."actorId" IS DISTINCT FROM NEW."actorId" OR a."entityType" IS DISTINCT FROM NEW.model
-    OR a."entityId" IS DISTINCT FROM NEW."recordId" OR a.after->>'commandId' IS DISTINCT FROM NEW."commandId"::text
+    OR a."entityId" IS DISTINCT FROM NEW."recordId" OR NOT COALESCE(a.after @> expected_audit, false)
     OR (NEW.operation='CLOSE' AND a.event<>'admin_record_attempt_closed')
-    OR (NEW.operation<>'CLOSE' AND (a.event<>'admin_record_changed' OR a.after->>'action' IS DISTINCT FROM NEW.operation
-      OR a.after->>'beforeHash' IS DISTINCT FROM NEW."beforeHash" OR a.after->>'afterHash' IS DISTINCT FROM NEW."afterHash"))
+    OR (NEW.operation<>'CLOSE' AND a.event<>'admin_record_changed')
     THEN RAISE EXCEPTION 'ADMIN_REVISION_ATOMIC_AUDIT_REQUIRED'; END IF;
   RETURN NEW;
 END $$;
 CREATE CONSTRAINT TRIGGER "AdminRecordRevision_atomic_audit" AFTER INSERT ON "AdminRecordRevision"
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_admin_record_revision_audit_guard();
+
+-- These new command receipts and terminal closures prevent blind retries.
+-- They must not disappear or change after a successful commit.
+CREATE FUNCTION fai_admin_record_revision_audit_retained() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP='TRUNCATE' THEN
+    IF EXISTS(SELECT 1 FROM "AuditLog" WHERE id LIKE 'admin-record:%'
+      OR id LIKE 'technical-attempt:%' OR id LIKE 'technical-private-attempt:%')
+      THEN RAISE EXCEPTION 'ADMIN_COMMAND_AUDIT_RETAINED'; END IF;
+    RETURN NULL;
+  END IF;
+  IF OLD.id LIKE 'admin-record:%' OR OLD.id LIKE 'technical-attempt:%' OR OLD.id LIKE 'technical-private-attempt:%'
+    THEN RAISE EXCEPTION 'ADMIN_COMMAND_AUDIT_RETAINED'; END IF;
+  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER "AdminCommandAudit_retained" BEFORE UPDATE OR DELETE ON "AuditLog"
+  FOR EACH ROW EXECUTE FUNCTION fai_admin_record_revision_audit_retained();
+CREATE TRIGGER "AdminCommandAudit_no_truncate" BEFORE TRUNCATE ON "AuditLog"
+  FOR EACH STATEMENT EXECUTE FUNCTION fai_admin_record_revision_audit_retained();
 COMMIT;

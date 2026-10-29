@@ -92,6 +92,7 @@ test('Admin thirty-minute proof works after five minutes and a revoked login sti
 
 test('settlement durably closes an absent command, survives reopening and refuses its later execution', options, async () => {
   const f = await fixture(), target = technicalTarget(f), input = await assignmentInput(db, admin, target, f.techA);
+  input.commandId = '03012345-6789-4012-8123-123456789012';
   const ref = { ...target, recipientId: f.techA.user.id }, preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
   assert.deepEqual(await readTechnicalAssignmentOutcome(db, admin.session, ref, input.commandId), { status: 'NOT_OBSERVED' });
   const closed = await settleTechnicalAssignmentAttempt(db, admin.session, ref, input.commandId);
@@ -101,6 +102,8 @@ test('settlement durably closes an absent command, survives reopening and refuse
   await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true), TechnicalAssignmentAttemptClosedError);
   assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 0);
   assert.equal(await db.auditLog.count({ where: { id: `technical-attempt:${input.commandId}` } }), 1);
+  await assert.rejects(db.auditLog.delete({ where: { id: `technical-attempt:${input.commandId}` } }), /ADMIN_COMMAND_AUDIT_RETAINED/);
+  await assert.rejects(db.auditLog.update({ where: { id: `technical-attempt:${input.commandId}` }, data: { after: {} } }), /ADMIN_COMMAND_AUDIT_RETAINED/);
   const next = { ...input, commandId: randomUUID() };
   const fresh = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', next);
   await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', next, fresh.token, true);

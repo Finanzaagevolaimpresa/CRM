@@ -3,6 +3,6 @@
   "baselineTree": "b5d61fe865bf871b9b3dce71b432edeee2990699",
   "historicalMigrationCount": 71,
   "migration": "20261029190000_admin_record_revisions_v1",
-  "migrationSha256": "a045c396f89c18100d485d4427261c5810d6dc11bea3282122a5c859a5386395",
+  "migrationSha256": "5e53b426d148240d7887d27ddf461e6d598b5354b38d3b4a48f2d0617a932205",
   "schemaSha256": "8dc06e6bd014343a0422af90d1158dfde5cb9e1e4e05b9037fe1f0a81291ff2c"
 }

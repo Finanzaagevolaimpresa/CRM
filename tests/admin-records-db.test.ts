@@ -39,6 +39,27 @@ async function command(model: string, id: string, patch: Record<string, string> 
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
 
+test('rapid sequential corrections persist every submitted value and journal the same committed row', options, async () => {
+  const f = await fixture(), lead = await db.lead.create({ data: { firstName: 'Sequenza', lastName: 'Sintetica' } });
+  for (let index = 0; index < 30; index++) {
+    const title = 'Sequenza progetto ' + index, notes = 'Sequenza lead ' + index;
+    const projectInput = await command('Project', f.project.id, { title });
+    const projectReceipt = await save(projectInput);
+    const project = await db.project.findUniqueOrThrow({ where: { id: f.project.id } });
+    const projectRaw = await db.$queryRaw<Array<{ title: string }>>`SELECT title FROM "Project" WHERE id=${f.project.id}`;
+    const projectJournal = await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: projectInput.commandId } });
+    assert.equal(project.title, title, JSON.stringify({ projectReceipt, raw: projectRaw[0], journal: projectJournal.after }));
+    assert.equal((projectJournal.after as { title: string }).title, title);
+    const leadInput = await command('Lead', lead.id, { notes });
+    const leadReceipt = await save(leadInput);
+    const savedLead = await db.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    const leadRaw = await db.$queryRaw<Array<{ notes: string }>>`SELECT notes FROM "Lead" WHERE id=${lead.id}`;
+    const leadJournal = await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: leadInput.commandId } });
+    assert.equal(savedLead.notes, notes, JSON.stringify({ leadReceipt, raw: leadRaw[0], journal: leadJournal.after }));
+    assert.equal((leadJournal.after as { notes: string }).notes, notes);
+  }
+});
+
 test('evidenced payment correction and restoration preserve the original collection and align linked services exactly once', options, async () => {
   const f = await paymentCorrectionFixture(db, admin.user.id);
   const evidenceChoices = await searchAdminRecordReferences(db, admin.session, { model: 'Payment', field: 'administrativeEvidenceVersionId', query: f.document.title, page: 1 });
@@ -88,8 +109,9 @@ test('reference search reaches records beyond the initial window and retains ord
     const common = { commandId: randomUUID(), itemId: randomUUID(), target, expectedContextSha256: context.contextSha256 };
     const command: TechnicalPrivateItemCommand = kind === 'Task' ? { ...common, kind, values: { title: `${prefix} private`, description: null, priority: 'media', dueAt: null } }
       : { ...common, kind: 'ChecklistItem', values: { title: `${prefix} private`, notes: null } };
-    const preview = await previewPrivateTechnicalItem(db, admin.session, proof(), command);
-    await confirmPrivateTechnicalItem(db, admin.session, proof(), command, preview.token, true);
+    const personalProof = proof();
+    const preview = await previewPrivateTechnicalItem(db, admin.session, personalProof, command);
+    await confirmPrivateTechnicalItem(db, admin.session, personalProof, command, preview.token, true);
     if (kind === 'Task') assert.equal((await searchAdminRecordReferences(db, admin.session, { model: 'Deadline', field: 'entityId', entityType: 'Task', query: command.itemId, page: 1 })).options.length, 0);
     await assert.rejects(loadAdminRecord(db, unrelatedAdmin.session, kind, command.itemId), /DENIED/);
     const original = await db.technicalPrivateItemOrigin.findUniqueOrThrow({ where: { commandId: command.commandId } });
@@ -318,7 +340,9 @@ test('a denial of assignment permission does not prevent correcting unrelated le
   await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'service.assign', allowed: false } });
   const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico' } });
   await save(await command('Lead', lead.id, { notes: 'Nota corretta' }, 'UPDATE', limited), limited);
-  assert.equal((await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).notes, 'Nota corretta');
+  const savedLead = await db.lead.findUniqueOrThrow({ where: { id: lead.id } });
+  assert.equal(savedLead.notes, 'Nota corretta', JSON.stringify({ raw: await db.$queryRaw`SELECT notes FROM "Lead" WHERE id=${lead.id}`,
+    journal: await db.adminRecordRevision.findMany({ where: { model: 'Lead', recordId: lead.id }, select: { before: true, after: true } }) }));
 });
 test('signed contracts remain immutable while a rectification adds evidence without rewriting the signature', options, async () => {
   const f = await fixture(), signedAt = new Date();
@@ -361,10 +385,52 @@ test('audit failure rolls back the correction and revision together', options, a
   assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
   assert.equal((await db.project.findUniqueOrThrow({ where: { id: input.id } })).title, f.project.title);
 });
+test('numeric UUIDs bind the exact command while the audit privacy filter stays effective', options, async () => {
+  const f = await fixture(), input = { ...await command('Project', f.project.id, { title: 'UUID numerico salvato' }),
+    commandId: '03012345-6789-4012-8123-123456789012' };
+  await save(input); await save(input);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).title, 'UUID numerico salvato');
+  const audit = await db.auditLog.findUniqueOrThrow({ where: { id: `admin-record:${input.commandId}` } });
+  assert.match(String((audit.after as Prisma.JsonObject).commandId), /REDACTED:PERSONAL/);
+  assert.equal((await readAdminRecordReceipt(db, admin.session, input.commandId))?.id, f.project.id);
+  const absent = { ...input, commandId: '03012345-6789-4012-8123-123456789013' };
+  assert((await closeAdminRecordAttempt(db, admin.session, { commandId: absent.commandId, model: absent.model, id: absent.id })).closed);
+  assert((await readAdminRecordReceipt(db, admin.session, absent.commandId))?.closed);
+  await assert.rejects(save(absent), /CLOSED/);
+  const target = await syntheticPerson(db, 'Account UUID numerico', 'consulente');
+  const before = await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } });
+  const account = { commandId: '03012345-6789-4012-8123-123456789014', operation: 'DEACTIVATE', userId: target.user.id, expectedVersion: adminUserVersion(before) };
+  await executeAdminUserCommand(db, admin.session, account, {}, proof());
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).active, false);
+  assert.equal((await reconcileAdminUserCommand(db, admin.session, account))?.closed, false);
+});
+
+test('a deferred audit rejection cannot return a success receipt or leave business changes behind', options, async () => {
+  const failing = db.$extends({ query: { auditLog: { async create({ args, query }) {
+    if (args.data.id?.startsWith('admin-record:')) args.data.after = { ...args.data.after as Prisma.InputJsonObject, afterHash: '0'.repeat(64) };
+    return query(args);
+  } } } }) as unknown as PrismaClient;
+  const f = await fixture(), input = await command('Project', f.project.id, { title: 'Commit da respingere' });
+  await assert.rejects(saveAdminRecord(failing, admin.session, input, proof()), /ADMIN_REVISION_ATOMIC_AUDIT_REQUIRED/);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).title, f.project.title);
+  assert.equal(await readAdminRecordReceipt(db, admin.session, input.commandId), null);
+  assert.equal(await db.auditLog.count({ where: { id: `admin-record:${input.commandId}` } }), 0);
+  const target = await syntheticPerson(db, 'Account per rifiuto differito', 'consulente');
+  const before = await db.user.findUniqueOrThrow({ where: { id: target.user.id }, include: { permissionOverrides: true } });
+  const accountInput = { commandId: randomUUID(), operation: 'DEACTIVATE', userId: target.user.id, expectedVersion: adminUserVersion(before) };
+  await assert.rejects(executeAdminUserCommand(failing, admin.session, accountInput, {}, proof()), /ADMIN_REVISION_ATOMIC_AUDIT_REQUIRED/);
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.user.id } })).active, true);
+  assert.equal((await db.internalSession.findUniqueOrThrow({ where: { id: target.session.sessionId! } })).revokedAt, null);
+  assert.equal(await reconcileAdminUserCommand(db, admin.session, accountInput), null);
+});
+
 test('the database rejects revision tampering and unauthorized journal writers', options, async () => {
   const f = await fixture(), input = await command('Project', f.project.id, { title: 'Prova immutabile' }); await save(input);
   await assert.rejects(db.adminRecordRevision.update({ where: { commandId: input.commandId }, data: { reason: 'Alterazione vietata' } }));
   await assert.rejects(db.adminRecordRevision.delete({ where: { commandId: input.commandId } }));
+  await assert.rejects(db.auditLog.update({ where: { id: `admin-record:${input.commandId}` }, data: { after: {} } }), /ADMIN_COMMAND_AUDIT_RETAINED/);
+  await assert.rejects(db.auditLog.delete({ where: { id: `admin-record:${input.commandId}` } }), /ADMIN_COMMAND_AUDIT_RETAINED/);
+  await assert.rejects(db.$executeRaw`TRUNCATE TABLE "AuditLog"`, /ADMIN_COMMAND_AUDIT_RETAINED|foreign key|cannot be truncated/i);
   for (const invalid of [{}, { id: null }, { id: 12 }]) {
     await assert.rejects(db.adminRecordRevision.create({ data: { commandId: randomUUID(), actorId: admin.user.id, sessionId: admin.session.sessionId!,
       model: 'Project', recordId: f.project.id, operation: 'RECTIFY', requestHash: 'a'.repeat(64), beforeHash: 'a'.repeat(64), afterHash: 'a'.repeat(64),

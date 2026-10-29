@@ -20,7 +20,13 @@ import { readPrivateDocumentBounded } from './storage';
 
 type Tx = Prisma.TransactionClient;
 async function withSerializableTransaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
-  try { return await db.$transaction(operation, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }); }
+  try { return await db.$transaction(async tx => {
+    const result = await operation(tx);
+    // Surface deferred integrity failures inside the callback. An adapter must
+    // never turn a rejected COMMIT into an apparently successful receipt.
+    await tx.$executeRaw`SET CONSTRAINTS ALL IMMEDIATE`;
+    return result;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }); }
   catch (error) { throw mapSerializableConflict(error); }
 }
 type Row = Record<string, unknown> & { id: string };
@@ -409,6 +415,11 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
         }
         after = await records.create({ data: { id: command.id, ...values } });
       } else after = await records.update({ where: { id: command.id }, data: values });
+      // Read through a separate SELECT before recording success. The persisted
+      // row, not the optimistic mutation result, is the journal's source.
+      const persisted = (await records.findMany({ where: { id: command.id }, take: 1 }))[0];
+      if (!persisted || Object.entries(values).some(([key, value]) => adminRecordVersion(persisted[key] ?? null) !== adminRecordVersion(value))) fail('STALE');
+      after = persisted;
     } else if (command.operation === 'TRASH') {
       if (!policy.trash || !before || before.deletedAt) fail('DENIED');
       if (policy.model === 'PracticeCommunication') await assertEditable(tx, policy, before, []);
@@ -430,15 +441,17 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       }
     } else if (!before) fail('DENIED'); // RECTIFY is an annotation, not a forged event.
     const now = await current.finish();
+    const beforeSnapshot = before ? plain(before) : null, afterSnapshot = after ? plain(after) : null;
+    const beforeHash = adminRecordVersion(beforeSnapshot), afterHash = adminRecordVersion(afterSnapshot);
     await tx.adminRecordRevision.create({ data: { commandId: command.commandId, actorId: current.actor.id, sessionId: current.registry.id,
       model: policy.model, recordId: command.id, operation: command.operation, requestHash,
-      beforeHash: adminRecordVersion(before), afterHash: adminRecordVersion(after),
-      before: before ? plain(before) : Prisma.JsonNull, after: after ? plain(after) : Prisma.JsonNull,
+      beforeHash, afterHash,
+      before: beforeSnapshot ?? Prisma.JsonNull, after: afterSnapshot ?? Prisma.JsonNull,
       reason: command.reason, createdAt: now } });
     await tx.auditLog.create({ data: { id: `admin-record:${command.commandId}`, actorId: current.actor.id,
       event: 'admin_record_changed', entityType: policy.model, entityId: command.id,
-      after: { action: command.operation, commandId: command.commandId, beforeHash: adminRecordVersion(before),
-        afterHash: adminRecordVersion(after), changedPaths: Object.keys(command.values).sort() } } });
+      after: { action: command.operation, commandId: command.commandId, beforeHash,
+        afterHash, changedPaths: Object.keys(command.values).sort() } } });
     await current.finish();
     return { commandId: command.commandId, model: policy.model, id: command.id, replayed: false };
   });

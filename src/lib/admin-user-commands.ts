@@ -20,7 +20,11 @@ export class AdminUserCommandError extends Error {
 }
 function fail(code: AdminUserCommandError['code']): never { throw new AdminUserCommandError(code); }
 async function transaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
-  try { return await db.$transaction(operation, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }); }
+  try { return await db.$transaction(async tx => {
+    const result = await operation(tx);
+    await tx.$executeRaw`SET CONSTRAINTS ALL IMMEDIATE`;
+    return result;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }); }
   catch (error) { throw mapSerializableConflict(error); }
 }
 async function authority(tx: Tx, actor: AuthSession, proof?: UpdateCredentials) {
