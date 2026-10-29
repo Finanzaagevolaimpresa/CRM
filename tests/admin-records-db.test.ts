@@ -9,7 +9,10 @@ import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token
 import { restoreRemovedAccount } from '../src/lib/user-account-service';
 import { executeAdminUserCommand, reconcileAdminUserCommand } from '../src/lib/admin-user-commands';
 import { adminUserVersion } from '../src/lib/admin-user-command-contract';
-import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt,
+import { technicalFixture, technicalTarget } from './technical-assignments/fixtures';
+import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../src/lib/technical-private-item-service';
+import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-item-contract';
+import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences,
   type AdminRecordCommand } from '../src/lib/admin-records';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.ADMIN_RECORD_DB_TESTS === '1';
@@ -34,6 +37,32 @@ async function command(model: string, id: string, patch: Record<string, string> 
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+
+test('reference search reaches records beyond the initial window and retains ordinary scope restrictions', options, async () => {
+  const prefix = `Ricerca sintetica ${randomUUID()}`, ids = Array.from({ length: 1005 }, () => randomUUID()).sort();
+  await db.client.createMany({ data: ids.map((id, index) => ({ id, displayName: `${prefix} ${index}`, type: 'societa' })) });
+  const input = { model: 'Project', field: 'clientId', query: prefix, page: 1 };
+  const first = await searchAdminRecordReferences(db, admin.session, input);
+  assert.equal(first.options.length, 50); assert.equal(first.hasNext, true);
+  const last = await searchAdminRecordReferences(db, admin.session, { ...input, page: 21 });
+  assert.equal(last.options.length, 5); assert.equal(last.hasNext, false);
+  assert.equal((await searchAdminRecordReferences(db, admin.session, { ...input, query: ids[1004] })).options[0].value, ids[1004]);
+  const other = await syntheticPerson(db, 'Ricerca non Admin', 'consulente');
+  await assert.rejects(searchAdminRecordReferences(db, other.session, input));
+  await assert.rejects(searchAdminRecordReferences(db, admin.session, { ...input, field: 'passwordHash' }));
+  await db.technicalAssignmentAuthority.create({ data: { id: 'technical-assignment', userId: admin.user.id, enabled: true, revision: 1 } });
+  const target = technicalTarget(await technicalFixture(db, admin));
+  const context = await loadTechnicalPrivateItemCreationContext(db, admin.session, target);
+  for (const kind of ['Task', 'DocumentChecklistItem'] as const) {
+    const common = { commandId: randomUUID(), itemId: randomUUID(), target, expectedContextSha256: context.contextSha256 };
+    const command: TechnicalPrivateItemCommand = kind === 'Task' ? { ...common, kind, values: { title: `${prefix} private`, description: null, priority: 'media', dueAt: null } }
+      : { ...common, kind: 'ChecklistItem', values: { title: `${prefix} private`, notes: null } };
+    const preview = await previewPrivateTechnicalItem(db, admin.session, proof(), command);
+    await confirmPrivateTechnicalItem(db, admin.session, proof(), command, preview.token, true);
+    if (kind === 'Task') assert.equal((await searchAdminRecordReferences(db, admin.session, { model: 'Deadline', field: 'entityId', entityType: 'Task', query: command.itemId, page: 1 })).options.length, 0);
+    await assert.rejects(loadAdminRecord(db, admin.session, kind, command.itemId), /DENIED/);
+  }
+});
 
 test('account creation records one receipt, replays a lost response and never persists a password in the journal', options, async () => {
   const input = { commandId: randomUUID(), operation: 'CREATE', userId: randomUUID(), expectedVersion: adminUserVersion(null) };
@@ -287,6 +316,11 @@ test('the database rejects revision tampering and unauthorized journal writers',
   const f = await fixture(), input = await command('Project', f.project.id, { title: 'Prova immutabile' }); await save(input);
   await assert.rejects(db.adminRecordRevision.update({ where: { commandId: input.commandId }, data: { reason: 'Alterazione vietata' } }));
   await assert.rejects(db.adminRecordRevision.delete({ where: { commandId: input.commandId } }));
+  for (const invalid of [{}, { id: null }, { id: 12 }]) {
+    await assert.rejects(db.adminRecordRevision.create({ data: { commandId: randomUUID(), actorId: admin.user.id, sessionId: admin.session.sessionId!,
+      model: 'Project', recordId: f.project.id, operation: 'RECTIFY', requestHash: 'a'.repeat(64), beforeHash: 'a'.repeat(64), afterHash: 'a'.repeat(64),
+      before: invalid as Prisma.InputJsonObject, after: invalid as Prisma.InputJsonObject, reason: 'Identità della prova assente' } }), /check constraint/i);
+  }
   const technician = await syntheticPerson(db, 'Tecnico non autorizzato', 'consulente');
   await assert.rejects(db.adminRecordRevision.create({ data: { commandId: randomUUID(), actorId: technician.user.id, sessionId: technician.session.sessionId!,
     model: 'Project', recordId: f.project.id, operation: 'RECTIFY', requestHash: 'a'.repeat(64), beforeHash: 'a'.repeat(64), afterHash: 'a'.repeat(64),

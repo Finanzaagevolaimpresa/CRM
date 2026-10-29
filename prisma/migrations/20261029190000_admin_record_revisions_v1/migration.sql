@@ -25,8 +25,8 @@ CREATE TABLE "AdminRecordRevision" (
   reason TEXT NOT NULL CHECK (length(reason) BETWEEN 3 AND 2000),
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
   "transactionId" BIGINT NOT NULL DEFAULT txid_current(),
-  CHECK ((before='null'::jsonb OR (jsonb_typeof(before)='object' AND before->>'id'="recordId"))
-     AND (after='null'::jsonb OR (jsonb_typeof(after)='object' AND after->>'id'="recordId"))),
+  CHECK ((before='null'::jsonb OR COALESCE(jsonb_typeof(before)='object' AND jsonb_typeof(before->'id')='string' AND before->>'id'="recordId", false))
+     AND (after='null'::jsonb OR COALESCE(jsonb_typeof(after)='object' AND jsonb_typeof(after->'id')='string' AND after->>'id'="recordId", false))),
   CHECK ((operation='CREATE' AND before='null'::jsonb AND after<>'null'::jsonb)
     OR (operation='UPDATE' AND before<>'null'::jsonb AND after<>'null'::jsonb)
     OR (operation='TRASH' AND before<>'null'::jsonb)

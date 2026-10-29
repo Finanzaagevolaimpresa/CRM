@@ -7,12 +7,18 @@ import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { privilegedStepUpCookieName, privilegedAccessReadiness } from './privileged-access';
-import { saveAdminRecord, readAdminRecordReceipt, closeAdminRecordAttempt, AdminRecordError } from './admin-records';
+import { saveAdminRecord, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences, AdminRecordError } from './admin-records';
 import { RecordUpdateError } from './record-update-contract';
 import { SerializableConflictError } from './serializable';
 
 export type AdminSaveResult = { ok: boolean; message: string; stepUp?: boolean; uncertain?: boolean; closed?: boolean;
   receipt?: { commandId: string; model: string; id: string; replayed: boolean; closed?: boolean } };
+export async function searchAdminRecordReferencesAction(input: unknown) {
+  const session = await getSession();
+  if (!session || session.role !== 'admin') return { error: 'Sessione Admin non disponibile.' } as const;
+  try { return await searchAdminRecordReferences(prisma, session, input); }
+  catch { return { error: 'Ricerca non disponibile per questi permessi o parametri. La selezione è conservata.' } as const; }
+}
 export async function saveAdminRecordAction(raw: unknown): Promise<AdminSaveResult> {
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false, message: 'Sessione Admin non disponibile. I dati nel modulo sono conservati.' };

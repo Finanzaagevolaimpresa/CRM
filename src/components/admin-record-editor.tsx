@@ -7,6 +7,7 @@ import { saveAdminRecordAction, verifyAdminRecordAction, closeAdminRecordAction,
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import { RomeDateTimeInput } from './rome-date-time-input';
 import { operationalRomeTime } from '@/lib/operational-time';
+import { AdminReferenceSelect } from './admin-reference-select';
 
 const subscribe = () => () => {}, hydrated = () => true, server = () => false;
 export function AdminRecordEditor({ data, commandId, recovering = false }: { data: AdminRecordForm; commandId: string; recovering?: boolean }) {
@@ -54,7 +55,9 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
           const change = (value: string) => setValues(current => ({ ...current, [field.name]: value,
             ...Object.fromEntries(data.fields.filter(other => other.dependsOn === field.name).map(other => [other.name, ''])) }));
           return <fieldset key={field.name} disabled={field.readOnly} className={['longtext', 'json'].includes(field.type) ? 'min-w-0 md:col-span-2' : 'min-w-0'}>
-            {field.type === 'date' ? <RomeDateTimeInput label={field.label} value={values[field.name]} onChange={change} required={field.required} className={fieldClass} />
+            {field.reference ? <AdminReferenceSelect key={field.name + (field.dependsOn ? values[field.dependsOn] : '')} model={data.model} field={field}
+              value={values[field.name]} entityType={field.dependsOn ? values[field.dependsOn] : undefined} onChange={change} />
+              : field.type === 'date' ? <RomeDateTimeInput label={field.label} value={values[field.name]} onChange={change} required={field.required} className={fieldClass} />
               : <label className="block font-semibold">{field.label}
                 {field.type === 'boolean' ? <select className={fieldClass} value={values[field.name]} onChange={event => change(event.target.value)}><option value="true">Sì</option><option value="false">No</option></select>
                   : field.type === 'select' ? <select className={fieldClass} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)}>

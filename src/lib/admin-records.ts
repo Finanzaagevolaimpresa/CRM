@@ -142,6 +142,7 @@ async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Ro
   if (!admittedRow(actor, row)) fail('DENIED');
   const policy = adminRecordCatalogue.find(item => item.model === model);
   if (policy && !recordUpdatePermission(actor, readPermission(policy))) fail('DENIED');
+  if (['Task', 'DocumentChecklistItem'].includes(model) && row.technicalPrivate === true) fail('DENIED');
   if (model === 'Document') {
     if (!ordinaryDocumentVisibilityAllows(row.visibilityLevel)
       || !await canAccessFinancialDocument(tx, actor, row as FinancialDocumentMetadata & { id: string })
@@ -395,6 +396,39 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
   });
 }
 
+const referenceModels = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
+const deadlineModels = ['Client', 'Project', 'TechnicalPractice', 'Task', 'ClientService'];
+async function referenceRows(tx: Tx, actor: Actor, model: string, query = '', page = 1) {
+  if (![...referenceModels, ...deadlineModels].includes(model)) fail('INVALID');
+  const fields = metadata(model).fields;
+  const names = fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'email', 'contractNumber', 'code'].includes(field.name));
+  const rows = await delegate(tx, model).findMany({ take: 51, skip: (page - 1) * 50, orderBy: { id: 'asc' },
+    where: { ...(fields.some(field => field.name === 'deletedAt') ? { deletedAt: null } : {}),
+      ...(fields.some(field => field.name === 'active') ? { active: true } : {}),
+      ...(query ? { OR: [{ id: query }, ...names.map(field => ({ [field.name]: { contains: query, mode: 'insensitive' } }))] } : {}) },
+    ...(model === 'User' ? { select: { id: true, name: true, email: true, active: true } } : {}) });
+  const options: NonNullable<AdminField['options']> = [];
+  for (const row of rows.slice(0, 50)) {
+    try { if (model !== 'User') await assertContextVisible(tx, actor, model, row); }
+    catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
+    options.push({ value: row.id, label: label(row) + (model === 'User' ? ` · ${row.email}` : ''), group: model });
+  }
+  return { options, hasNext: rows.length > 50 };
+}
+export async function searchAdminRecordReferences(db: PrismaClient, session: AuthSession, raw: unknown) {
+  const input = z.object({ model: z.string().max(80), field: z.string().max(80), query: z.string().trim().max(200),
+    page: z.number().int().min(1).max(10000), entityType: z.string().max(80).optional() }).strict().parse(raw);
+  const policy = adminRecordPolicy(input.model);
+  if (!policy.fields.includes(input.field)) fail('INVALID');
+  const target = input.model === 'Deadline' && input.field === 'entityId' && deadlineModels.includes(input.entityType ?? '')
+    ? input.entityType : relation(input.model, input.field)?.type;
+  if (!target || ![...referenceModels, ...deadlineModels].includes(target)) fail('INVALID');
+  return withSerializableTransaction(db, async tx => {
+    const current = await auth(tx, session, policy);
+    const result = await referenceRows(tx, current.actor, target, input.query, input.page);
+    await current.finish(); return result;
+  });
+}
 async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor: Awaited<ReturnType<typeof updateActor>>['actor']) {
   const values: Record<string, string> = {}, result: AdminField[] = [];
   let editable = [...policy.fields];
@@ -424,36 +458,22 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
       type: field.type === 'DateTime' ? 'date' : field.type === 'Boolean' ? 'boolean' : ['Decimal', 'Int'].includes(field.type) ? 'number'
         : field.type === 'Json' ? 'json' : /notes|description|summary|content|conditions|rationale|issues|findings|documents|text/i.test(name) ? 'longtext' : 'text' };
     if (related) {
-      const allowed = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
-      if (!allowed.includes(related.type)) fail('INVALID');
-      const rows = await delegate(tx, related.type).findMany({ take: 1001, orderBy: { id: 'asc' },
-        where: { ...(metadata(related.type).fields.some(item => item.name === 'deletedAt') ? { deletedAt: null } : {}) },
-        ...(related.type === 'User' ? { select: { id: true, name: true, email: true, active: true } } : {}) });
-      descriptor.type = 'select';
-      descriptor.options = [];
-      for (const item of rows.slice(0, 1000)) {
-        try { if (related.type !== 'User') await assertContextVisible(tx, actor, related.type, item); }
-        catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
-        if (item.active === false) continue;
-        descriptor.options.push({ value: item.id, label: label(item) + (related.type === 'User' ? ` · ${item.email}` : '') });
+      if (!referenceModels.includes(related.type)) fail('INVALID');
+      const found = await referenceRows(tx, actor, related.type);
+      descriptor.type = 'select'; descriptor.reference = true; descriptor.options = found.options;
+      if (initial && !descriptor.options.some(option => option.value === String(initial))) {
+        const current = await delegate(tx, related.type).findUnique({ where: { id: String(initial) } });
+        descriptor.options.push({ value: String(initial), label: current ? label(current) + (related.type === 'User' ? ` · ${current.email}` : '') + ' · collegamento attuale' : 'Collegamento attuale non disponibile · ' + String(initial) });
       }
-      if (initial && !descriptor.options.some(option => option.value === String(initial)))
-        descriptor.options.push({ value: String(initial), label: 'Collegamento attuale non operativo · ' + String(initial) });
-      if (rows.length > 1000) descriptor.help = 'Sono mostrati i primi 1000 record. Il collegamento attuale resta disponibile; selezioni ulteriori richiedono il contesto specifico.';
+      descriptor.help = 'Cerca per nome, email o identificativo e sfoglia i risultati. Il collegamento scelto resta conservato durante la ricerca.';
     } else if (policy.model === 'Deadline' && name === 'entityType') {
       descriptor.type = 'select'; descriptor.options = ['Client', 'Project', 'TechnicalPractice', 'Task', 'ClientService']
         .map(model => ({ value: model, label: adminRecordPolicy(model).label }));
     } else if (policy.model === 'Deadline' && name === 'entityId') {
-      descriptor.type = 'select'; descriptor.dependsOn = 'entityType'; descriptor.options = [];
-      for (const model of ['Client', 'Project', 'TechnicalPractice', 'Task', 'ClientService']) {
-        const parents = await delegate(tx, model).findMany({ where: { deletedAt: null }, orderBy: { id: 'asc' }, take: 1001 });
-        for (const parent of parents.slice(0, 1000)) {
-          try { await assertContextVisible(tx, actor, model, parent); }
-          catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
-          descriptor.options.push({ value: parent.id, label: label(parent), group: model });
-        }
-        if (parents.length > 1000) descriptor.help = 'Elenco limitato ai primi 1000 record per tipo. Usa il contesto specifico per ulteriori collegamenti.';
-      }
+      descriptor.type = 'select'; descriptor.reference = true; descriptor.dependsOn = 'entityType'; descriptor.options = [];
+      for (const model of deadlineModels) descriptor.options.push(...(await referenceRows(tx, actor, model)).options);
+      if (initial && !descriptor.options.some(option => option.value === String(initial)))
+        descriptor.options.push({ value: String(initial), label: 'Collegamento attuale · ' + String(initial), group: String(row?.entityType) });
     } else if (name === 'status' && archives[policy.model]) {
       const archive = archives[policy.model], restored = row ? await archiveRestoreStatus(tx, policy.model, row) : null;
       descriptor.type = 'select'; descriptor.options = [...new Set(row ? [String(row.status), archive.status, ...(restored ? [restored] : [])] : [archive.draft])]

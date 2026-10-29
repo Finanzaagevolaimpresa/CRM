@@ -60,6 +60,7 @@ jobs:
           node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npx prisma migrate deploy
+          npx prisma generate
       - name: PostgreSQL collection, concurrency, atomic audit, revocation and recovery
         if: matrix.target == 'postgresql'
         shell: bash

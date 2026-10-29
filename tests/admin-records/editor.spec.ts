@@ -74,6 +74,12 @@ async function save(page: Page) {
 }
 test('expired Admin confirmation preserves the complete draft and the renewed thirty-minute window saves once', async ({ browser }) => {
   const context = await browser.newContext(), page = await context.newPage(); await login(page); await openProject(page, 0);
+  const client = page.getByRole('combobox', { name: 'Cliente', exact: true }), lookup = client.locator('..').locator('..');
+  const linkedClient = await client.inputValue();
+  await lookup.getByRole('textbox', { name: 'Cerca Cliente', exact: true }).fill(f.clientId);
+  await lookup.getByRole('button', { name: 'Cerca collegamenti', exact: true }).click();
+  await expect(client).toBeEnabled(); await expect(client).toHaveValue(linkedClient);
+  await expect(client.locator('option[value="' + f.clientId + '"]')).toHaveCount(1);
   await page.getByRole('textbox', { name: 'Titolo', exact: true }).fill('Titolo conservato dopo scadenza');
   await page.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('urgente');
   await page.getByRole('spinbutton', { name: 'Importo richiesto', exact: true }).fill('1234.56'); await reason(page);

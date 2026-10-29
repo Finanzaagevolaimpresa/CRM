@@ -154,7 +154,7 @@ test('M4 readiness direct URLs and draft submissions follow the current originat
   await submit(ap, draft(ap).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(ap.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await footprint()).toEqual(before);
   // B's already rendered form loses authority as soon as the lead changes hands.
-  await fill(draft(bp));
+  await bp.goto(target); await fill(draft(bp));
   await db.lead.update({ where: { id: r.lead.id }, data: { assignedToId: a.id } });
   await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(bp.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await footprint()).toEqual(before);

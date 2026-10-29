@@ -45,7 +45,7 @@ export const adminRecordCatalogue = [
   item('CumulabilityAssessment', 'Valutazioni di cumulabilità', 'Analisi e dossier', 'project.write',
     'projectId grantAssessmentId summary legalResult technicalResult deMinimisRisk rnaRisk doubleFundingRisk timingConflicts conclusion humanReviewStatus', { create: true }),
   item('Document', 'Documenti · metadati', 'Documenti e attività', 'document.upload',
-    'clientId companyId projectId clientServiceId serviceArea documentCategory type title containsSensitiveData validUntil',
+    'clientId companyId projectId clientServiceId serviceArea documentCategory type title status containsSensitiveData validUntil',
     { trash: 'soft', href: '/documents/{id}/versions', guidance: 'File, checksum, autore e versioni sono prove conservate. Per sostituire il contenuto carica una nuova versione nella scheda documento.' }),
   item('DocumentChecklistItem', 'Checklist documentali', 'Documenti e attività', 'service.write',
     'clientId clientServiceId projectId title notes status documentId active', { create: true, trash: 'soft' }),
@@ -143,7 +143,7 @@ export const adminFieldLabels: Record<string, string> = {
   doubleFundingRisk: 'Rischio doppio finanziamento', timingConflicts: 'Conflitti temporali', plannedInvestment: 'Investimento previsto', operationalNotes: 'Note operative',
 };
 export type AdminField = { name: string; label: string; type: 'text' | 'longtext' | 'number' | 'date' | 'boolean' | 'select' | 'json';
-  required: boolean; readOnly?: boolean; options?: { value: string; label: string; group?: string }[]; dependsOn?: string; help?: string };
+  required: boolean; readOnly?: boolean; reference?: boolean; options?: { value: string; label: string; group?: string }[]; dependsOn?: string; help?: string };
 export type AdminRecordForm = { model: string; id: string; version: string; label: string; fields: AdminField[];
   values: Record<string, string>; create: boolean; trash: boolean; deleted: boolean; guidance: string | null; href: string;
   relationships: { label: string; href: string }[]; restoringRevision: string | null;
