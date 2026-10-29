@@ -76,7 +76,7 @@ test('documented origin is admin-only, versioned and independent of current assi
   await replay(reader, initialRequest); expect(await originRows()).toHaveLength(0);
   if (mode === 'disabled') { await adminContext.close(); await readerContext.close(); await originalContext.close(); return; }
   await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   await admin.goto(search); await fillInitial(); await form.getByRole('button', { name: 'Registra provenienza', exact: true }).click();
   await expect.poll(async () => (await originRows()).length).toBe(1);
   const first = (await originRows())[0];

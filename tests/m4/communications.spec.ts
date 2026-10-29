@@ -28,7 +28,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   const admin = await ac.newPage(), operator = await oc.newPage(), target = `/communications?kind=TECHNICAL&practice=${f.practiceId}`;
   await login(admin, 'admin'); await login(operator, 'operator');
   await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/settings/communications');
   const box = admin.locator('form').filter({ has: admin.locator(`input[name="mailboxId"][value="${f.mailboxId}"]`) });
   const configure = box.filter({ has: admin.locator('input[name="intent"][value="configure"]') });

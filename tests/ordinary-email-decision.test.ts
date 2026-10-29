@@ -26,6 +26,18 @@ const current: OrdinaryDecisionCurrentState = { actor: { userId: 'synthetic-pers
 const credentials = { sessionToken: 'synthetic-session-cookie', stepUpToken: createPrivilegedStepUpToken({ key,
   userId: current.actor.userId, sessionToken: 'synthetic-session-cookie', nowSeconds: now.getTime() / 1000 }) };
 const preview = () => previewOrdinaryDecision(material, current, key, now);
+
+test('thirty-minute Admin identity never renews an expired send preview', () => {
+  const longSession = { ...current, actor: { ...current.actor,
+    expiresAt: new Date(now.getTime() + 3600_000), registryExpiresAt: new Date(now.getTime() + 3600_000) } };
+  const proof = { sessionToken: credentials.sessionToken, stepUpToken: createPrivilegedStepUpToken({ key,
+    userId: current.actor.userId, sessionToken: credentials.sessionToken, role: 'admin', nowSeconds: now.getTime() / 1000 }) };
+  const old = previewOrdinaryDecision(material, longSession, key, now);
+  const sixMinutes = new Date(now.getTime() + 360_000);
+  assert.throws(() => confirmOrdinaryDecision(old.token, material, longSession, key, proof, sixMinutes));
+  const fresh = previewOrdinaryDecision(material, longSession, key, sixMinutes);
+  assert.doesNotThrow(() => confirmOrdinaryDecision(fresh.token, material, longSession, key, proof, sixMinutes));
+});
 const confirm = (token: string, next = material, state = current, auth = credentials, clock = now) =>
   confirmOrdinaryDecision(token, next, state, key, auth, clock);
 

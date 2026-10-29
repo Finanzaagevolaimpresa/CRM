@@ -19,7 +19,7 @@ async function personalConfirmation(tx: Prisma.TransactionClient, actor: AuthSes
   const digest = await tokenDigestFromCookie(proof.sessionToken);
   const session = await tx.internalSession.findUnique({ where: { id: actor.sessionId! }, select: { tokenDigest: true } });
   if (!digest || !session || digest.length !== session.tokenDigest.length || !timingSafeEqual(digest, session.tokenDigest)
-    || !verifyPrivilegedStepUpToken({ key: proof.key, expectedUserId: actor.userId, sessionToken: proof.sessionToken,
+    || !verifyPrivilegedStepUpToken({ key: proof.key, expectedUserId: actor.userId, role: actor.role, sessionToken: proof.sessionToken,
       token: proof.stepUpToken, nowSeconds: Math.floor(now.getTime() / 1000) })) throw new LeadLifecycleError('DENIED');
 }
 export async function transitionLeadLifecycle(db: PrismaClient, claimed: AuthSession, raw: unknown, proof: LeadLifecycleCredentials) {

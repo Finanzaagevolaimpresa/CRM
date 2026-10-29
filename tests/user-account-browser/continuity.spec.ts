@@ -59,7 +59,7 @@ test('exception queue identifies completed work and reaches clientless and older
     await adminContext.close(); await otherContext.close(); return;
   }
   await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(admin).toHaveURL(/status=active/);
   for (const task of [standalone, older]) {
     await admin.goto('/settings/assignment-exceptions?kind=tasks');
@@ -153,7 +153,7 @@ test('removal requires admin step-up and preserves work, archive and immediate r
     await adminContext.close(); await ownerContext.close(); await otherContext.close(); return;
   }
   await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/settings/users/' + ownerId);
   await expect(removal).toHaveAttribute('data-interactive-ready', 'true');

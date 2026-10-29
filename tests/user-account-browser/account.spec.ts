@@ -58,7 +58,7 @@ test('admin account management, own profile/password, direct denials, revocation
   await login(admin, adminEmail, password);
   await admin.goto('/settings/security');
   await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/settings/users');
   await admin.getByPlaceholder('Nome', { exact: true }).fill('M1 Operator');
@@ -149,7 +149,7 @@ test('own admin profile name works without step-up while email still requires ad
   expect(await db.auditLog.count({ where: { actorId: user.id, event: 'user_profile_updated' } })).toBe(1);
   if (privilegedMode === 'enforced') {
     await page.getByLabel('Password corrente').fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
     await expect(page).toHaveURL(/status=active/);
     await page.goto('/settings/account');
     await profile.getByLabel('Email di accesso').fill(newEmail);

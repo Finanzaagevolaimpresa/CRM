@@ -11,7 +11,9 @@ import {
 import {
   createPrivilegedStepUpToken,
   PRIVILEGED_STEP_UP_TTL_SECONDS,
+  ADMIN_PRIVILEGED_STEP_UP_TTL_SECONDS,
   verifyPrivilegedStepUpToken,
+  verifiedPrivilegedStepUpExpiry,
 } from './privileged-step-up-token';
 
 const sessionCookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
@@ -109,6 +111,7 @@ async function activeStepUpForSession(session: AuthSession) {
     token: stepUpToken,
     key,
     expectedUserId: session.userId,
+    role: session.role,
     sessionToken,
   }));
 }
@@ -179,6 +182,7 @@ export async function requireEnforcedPrivilegedMutation(
     token: stepUpToken,
     key,
     expectedUserId: session.userId,
+    role: session.role,
     sessionToken,
   })) {
     await auditStepUp(session.userId, 'blocked_privileged_step_up', {
@@ -193,10 +197,13 @@ export async function requireEnforcedPrivilegedMutation(
 export async function privilegedAccessReadiness(session: AuthSession) {
   let mode: 'disabled' | 'enforced' | 'invalid' = 'invalid';
   try { mode = privilegedAccessMode(); } catch { /* minimized readiness state */ }
-  if (mode !== 'enforced') return { mode, keyReady: false, active: false } as const;
-  const keyReady = Boolean(await loadActivePrivilegedStepUpKey(prisma));
-  const active = keyReady && await activeStepUpForSession(session);
-  return { mode, keyReady, active } as const;
+  if (mode !== 'enforced') return { mode, keyReady: false, active: false, expiresAt: null } as const;
+  const key = await loadActivePrivilegedStepUpKey(prisma);
+  const store = await cookies(), sessionToken = store.get(sessionCookieName)?.value;
+  const expiresAt = key && sessionToken ? verifiedPrivilegedStepUpExpiry({ key,
+    expectedUserId: session.userId, role: session.role, sessionToken,
+    token: store.get(privilegedStepUpCookieName)?.value }) : null;
+  return { mode, keyReady: Boolean(key), active: expiresAt !== null, expiresAt } as const;
 }
 
 export async function establishPrivilegedStepUp(session: AuthSession, password: string) {
@@ -218,25 +225,31 @@ export async function establishPrivilegedStepUp(session: AuthSession, password: 
   }
   const user = await prisma.user.findFirst({
     where: { id: session.userId, active: true, deletedAt: null },
-    select: { passwordHash: true },
+    select: { passwordHash: true, role: true },
   });
   if (!user || !await bcrypt.compare(password, user.passwordHash)) {
     await auditStepUp(session.userId, 'blocked_privileged_step_up', { code: 'CREDENTIALS_INVALID' });
     return 'DENIED' as const;
   }
   const now = Math.floor(Date.now() / 1000);
+  const ttlSeconds = Math.min(session.expiresAt - now, user.role === 'admin'
+    ? ADMIN_PRIVILEGED_STEP_UP_TTL_SECONDS : PRIVILEGED_STEP_UP_TTL_SECONDS);
+  if (ttlSeconds < 1) return 'DENIED' as const;
   const token = createPrivilegedStepUpToken({
     key,
     userId: session.userId,
     sessionToken,
     nowSeconds: now,
+    role: user.role,
+    ttlSeconds,
   });
   store.set(privilegedStepUpCookieName, token, {
     httpOnly: true,
     sameSite: 'strict',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
-    expires: new Date((now + PRIVILEGED_STEP_UP_TTL_SECONDS) * 1000),
+    expires: new Date((now + ttlSeconds) * 1000),
+    maxAge: ttlSeconds,
     priority: 'high',
   });
   await auditStepUp(session.userId, 'privileged_step_up_established', {

@@ -47,7 +47,7 @@ test('native lead, standalone client and internal composition preserve context, 
   await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();
   await expect(page.getByRole('button',{name:'Conferma partecipanti',exact:true})).toBeDisabled();
   await page.goto('/settings/security');await page.getByLabel('Password corrente').fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
-  await page.getByRole('button',{name:'Conferma per cinque minuti'}).click();await expect(page).toHaveURL(/status=active/);
+  await page.getByRole('button',{name:/Conferma per (5|30) minuti/}).click();await expect(page).toHaveURL(/status=active/);
   await page.goto('/communications');await page.getByLabel('Titolo della comunicazione interna').fill('Native private conversation');
   await page.locator('input[name="participant"][value="'+member.id+'"]').check();await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();
   await page.getByLabel('Confermo queste persone e l’accesso indicato.').check();await page.getByRole('button',{name:'Conferma partecipanti',exact:true}).click();

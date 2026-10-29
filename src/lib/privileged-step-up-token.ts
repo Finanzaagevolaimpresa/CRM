@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { privilegedStepUpTtlSeconds, PRIVILEGED_STEP_UP_TTL_SECONDS } from './privileged-step-up-policy';
+export { PRIVILEGED_STEP_UP_TTL_SECONDS, ADMIN_PRIVILEGED_STEP_UP_TTL_SECONDS } from './privileged-step-up-policy';
 
-export const PRIVILEGED_STEP_UP_TTL_SECONDS = 5 * 60;
 const TOKEN_PATTERN = /^su1\.([A-Za-z0-9_-]{1,1400})\.([A-Za-z0-9_-]{43})$/;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -16,6 +17,7 @@ type TokenPayload = {
   i: number;
   e: number;
   n: string;
+  r?: 'admin';
 };
 
 function base64Url(value: Buffer | string) {
@@ -43,7 +45,9 @@ function parsePayload(encoded: string): TokenPayload | null {
     const value: unknown = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const payload = value as Partial<TokenPayload>;
-    if (Object.keys(payload).sort().join(',') !== 'b,e,i,k,n,u') return null;
+    const keys = Object.keys(payload).sort().join(',');
+    if (keys !== 'b,e,i,k,n,u' && keys !== 'b,e,i,k,n,r,u') return null;
+    if (keys.includes(',r,') && payload.r !== 'admin') return null;
     if (!Number.isSafeInteger(payload.k) || Number(payload.k) <= 0) return null;
     if (typeof payload.u !== 'string' || payload.u.length < 1 || payload.u.length > 191) return null;
     if (typeof payload.b !== 'string' || !DIGEST_PATTERN.test(payload.b)) return null;
@@ -61,14 +65,17 @@ export function createPrivilegedStepUpToken(input: {
   sessionToken: string;
   nowSeconds?: number;
   ttlSeconds?: number;
+  /** Authoritative current role, never a value supplied by the browser. */
+  role?: string;
 }) {
   if (!validKey(input.key)) throw new TypeError('PRIVILEGED_STEP_UP_KEY_INVALID');
   if (!input.userId || input.userId.length > 191 || !input.sessionToken) {
     throw new TypeError('PRIVILEGED_STEP_UP_SUBJECT_INVALID');
   }
   const issuedAt = input.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const ttl = input.ttlSeconds ?? PRIVILEGED_STEP_UP_TTL_SECONDS;
-  if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(ttl) || ttl < 1 || ttl > PRIVILEGED_STEP_UP_TTL_SECONDS) {
+  const maximum = privilegedStepUpTtlSeconds(input.role);
+  const ttl = input.ttlSeconds ?? maximum;
+  if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(ttl) || ttl < 1 || ttl > maximum) {
     throw new TypeError('PRIVILEGED_STEP_UP_TTL_INVALID');
   }
   const payload: TokenPayload = {
@@ -78,6 +85,7 @@ export function createPrivilegedStepUpToken(input: {
     i: issuedAt,
     e: issuedAt + ttl,
     n: randomBytes(16).toString('base64url'),
+    ...(input.role === 'admin' ? { r: 'admin' as const } : {}),
   };
   const encoded = base64Url(JSON.stringify(payload));
   return `su1.${encoded}.${sign(encoded, input.key.secret)}`;
@@ -89,6 +97,8 @@ export function verifyPrivilegedStepUpToken(input: {
   expectedUserId: string;
   sessionToken: string;
   nowSeconds?: number;
+  /** Current server-loaded role; missing context retains the five-minute ceiling. */
+  role?: string;
 }) {
   if (!input.token || input.token.length > 1600 || !validKey(input.key) || !input.sessionToken) return false;
   const match = TOKEN_PATTERN.exec(input.token);
@@ -105,7 +115,9 @@ export function verifyPrivilegedStepUpToken(input: {
   if (payload.b !== privilegedSessionBinding(input.sessionToken)) return false;
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   if (!Number.isSafeInteger(now) || payload.i > now + 5 || payload.e <= now) return false;
-  return payload.e > payload.i && payload.e - payload.i <= PRIVILEGED_STEP_UP_TTL_SECONDS;
+  if (payload.r === 'admin' && input.role !== 'admin') return false;
+  const maximum = payload.r === 'admin' ? privilegedStepUpTtlSeconds(input.role) : PRIVILEGED_STEP_UP_TTL_SECONDS;
+  return payload.e > payload.i && payload.e - payload.i <= maximum;
 }
 
 /** Returns the signed expiry only after the same subject/session verification.

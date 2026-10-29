@@ -18,7 +18,7 @@ async function login(page: Page, email: string) {
 }
 async function stepUp(page: Page) {
   await page.goto('/settings/security'); await page.getByLabel('Password corrente').fill(password);
-  await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(page).toHaveURL(/status=active/);
+  await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(page).toHaveURL(/status=active/);
 }
 async function capture(page: Page, path: string) {
   await page.evaluate(pathname => {

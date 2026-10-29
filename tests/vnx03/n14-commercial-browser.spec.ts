@@ -175,7 +175,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   const adminPage = await loginActive(admin, 'admin.n14@vnx03.invalid', 'admin');
   await adminPage.goto(crmUrl + '/settings/security');
   await adminPage.getByLabel('Password corrente').fill(password);
-  await adminPage.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await adminPage.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(adminPage).toHaveURL(/status=active/);
   await adminPage.goto(crmUrl + '/leads/inbox?queue=unassigned');
   await expect(adminPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();

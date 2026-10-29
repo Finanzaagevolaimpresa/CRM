@@ -46,7 +46,7 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await cp.goto(`${origin}/clients/${client.id}`);
   await expect(cp.getByRole('heading', { name: 'Cliente non trovato o non accessibile' })).toBeVisible();
   await ap.goto(origin + '/settings/security'); await ap.getByLabel('Password corrente').fill(password);
-  await ap.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(ap).toHaveURL(/status=active/);
+  await ap.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(ap).toHaveURL(/status=active/);
   await ap.goto(`${origin}/settings/users/${collaborator.id}/perimeter?q=Cliente%20dimostrativo%20R23`);
   await ap.getByRole('form', { name: 'Consultazione ' + client.displayName, exact: true }).getByRole('button', { name: 'Consenti consultazione' }).click();
   await expect.poll(() => db.clientReadGrant.findUnique({ where: { userId_clientId: { userId: collaborator.id, clientId: client.id } } }).then(row => row?.active)).toBe(true);

@@ -98,7 +98,7 @@ export default async function Page({
     {assignmentAuthority && <Card title="Assegnazione del referente commerciale">
       {canManage ? <p>Conferma personale attiva. Scegli il referente nella scheda del lead e premi Assegna. L’assegnazione non registra una risposta e non converte il lead.</p>
         : readiness.mode === 'enforced' && readiness.keyReady ? <div className="crm-space-y-3">
-          <p>Per assegnare, cambiare o rilasciare un referente devi prima confermare la tua identità. La conferma vale cinque minuti nella sessione corrente; nessun lead viene modificato da questo passaggio.</p>
+          <p>Per assegnare, cambiare o rilasciare un referente devi prima confermare la tua identità. La conferma Admin vale 30 minuti nella sessione corrente; nessun lead viene modificato da questo passaggio.</p>
           <SecondaryLink href="/settings/security?returnTo=lead-inbox">Conferma identità per assegnare</SecondaryLink>
         </div> : <p>La protezione necessaria per assegnare il referente non è disponibile. I dati restano consultabili; l’assegnazione rimane bloccata.</p>}
     </Card>}

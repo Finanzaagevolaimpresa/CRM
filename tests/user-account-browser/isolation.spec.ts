@@ -145,7 +145,7 @@ for (const role of roles) test(`${role}: foreign HTTP access is denied; enforced
   await login(admin, 'admin');
   await admin.goto('/settings/security');
   await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/clients/' + f.clientId);
   const assignment = admin.getByRole('form', { name: 'Assegna responsabili' });

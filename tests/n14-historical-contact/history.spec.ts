@@ -30,7 +30,7 @@ async function ownedLead(browser: Browser, accept = true) {
   await admin.goto(`/leads/inbox?lead=${lead.id}`);
   await admin.getByRole('link', { name: 'Conferma identità per assegnare', exact: true }).click();
   await admin.getByLabel('Password corrente', { exact: true }).fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
   await expect(admin).toHaveURL(/\/leads\/inbox$/); await admin.goto(`/leads/inbox?lead=${lead.id}`);
   await admin.getByLabel('Referente commerciale', { exact: true }).selectOption(f.commercialId);
   await admin.getByRole('button', { name: 'Assegna', exact: true }).click();

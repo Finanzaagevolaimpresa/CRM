@@ -10,9 +10,10 @@ import { privilegedAccessReadiness } from '@/lib/privileged-access';
 import { privilegedAccessPermissions } from '@/lib/privileged-access-contract';
 import { securityReturnPath } from '@/lib/security-return-path';
 import { SecondaryLink } from '@/components/actions';
+import { privilegedStepUpTtlSeconds } from '@/lib/privileged-step-up-policy';
 
 const messages: Record<string, string> = {
-  active: 'Conferma privilegiata attiva per cinque minuti e vincolata alla sessione corrente.',
+  active: 'Conferma privilegiata attiva e vincolata alla sessione corrente.',
   cleared: 'Conferma privilegiata rimossa.',
   denied: 'Conferma non riuscita. Le credenziali non sono state accettate.',
   required: 'Per completare la mutazione è necessaria una nuova conferma della password.',
@@ -29,12 +30,13 @@ export default async function SecurityPage({
   const readiness = await privilegedAccessReadiness(session);
   const { status, returnTo } = await searchParams;
   const returnPath = securityReturnPath(returnTo);
+  const minutes = privilegedStepUpTtlSeconds(session.role) / 60;
 
   return (
     <div className="crm-space-y-6">
       <PageHeader
         title="Sicurezza operazioni privilegiate"
-        description="Conferma breve della password per operazioni amministrative su utenti, permessi e controlli AI. Il token è HttpOnly, dura cinque minuti ed è valido soltanto con la sessione corrente."
+        description={`Conferma la password per le operazioni amministrative. La conferma dura ${minutes} minuti nella sessione corrente; le anteprime dei singoli comandi mantengono la propria scadenza.`}
       />
       {returnPath && <SecondaryLink href={returnPath}>Torna alla coda lead</SecondaryLink>}
 
@@ -75,7 +77,7 @@ export default async function SecurityPage({
               />
             </label>
             <button className="rounded-xl bg-fai-green px-4 py-3 font-black text-white">
-              Conferma per cinque minuti
+              Conferma per {minutes} minuti
             </button>
           </form>
           {readiness.active ? (

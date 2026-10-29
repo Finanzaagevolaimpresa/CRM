@@ -105,7 +105,7 @@ test('native received reply becomes a separately approved draft with current sco
   await expect(panel).toHaveAttribute('data-ordinary-ready','true'); await panel.getByRole('button',{name:'Anteprima email ordinaria'}).click();
   await expect(panel.getByRole('button',{name:'Rifiuta versione 1'})).toBeDisabled();
   await page.goto('/settings/security'); await page.getByLabel('Password corrente').fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
-  await page.getByRole('button',{name:'Conferma per cinque minuti'}).click(); await expect(page).toHaveURL(/status=active/);
+  await page.getByRole('button',{name:/Conferma per (5|30) minuti/}).click(); await expect(page).toHaveURL(/status=active/);
   await page.goto(target); await expect(panel).toHaveAttribute('data-ordinary-ready','true');
   await panel.getByRole('button',{name:'Anteprima email ordinaria'}).click();
   await panel.getByLabel('Rifiuto personalmente questa versione esatta.').check(); await panel.getByRole('button',{name:'Rifiuta versione 1'}).click();

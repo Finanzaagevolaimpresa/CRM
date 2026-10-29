@@ -131,7 +131,7 @@ for (const entry of ['lead-update', 'practice-create', 'practice-update', 'pract
     await replay(page, deniedRequest); expect(await snapshot()).toEqual(before);
     if (mode === 'disabled') { await context.close(); return; }
     await page.goto('/settings/security'); await page.getByLabel('Password corrente').fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(page).toHaveURL(/status=active/);
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(page).toHaveURL(/status=active/);
     const result = await replay(page, deniedRequest); expect(result.status()).toBeLessThan(400);
     if (entry === 'lead-update') {
       await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: leadId! } })).assignedToId).toBe(f.admin.id);

@@ -132,7 +132,7 @@ test('four controlled channels, decisions, current assignment and direct denial'
   await login(managerPage, 'intake-manager@invalid.test');
   await managerPage.goto(app + '/settings/security');
   await managerPage.getByLabel('Password corrente').fill(password);
-  await managerPage.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await managerPage.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(managerPage).toHaveURL(/status=active/);
   const createdActionCapture = captureNextAction(page);
   await record(page, { channel: 'WPFORMS_1265', sourceId: 'B-1265', subjectType: 'IMPRESA', firstName: 'Ada', lastName: 'Prima', category: 'da_classificare', need: 'Continuità manuale' }, managerPage);

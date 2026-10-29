@@ -67,7 +67,7 @@ test('department does not grant access; actual admin decisions and personal acce
   const initial = await assign(''); await expect(admin).toHaveURL(/\/settings\/security/);
   expect(await decisions()).toHaveLength(0); await replay(tech, initial); expect(await decisions()).toHaveLength(0);
   if (mode === 'disabled') { await ac.close(); await tc.close(); await oc.close(); return; }
-  await admin.getByLabel('Password corrente').fill(password); await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+  await admin.getByLabel('Password corrente').fill(password); await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   await assign(''); await expect.poll(async () => (await decisions()).length).toBe(1);
   await expect(admin.getByText('Referente individuale mancante: presa in carico tecnica non avvenuta.', { exact: true })).toBeVisible();
   await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);

@@ -63,7 +63,7 @@ export function assertOrdinaryPersonalAction(current: OrdinaryDecisionCurrentSta
   key: PrivilegedStepUpKey, credentials: { sessionToken: string; stepUpToken: string | undefined }, now: Date) {
   requireKey(key);
   const authority = assertCurrent(current, channel, now);
-  if (!verifyPrivilegedStepUpToken({ key, expectedUserId: current.actor.userId, sessionToken: credentials.sessionToken,
+  if (!verifyPrivilegedStepUpToken({ key, expectedUserId: current.actor.userId, role: current.actor.role, sessionToken: credentials.sessionToken,
     token: credentials.stepUpToken, nowSeconds: Math.floor(now.getTime() / 1000) })) deny();
   return authority;
 }

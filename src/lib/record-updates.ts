@@ -42,7 +42,7 @@ export async function updateActor(tx: Tx, claimed: AuthSession, proof?: UpdateCr
       const digest = await tokenDigestFromCookie(proof.sessionToken);
       const row = await tx.internalSession.findUnique({ where: { id: registry.id }, select: { tokenDigest: true } });
       if (!digest || !row || digest.length !== row.tokenDigest.length || !timingSafeEqual(digest, row.tokenDigest)
-        || !verifyPrivilegedStepUpToken({ key: proof.key, expectedUserId: actor.id, sessionToken: proof.sessionToken,
+        || !verifyPrivilegedStepUpToken({ key: proof.key, expectedUserId: actor.id, role: actor.role, sessionToken: proof.sessionToken,
           token: proof.stepUpToken, nowSeconds: Math.floor(now.getTime() / 1000) })) deny();
     }
     return now;

@@ -56,7 +56,7 @@ async function personal(tx: Tx, current: CurrentSession, proof: LeadEditPersonal
   const digest = await tokenDigestFromCookie(proof.sessionToken);
   if (privilegedAccessMode() !== 'enforced' || !session || !digest || digest.length !== session.tokenDigest.length
     || !timingSafeEqual(digest, session.tokenDigest) || !verifyPrivilegedStepUpToken({ key: proof.key,
-      expectedUserId: current.userId, sessionToken: proof.sessionToken, token: proof.stepUpToken,
+      expectedUserId: current.userId, role: current.role, sessionToken: proof.sessionToken, token: proof.stepUpToken,
       nowSeconds: Math.floor(now.getTime() / 1000) })) deny();
 }
 

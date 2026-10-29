@@ -48,7 +48,7 @@ async function personal(tx: Tx, claimed: AuthSession, credentials: InternalCommu
   const finish = async () => {
     const now = await clock(tx);
     if (actor.expiresAt <= now || claimed.expiresAt * 1000 <= now.getTime()
-      || (write && !verifyPrivilegedStepUpToken({ key: credentials.key, expectedUserId: actor.userId,
+      || (write && !verifyPrivilegedStepUpToken({ key: credentials.key, expectedUserId: actor.userId, role: actor.role,
         sessionToken: credentials.sessionToken, token: credentials.stepUpToken, nowSeconds: Math.floor(now.getTime() / 1000) }))) deny();
   };
   await finish();

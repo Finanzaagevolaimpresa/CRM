@@ -52,7 +52,7 @@ async function assertPersonal(tx:Tx,current:CurrentSession,proof:TechnicalAssign
   const session=await tx.internalSession.findUnique({where:{id:current.sessionId!},select:{tokenDigest:true}});
   const digest=await tokenDigestFromCookie(proof.sessionToken);
   const proofExpiresAt=verifiedPrivilegedStepUpExpiry({
-      key:proof.key,expectedUserId:current.userId,sessionToken:proof.sessionToken,token:proof.stepUpToken,
+      key:proof.key,expectedUserId:current.userId,role:current.role,sessionToken:proof.sessionToken,token:proof.stepUpToken,
       nowSeconds:Math.floor(now.getTime()/1000) });
   if(privilegedAccessMode()!=='enforced' || !session || !digest || digest.length!==session.tokenDigest.length
     || !timingSafeEqual(digest,session.tokenDigest) || !proofExpiresAt) deny();
@@ -65,7 +65,7 @@ async function assertPersonal(tx:Tx,current:CurrentSession,proof:TechnicalAssign
  * The callback must still lock and verify the target, assignment journal,
  * document scope and exact command before any projection or mutation. */
 async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,recipientId:string|null,
-  mode:'MANAGEMENT_READ'|'PERSONAL_DECISION'|'RECIPIENT',proof:TechnicalAssignmentPersonalProof|null,
+  mode:'MANAGEMENT_READ'|'PERSONAL_DECISION'|'RECIPIENT'|'ATTEMPT_SETTLEMENT',proof:TechnicalAssignmentPersonalProof|null,
   work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,inactiveRecipientForRevocation=false) {
   identifier.parse(claimed.userId);
   if(recipientId) identifier.parse(recipientId);
@@ -113,6 +113,13 @@ export function withTechnicalAssignmentManagementRead<T>(db:PrismaClient,claimed
   recipientId:string|null,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,
   options:{inactiveRecipientForRevocation?:true}={}) {
   return withTransaction(db,claimed,kind,recipientId,'MANAGEMENT_READ',null,work,options.inactiveRecipientForRevocation);
+}
+/** Only a signed audit closure may be written here. It neither changes an
+ * assignment nor authorizes a future decision; actor/recipient locks serialize
+ * settlement with any in-flight confirmation before absence is evaluated. */
+export function withTechnicalAssignmentAttemptSettlement<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
+  recipientId:string,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>) {
+  return withTransaction(db,claimed,kind,recipientId,'ATTEMPT_SETTLEMENT',null,work,true);
 }
 export function withTechnicalAssignmentDecision<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
   recipientId:string,proof:TechnicalAssignmentPersonalProof,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,

@@ -111,7 +111,7 @@ for (const role of roles) test(`${role}: explicit admin grant and revocation aff
   expect(await db.clientReadGrant.count({ where: { userId, clientId } })).toBe(0);
   if (mode === 'disabled') { await readerContext.close(); await adminContext.close(); return; }
   await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   await admin.goto(path + '?q=' + encodeURIComponent(tag + '-client'));
   await admin.getByRole('form', { name: 'Consultazione ' + tag + '-client', exact: true }).getByRole('button', { name: 'Consenti consultazione' }).click();
   await expect.poll(() => db.clientReadGrant.findUnique({ where: { userId_clientId: { userId, clientId } } }).then(row => row?.active)).toBe(true);
@@ -165,7 +165,7 @@ test('removed account archive exposes preserved grants with step-up revocation a
   expect(await db.auditLog.count({ where: { entityType: 'ClientReadGrant', entityId: grant.id } })).toBe(0);
   if (mode === 'disabled') return;
   await page.getByLabel('Password corrente').fill(password);
-  await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(page).toHaveURL(/status=active/);
   await openFromArchive();
   await page.getByRole('button', { name: 'Revoca consultazione', exact: true }).click();

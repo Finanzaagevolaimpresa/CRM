@@ -20,7 +20,7 @@ async function login(page: Page, email: string, stepUp = false) {
     await page.goto('/settings/security'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
     await page.getByLabel('Password corrente', { exact: true }).fill(password);
     const response = page.waitForResponse(r => new URL(r.url()).pathname === '/settings/security' && r.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     expect((await response).status()).toBeLessThan(400);
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
