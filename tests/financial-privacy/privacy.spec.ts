@@ -10,11 +10,34 @@ const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as 
 async function documentContextScreens(page: Page, name: string) {
   for (const [suffix, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
     await page.setViewportSize({ width, height });
+    // A navigation can expose its links before the responsive stylesheet has
+    // settled. Do not capture that transient full-page size as visual evidence.
+    await expect(page.locator('main.crm-page-main')).toHaveCSS('padding', suffix === 'desktop' ? '32px' : '16px');
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    const dimensions = await page.evaluate(() => ({
+      width: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, document.body.offsetWidth,
+        document.documentElement.offsetWidth, document.body.clientWidth, document.documentElement.clientWidth),
+      height: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.body.offsetHeight,
+        document.documentElement.offsetHeight, document.body.clientHeight, document.documentElement.clientHeight),
+      viewportWidth: innerWidth, viewportHeight: innerHeight,
+    }));
+    expect(dimensions.viewportWidth).toBe(width); expect(dimensions.viewportHeight).toBe(height);
+    expect(dimensions.width).toBe(width);
+    // Desktop scrolling belongs to the application panel, not an expanding body.
+    if (suffix === 'desktop') expect(dimensions.height).toBe(height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     expect(await page.locator('form input:not([type=hidden]), form select, form button').evaluateAll(nodes => nodes.every(node => {
       const r = node.getBoundingClientRect(); return !r.width || (r.left >= 0 && r.right <= innerWidth + 1);
     }))).toBe(true);
-    await page.screenshot({ path: join(root, `${name}-${suffix}.png`), fullPage: true, caret: 'initial' });
+    const screenshot = await page.screenshot({ path: join(root, `${name}-${suffix}.png`), fullPage: true, caret: 'initial' });
+    // PNG IHDR records the actual capture dimensions; preserve them next to the
+    // DOM measurement and fail rather than silently crop an anomalous archive.
+    const captured = { width: screenshot.readUInt32BE(16), height: screenshot.readUInt32BE(20) };
+    writeFileSync(join(root, `${name}-${suffix}-dimensions.json`), JSON.stringify({ synthetic: true, dimensions, captured }));
+    expect(captured).toEqual({ width: dimensions.width, height: dimensions.height });
   }
 }
 async function login(page: Page, role: string) {

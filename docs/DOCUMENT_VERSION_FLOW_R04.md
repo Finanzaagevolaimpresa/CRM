@@ -47,6 +47,9 @@ Due prove browser native coprono Admin e Commerciale, risposta persa e recupero
 dopo reload, apertura effettiva dei byte precedenti da tecnico ammesso, diniego
 all'altro tecnico e revoca con pagine aperte. Gli screenshot desktop/mobile
 devono essere ispezionati sull'HEAD qualificato. Nessun dato reale è una fixture.
+La cattura attende gli stili responsive e confronta le dimensioni native del PNG
+con quelle del DOM, conservandole come prova. Un'altezza anomala fa fallire il
+controllo: nessun ritaglio nasconde contenuti o errori di impaginazione.
 
 Lo stato iniziale di questo documento descrive il candidato implementato;
 non attesta esecuzione delle prove CI, riesame, integrazione o distribuzione.
