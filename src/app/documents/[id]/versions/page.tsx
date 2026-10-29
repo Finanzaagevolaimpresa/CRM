@@ -6,7 +6,8 @@ import { documentVersionPage } from '@/lib/document-version-service';
 import { DocumentVersionError } from '@/lib/document-version-contract';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 import { DocumentVersionUpload } from '@/components/document-version-upload';
-import { Card, PageHeader, formatDateTime } from '@/components/ui';
+import { Card, PageHeader } from '@/components/ui';
+import { operationalRomeTime } from '@/lib/operational-time';
 
 export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ before?: string | string[] }> }) {
   const actor = await getSession(); if (!actor) notFound();
@@ -22,7 +23,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <p>Versione corrente: {state.currentVersion ?? 'non disponibile'}.</p>
       {before !== undefined && <a href={`/documents/${encodeURIComponent(id)}/versions`} className="font-bold underline">Torna alle versioni recenti</a>}
       <ul className="grid gap-3">{state.versions.map(v => <li key={v.id} className="flex flex-wrap items-center gap-3 rounded-xl border p-3">
-        <strong>Versione {v.version}</strong><span>{formatDateTime(v.createdAt)}</span>
+        <strong>Versione {v.version}</strong><time dateTime={v.createdAt}>{operationalRomeTime(v.createdAt)}</time>
         <a href={`/documents/${encodeURIComponent(id)}/view?versionId=${encodeURIComponent(v.id)}`} target="_blank" rel="noopener noreferrer" className="font-bold underline">Visualizza versione {v.version}</a>
         <a href={`/documents/${encodeURIComponent(id)}/download?versionId=${encodeURIComponent(v.id)}`} className="font-bold underline">Scarica versione {v.version}</a>
       </li>)}</ul>

@@ -383,16 +383,19 @@ test('native document versions preserve old bytes, expose exact history and reco
   const tech = fixture.fixtures.find(f => f.role === 'consulente' && !f.denied)!;
   const other = fixture.fixtures.find(f => f.role === 'backoffice' && !f.denied)!;
   const original = 'VERSION_ONE_SYNTHETIC', replacement = 'VERSION_TWO_SYNTHETIC';
+  const validUntil = new Date(Date.now() + 7 * 86400_000);
   const saved = await savePrivateDocumentFile({ file: new File([original], 'history.txt', { type: 'text/plain' }), clientId: tech.clientId, clientServiceId: tech.serviceId, fileName: 'history.txt' });
   const doc = await db.document.create({ data: { ...saved, fileName: 'history.txt', type: 'text/plain', mimeType: 'text/plain', title: 'Storico versioni sintetico',
-    clientId: tech.clientId, projectId: tech.projectId, clientServiceId: tech.serviceId, uploadedById: admin.userId } });
-  const first = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum: saved.checksum, storagePath: saved.storagePath } });
-  const ac = await browser.newContext(), tc = await browser.newContext(), oc = await browser.newContext();
+    clientId: tech.clientId, projectId: tech.projectId, clientServiceId: tech.serviceId, uploadedById: admin.userId, validUntil } });
+  const persistedCreatedAt = new Date('2026-10-25T01:30:45.123Z');
+  const first = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum: saved.checksum, storagePath: saved.storagePath, createdAt: persistedCreatedAt } });
+  const ac = await browser.newContext({ timezoneId: 'Asia/Tokyo' }), tc = await browser.newContext(), oc = await browser.newContext();
   const a = await ac.newPage(), t = await tc.newPage(), o = await oc.newPage();
   try {
     await login(a, admin.key); await login(t, tech.key); await login(o, other.key);
     const path = `/documents/${doc.id}/versions`;
     await a.goto(path);
+    await expect(a.locator(`time[datetime="${persistedCreatedAt.toISOString()}"]`)).toHaveText('25/10/26, 02:30 · Europe/Rome');
     const region = a.getByRole('region', { name: 'Nuova versione documentale', exact: true });
     await expect(region).toHaveAttribute('data-document-version-ready', 'true');
     await region.getByLabel('File della nuova versione', { exact: true }).setInputFiles({ name: 'history-new.txt', mimeType: 'text/plain', buffer: Buffer.from(replacement) });
@@ -417,7 +420,15 @@ test('native document versions preserve old bytes, expose exact history and reco
     await region.getByRole('link', { name: 'Riapri lo storico aggiornato', exact: true }).click();
     await expect(a.getByRole('link', { name: 'Visualizza versione 1', exact: true })).toBeVisible();
     await expect(a.getByRole('link', { name: 'Visualizza versione 2', exact: true })).toBeVisible();
+    await expect(a.locator(`time[datetime="${persistedCreatedAt.toISOString()}"]`)).toHaveText('25/10/26, 02:30 · Europe/Rome');
+    expect((await db.documentVersion.findUniqueOrThrow({ where: { id: first.id } })).createdAt.toISOString()).toBe(persistedCreatedAt.toISOString());
     await documentContextScreens(a, 'document-version-history');
+    await a.goto('/documents');
+    const row = a.getByRole('row').filter({ hasText: doc.title });
+    await expect(row).toHaveCount(1);
+    const expiry = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short' }).format(validUntil);
+    await expect(row).toContainText(expiry + ' · Europe/Rome');
+    expect((await db.document.findUniqueOrThrow({ where: { id: doc.id } })).validUntil?.toISOString()).toBe(validUntil.toISOString());
     await t.goto(path);
     const popup = tc.waitForEvent('page'); await t.getByRole('link', { name: 'Visualizza versione 1', exact: true }).click();
     const view = await popup; await expect(view.locator('body')).toContainText(original);

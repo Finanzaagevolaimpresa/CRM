@@ -31,6 +31,13 @@ questa pagina né eredita le nuove versioni: i trigger esistenti invalidano la
 vecchia fotografia della concessione; l'Admin deve verificare e scegliere di
 nuovo versione e permesso di download. Contratti e pagamenti restano riservati.
 
+Lo storico mostra l'ora di registrazione in Europe/Rome esplicito. L'elemento
+time conserva l'istante ISO originale: nessuno spostamento del dato persistito.
+Il browser verifica anche un istante nell'ora ripetuta di ottobre, con dispositivo
+Asia/Tokyo, prima e dopo un caricamento e la riapertura dello storico. Il centro
+documentale mostra in Roma anche scadenza e tracciabilità; la prova confronta
+la scadenza esposta con l'istante persistito rimasto identico dopo la nuova versione.
+
 ## Qualifica richiesta
 
 Dieci prove PostgreSQL isolate verificano byte precedenti, idempotenza, due
