@@ -56,7 +56,7 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
     {requestSource && <><input type="hidden" name="adminRequestId" value={requestSource.requestId} /><input type="hidden" name="adminRequestSourceHash" value={requestSource.sourceHash} />
       <p>Bozza collegata alla richiesta interna. Scegli destinatari, testo e allegati: il salvataggio non approva né invia email.</p></>}
     <input type="hidden" name="messageId" value={commandId ?? snapshot?.messageId ?? updateDraft?.deliveryId ?? requestSource?.requestId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
-    <label>Mittente<select required className={field} name="mailboxId" defaultValue={snapshot?.mailboxId ?? ''}>
+    <label>Mittente<select aria-label="Mittente" required className={field} name="mailboxId" defaultValue={snapshot?.mailboxId ?? ''}>
       <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.filter(box => (!updateDraft?.mailboxId || box.id === updateDraft.mailboxId) && (!requestSource || box.id === requestSource.mailboxId)).map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
     </select></label>
     <label>Reply-To<input required className={field} type="email" name="replyTo" defaultValue={snapshot?.replyTo} /></label>
@@ -72,7 +72,7 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
       initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />}
     <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject ?? replacement?.subject ?? updateDraft?.subject} /></label>
     <label>Testo esatto<textarea aria-label="Testo esatto" required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? replacement?.body ?? updateDraft?.body} /></label>
-    <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replacement?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
+    <label>Riservatezza<select aria-label="Riservatezza" name="classification" className={field} defaultValue={snapshot?.classification ?? replacement?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
     <fieldset className="min-w-0 rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
       {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
         defaultChecked={snapshot?.schema === 'fai.approved-email.v2' && snapshot.attachments.some(a => a.source === 'CONTEXT_FILE' && a.versionId === file.id)} />{file.fileName} · {file.sizeBytes} byte</label>)}
