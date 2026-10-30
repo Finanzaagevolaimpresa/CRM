@@ -1,4 +1,5 @@
 import { canAccessFinancialDocument } from './financial-document-access';
+import { assertOperationalAccess, readOperationalState, AdminOperationalStateError, type AdminOperationalModel, type OperationalStateRow } from './admin-operational-state';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type CommunicationMailbox } from '@prisma/client';
 import { z } from 'zod';
@@ -77,7 +78,28 @@ async function actor(tx: Tx, claimed: AuthSession, permission: Permission, admin
   return current;
 }
 
-async function contextScope(tx: Tx, current: CommunicationPrincipal, context: CommunicationContext, write = false) {
+async function operationalCommunicationContext(tx: Tx, context: CommunicationContext, messageId?: string) {
+  const references: Array<{ model: AdminOperationalModel; id: string }> = [];
+  if (context.kind === 'READINESS') {
+    references.push({ model: 'PracticeReadiness', id: context.id });
+    const p = await tx.practiceReadiness.findUnique({ where: { id: context.id }, select: { controlledIntakeId: true } });
+    if (p) references.push({ model: 'ControlledIntake', id: p.controlledIntakeId });
+  } else if (context.kind === 'LEAD') {
+    const intake = await tx.controlledIntake.findUnique({ where: { leadId: context.id }, select: { id: true } });
+    if (intake) references.push({ model: 'ControlledIntake', id: intake.id });
+  }
+  if (messageId) references.push({ model: 'ApprovedCommunication', id: messageId });
+  const rows: OperationalStateRow[] = [];
+  for (const reference of references.sort((a,b)=>(a.model+':'+a.id).localeCompare(b.model+':'+b.id))) {
+    const row = await readOperationalState(tx, reference.model, reference.id); if (row) rows.push(row);
+  }
+  return rows;
+}
+async function contextScope(tx: Tx, current: CommunicationPrincipal, context: CommunicationContext, write = false, administrativeHistory = false) {
+  for (const row of await operationalCommunicationContext(tx,context)) {
+    try { await assertOperationalAccess(tx,row.model,row.recordId,current.role,write,administrativeHistory); }
+    catch (error) { if (error instanceof AdminOperationalStateError) denied(); throw error; }
+  }
   if (context.kind !== 'READINESS' && context.kind !== 'TECHNICAL') {
     if (context.kind === 'INTERNAL' && !hasPermission(current, 'communications.internal.read')) denied();
     if (write) {
@@ -280,9 +302,12 @@ async function messageScope(tx: Tx, current: CommunicationPrincipal, id: string,
     versions: { orderBy: { revision: 'asc' }, include: { approval: true } },
   } });
   if (!row) denied();
+  try { await assertOperationalAccess(tx,'ApprovedCommunication',id,current.role,write); }
+  catch (error) { if (error instanceof AdminOperationalStateError) denied(); throw error; }
   const scope = await contextScope(tx, current, rowContext(row), write);
   const version = row.versions.find((item) => item.revision === row.currentRevision);
   if (!version || row.clientId !== (scope.client?.id ?? null)) denied();
+  if (requireFreshSource && (await operationalCommunicationContext(tx,scope.context,id)).some(state => state.updatedAt >= version.createdAt)) conflict();
   const snapshot = parse(approvedMessageSnapshotSchema, version.snapshot);
   if (snapshot.messageId !== row.id || snapshot.clientId !== row.clientId || snapshot.revision !== row.currentRevision
     || canonicalSha256(snapshot.context) !== canonicalSha256(rowContext(row)) || snapshot.mailboxId !== row.mailboxId
@@ -397,6 +422,7 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
     ...(loaded.row.updateDeliveryId ? { updateSourceHash: loaded.version.updateSourceHash } : {}),
     ...(loaded.requestSource ? { requestSourceHash: loaded.requestSource.sourceHash } : {}),
     actorId: current.userId, role: current.role, overrides: current.permissionOverrides,
+    operationalLifecycle: (await operationalCommunicationContext(tx,loaded.scope.context,messageId)).map(row => ({ model: row.model, id: row.recordId, state: row.state, version: row.version })),
     clientReadScope: [...(current.clientReadScope ?? [])].sort(),
     selectiveProjectIds: [...(current.selectiveProjectIds ?? [])].sort(),
     selectiveLeadIds: [...(current.selectiveLeadIds ?? [])].sort() })));
@@ -748,9 +774,16 @@ export async function loadCommunicationFileContext(tx: Tx, claimed: AuthSession,
 /** Admission for administrative annotations of original sources. It grants no
  * content access beyond the native message/file readers and never sends mail. */
 export async function adminCommunicationSourceContext(tx: Tx, current: CommunicationPrincipal,
-  model: 'CommunicationReply' | 'CommunicationContextFile', id: string): Promise<{ href: string }> {
+  model: 'CommunicationReply' | 'CommunicationContextFile' | 'ApprovedCommunication', id: string): Promise<{ href: string }> {
   uuid.parse(id);
   if (current.role !== 'admin' || !hasPermission(current, 'practice_communications.read')) denied();
+  if (model === 'ApprovedCommunication') {
+    const detail = await messageScope(tx,current,id,false,false);
+    const until = await readableMessageAttachments(tx,current,detail);
+    const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    if (until === null || clock.now.getTime() >= Math.min(until,detail.updateUntil)) denied();
+    return { href: '/communications?' + new URLSearchParams({kind:detail.scope.context.kind,practice:detail.scope.context.id,focus:id}) };
+  }
   if (model === 'CommunicationReply') {
     await tx.$queryRaw`SELECT "id" FROM "CommunicationReply" WHERE "id"=${id}::uuid FOR SHARE`;
     const reply = await tx.communicationReply.findUnique({ where: { id } });

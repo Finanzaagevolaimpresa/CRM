@@ -1,4 +1,5 @@
 import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
+import { assertOperationalAccess, AdminOperationalStateError } from './admin-operational-state';
 import { assertLeadOperational as lockOperationalLead, LeadLifecycleError } from './lead-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
@@ -161,9 +162,14 @@ async function practiceScope(
   a: Awaited<ReturnType<typeof actor>>,
   id: string,
   write = true,
+  administrativeHistory = false,
 ) {
   const practice = await tx.practiceReadiness.findUnique({ where: { id } });
   if (!practice) throw new PracticeReadinessError("DENIED");
+  try {
+    await assertOperationalAccess(tx, 'PracticeReadiness', practice.id, a.role, write, administrativeHistory);
+    await assertOperationalAccess(tx, 'ControlledIntake', practice.controlledIntakeId, a.role, write, administrativeHistory);
+  } catch (error) { if (error instanceof AdminOperationalStateError) throw new PracticeReadinessError('DENIED'); throw error; }
   await assertProjectOperational(tx, practice);
   const [client, project, intake] = await Promise.all([
     tx.client.findUnique({ where: { id: practice.clientId } }),
@@ -192,6 +198,15 @@ async function practiceScope(
   const context = await loadTechnicalPracticeAccessContext(tx, practice);
   if (!canViewPracticeReadinessWork(a, { ...practice, ...context, lead })) throw new PracticeReadinessError('DENIED');
   return { practice, client, project, intake, lead };
+}
+
+/** The lifecycle editor admits the same current client/project/lead context,
+ * while allowing an Admin to inspect an administratively held source. */
+export async function adminPracticeReadinessSource(tx: Prisma.TransactionClient, claimed: AuthSession, id: string) {
+  const current = await actor(tx, claimed, 'service.read');
+  if (current.role !== 'admin') throw new PracticeReadinessError('DENIED');
+  const source = await practiceScope(tx, current, id, false, true);
+  return { source: source.practice, label: source.client.displayName, href: '/practice-readiness#practice-' + id };
 }
 
 async function canUseDocument(

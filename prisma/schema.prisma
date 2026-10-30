@@ -1197,6 +1197,7 @@ model CumulabilityAssessment {
 }
 
 model Document {
+  operationalState AdminOperationalState? @relation("AdminPrivateDocumentState")
   technicalAcquisition TechnicalDocumentAcquisition?
   id                    String         @id @default(cuid())
   selectiveEpoch        Int            @default(1)
@@ -2549,6 +2550,7 @@ model WebsiteLeadReceipt {
 }
 
 model ControlledIntake {
+  operationalState AdminOperationalState? @relation("AdminControlledIntakeState")
   id                          String   @id @default(uuid()) @db.Uuid
   channel                     String   @db.VarChar(32)
   sourceId                    String   @db.VarChar(120)
@@ -3114,6 +3116,7 @@ model CommunicationIntentAudit {
 }
 
 model PracticeReadiness {
+  operationalState AdminOperationalState? @relation("AdminReadinessState")
   communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
   id                    String @id @default(uuid()) @db.Uuid
@@ -3304,6 +3307,7 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  operationalState AdminOperationalState? @relation("AdminMessageState")
   adminRequestDraft AdminRequestDraft?
   updateDeliveryId String? @unique @db.Uuid
   updateDelivery RecordUpdateDelivery? @relation(fields: [updateDeliveryId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -3444,6 +3448,7 @@ model CommunicationAttempt {
   @@index([messageId, createdAt])
 }
 model CommunicationReply {
+  operationalState AdminOperationalState? @relation("AdminReplyState")
   ordinaryInboundLink OrdinaryEmailInboundLink?
   id String @id @default(uuid()) @db.Uuid
   canonicalMailboxId String @db.Uuid
@@ -4112,6 +4117,7 @@ model RecordUpdateReminderCancellation {
 // Administrative corrections retain their original operational values. This
 // journal never changes approvals, signatures, delivery or personal acceptance.
 model AdminRecordRevision {
+  operationalState AdminOperationalState? @relation("AdminOperationalStateCommand")
   commandId String @id @db.Uuid
   actorId String
   sessionId String @db.Uuid
@@ -4130,4 +4136,29 @@ model AdminRecordRevision {
   session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   @@index([model, recordId, createdAt, commandId])
   @@index([actorId, createdAt])
+}
+
+// Operational administration is separate from source evidence and workflow facts.
+model AdminOperationalState {
+  model String @db.VarChar(64)
+  recordId String @db.VarChar(128)
+  state String @db.VarChar(12)
+  version Int
+  lastCommandId String @unique @db.Uuid
+  controlledIntakeId String? @unique @db.Uuid
+  readinessId String? @unique @db.Uuid
+  messageId String? @unique @db.Uuid
+  replyId String? @unique @db.Uuid
+  documentId String? @unique
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  controlledIntake ControlledIntake? @relation("AdminControlledIntakeState", fields: [controlledIntakeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  readiness PracticeReadiness? @relation("AdminReadinessState", fields: [readinessId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  message ApprovedCommunication? @relation("AdminMessageState", fields: [messageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  reply CommunicationReply? @relation("AdminReplyState", fields: [replyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  document Document? @relation("AdminPrivateDocumentState", fields: [documentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lastCommand AdminRecordRevision @relation("AdminOperationalStateCommand", fields: [lastCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  @@id([model, recordId])
+  @@index([model, state, updatedAt, recordId], map: "AdminOperationalState_list_idx")
 }

@@ -13,13 +13,14 @@ import { hasPermission } from './permission-evaluator';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { readTechnicalUploadPrivateFile } from './technical-upload-storage';
 import { documentPreviewMime } from './document-preview';
+import { assertOperationalActive } from './admin-operational-state';
 
 type Tx = Prisma.TransactionClient;
 const deny = (): never => { throw new TechnicalAssignmentError('DENIED'); };
 /** Additional gate for explicit version selection only. Ordinary readers never
  * call this as a fallback. The caller still checks target, live recipient,
  * document permissions, financial ceiling and every selection fingerprint. */
-export async function selectedTechnicalAcquisition(tx: Tx, authorityId: string, document: Document) {
+async function technicalAcquisitionBasis(tx: Tx, authorityId: string, document: Document, administrativeHistory: boolean) {
   if (document.visibilityLevel !== technicalDocumentPrivateVisibility) return null;
   const key = await loadActivePrivilegedStepUpKey(tx);
   if (!key) return deny();
@@ -39,8 +40,21 @@ export async function selectedTechnicalAcquisition(tx: Tx, authorityId: string, 
   const context = await lockTechnicalAssignmentContext(tx, { kind: reference.kind, targetId: reference.targetId });
   const now = await technicalAssignmentClock(tx);
   if (!context?.operational || context.clientId !== document.clientId || context.projectId !== document.projectId
-    || context.clientServiceId !== document.clientServiceId || (document.validUntil && document.validUntil <= now)) return deny();
+    || context.clientServiceId !== document.clientServiceId || (!administrativeHistory && document.validUntil && document.validUntil <= now)) return deny();
+  if (!administrativeHistory) await assertOperationalActive(tx, 'Document', document.id);
   return { ...saved, contextSha256: context.contextSha256 };
+}
+
+export async function selectedTechnicalAcquisition(tx: Tx, authorityId: string, document: Document) {
+  return technicalAcquisitionBasis(tx, authorityId, document, false);
+}
+
+/** Metadata/history admission only. This does not serve bytes or a recipient grant. */
+export async function adminTechnicalAcquisitionHistory(tx: Tx, authorityId: string, document: Document) {
+  const saved = await technicalAcquisitionBasis(tx, authorityId, document, true);
+  const author = await tx.user.findUnique({ where: { id: authorityId }, include: { permissionOverrides: true } });
+  if (!saved || author?.role !== 'admin' || !await canAccessFinancialDocument(tx, author, document)) return deny();
+  return saved;
 }
 
 export async function listPersonalAcquiredDocuments(db: PrismaClient, claimed: AuthSession, clientId: string) {
