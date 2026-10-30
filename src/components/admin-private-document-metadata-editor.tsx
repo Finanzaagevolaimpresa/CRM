@@ -68,4 +68,3 @@ export function AdminPrivateDocumentMetadataEditor({data,commandId,recovering}:{
     </section>
   </div>;
 }
-

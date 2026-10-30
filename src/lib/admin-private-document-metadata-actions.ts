@@ -57,4 +57,3 @@ export async function reconcileAdminPrivateDocumentMetadataAction(raw:unknown):P
       :{ok:false,uncertain:true,message:'Nessun esito registrato osservato. Verifica ancora o chiudi il tentativo prima di ripartire.'};
   }catch(error){return {...failure(error),uncertain:true};}
 }
-

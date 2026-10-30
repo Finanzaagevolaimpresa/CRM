@@ -47,4 +47,3 @@ export function effectivePrivateDocument(document:Document,values:PrivateMetadat
     containsSensitiveData:document.containsSensitiveData||values.classification!=='TECHNICAL_DOCUMENT',
     validUntil:values.expiresAt?new Date(values.expiresAt):null};
 }
-

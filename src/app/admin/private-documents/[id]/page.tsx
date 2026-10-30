@@ -25,4 +25,3 @@ export default async function Page({params,searchParams}:{params:Promise<{id:str
     <AdminPrivateDocumentMetadataEditor key={id+':'+query.command} data={data} commandId={String(query.command)} recovering={Boolean(query.decision)}/>
   </div>;
 }
-

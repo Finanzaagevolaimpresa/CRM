@@ -168,4 +168,3 @@ test('revoked sessions cannot write or read a previously prepared correction',op
   admin={user:admin.user,...await syntheticSession(db,admin.user)};
   await save(input);assert.equal((await history(input.id)).length,1);
 });
-

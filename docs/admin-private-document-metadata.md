@@ -15,4 +15,3 @@ Il file e la versione acquisita sono una prova conservata: questo percorso non s
 Le correzioni usano il journal Admin già presente a schema73; nessuna nuova migrazione. Fonte, versione, ricevuta firmata e audit originale restano identici. Il solo epoch di selezione della fonte aumenta nella stessa transazione della revisione e dell’audit amministrativi.
 
 Le prove sintetiche devono verificare scadenza, revoca sessione, dinieghi correnti, autorità personale, classificazione finanziaria originaria e corretta, concorrenza, rollback, chiusura dei comandi, invalidazione delle selezioni anche dopo ripristino e riapertura nel browser. Queste prove non sostituiscono il collaudo reale in produzione.
-
