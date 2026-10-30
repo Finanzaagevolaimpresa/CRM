@@ -989,7 +989,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
     if (model === 'ClientDossier' && row?.practiceReadinessId) await dossierLifecycleContext(tx, session, id);
     const privateTarget = row?.technicalPrivate === true && privateFields[model] ? await admitPrivateItem(tx, current.actor, model, row) : null;
-    const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
+    const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' }, after: { path: ['operationalLifecycle'], equals: Prisma.AnyNull } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
       select: { commandId: true, operation: true, createdAt: true, reason: true, actor: { select: { name: true, email: true } } } });
     const memberships = model === 'Person' ? await tx.companyPerson.findMany({ where: { personId: id } }) : [];
     const companies = await tx.company.findMany({ where: { id: { in: memberships.map(item => item.companyId) } }, select: { id: true, name: true, clientId: true } });
@@ -998,6 +998,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
       return company && admittedRow(current.actor, company) ? [{ label: `${company.name} · ${link.role}`, href: `/companies/${company.id}` }] : [];
     });
     if (memberships.length !== relationships.length) fail('DENIED');
+    if (['ControlledIntake','CommunicationReply'].includes(model) && row) relationships.push({ label: 'Blocco, archivio e ripristino', href: `/admin/lifecycle/${model}/${id}` });
     if (model === 'ControlledIntake' && row?.leadId) relationships.push({ label: 'Apri il lead: dati correnti, assegnazione e archivio', href: `/leads/${row.leadId}` });
     if (model === 'PrivacyEvidenceReceipt' && row?.noticeVersionId) relationships.push({ label: 'Apri la versione originale dell’informativa', href: `/admin/records/PrivacyNoticeVersion/${row.noticeVersionId}` });
     if ((model === 'CommunicationReply' || model === 'CommunicationContextFile') && row) {

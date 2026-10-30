@@ -6,8 +6,8 @@ import type { readInitialServiceState, initialServiceChoices } from '@/lib/initi
 type State = NonNullable<Awaited<ReturnType<typeof readInitialServiceState>>>;
 type Choices = Awaited<ReturnType<typeof initialServiceChoices>>;
 const field = 'w-full rounded-xl border p-3';
-export function InitialServiceWorkflow({ state, choices, dossierId, admin, canWrite, userId, approved }: {
-  state: State; choices: Choices; dossierId: string; admin: boolean; canWrite: boolean; userId: string; approved: boolean;
+export function InitialServiceWorkflow({ state, choices, dossierId, admin, canWrite, operational = true, userId, approved }: {
+  state: State; choices: Choices; dossierId: string; admin: boolean; canWrite: boolean; operational?: boolean; userId: string; approved: boolean;
 }) {
   const plan = state.plan, next = state.assessment?.nextStage;
   const human = next?.startsWith('HUMAN_');
@@ -28,7 +28,7 @@ export function InitialServiceWorkflow({ state, choices, dossierId, admin, canWr
         : state.assessment?.blocked === 'CHANGES_REQUIRED' ? 'Modifiche richieste: prepara una nuova versione e ripeti le revisioni pertinenti.'
         : next ? 'Passaggio successivo: ' + next : 'La consegna rimane bloccata soltanto per questo dossier.'}</p>
       <p className="text-sm">A00 → produttore → Q01 → Q02 quando richiesto → Q03 → revisori umani → D01. Le attività Work sono attestate manualmente con un documento verificabile. I giudizi umani sono registrati personalmente.</p>
-      {admin && !approved ? <form action={mutateInitialServiceAction} className="mt-4 grid gap-3">
+      {admin && canWrite && operational && !approved ? <form action={mutateInitialServiceAction} className="mt-4 grid gap-3">
         {binding}<input type="hidden" name="intent" value="configure"/>
         <label>Responsabile della lavorazione<select name="responsibleUserId" className={field} required defaultValue={plan?.responsibleUserId ?? ''}><option value="">Seleziona</option>{people}</select></label>
         <label>Primo revisore umano<select name="human1" className={field} required defaultValue={plan?.humanReviewerIds[0] ?? ''}><option value="">Seleziona</option>{people}</select></label>
@@ -52,7 +52,7 @@ export function InitialServiceWorkflow({ state, choices, dossierId, admin, canWr
         <label>Prossimo passo<textarea className={field} name="nextStep" required/></label>
         <PrimaryButton type="submit">Salva template come nuova versione</PrimaryButton>
       </form></details> : null}
-    {next && userId === assigned && !approved ? <Card title={'Registra ' + next}>
+    {operational && next && userId === assigned && !approved ? <Card title={'Registra ' + next}>
       <form action={mutateInitialServiceAction} className="grid gap-3">{binding}<input type="hidden" name="intent" value="review"/><input type="hidden" name="stage" value={next}/>
         {!human ? <><label>Documento della lavorazione / revisione<select name="documentVersionId" className={field}><option value="">Seleziona; non necessario solo per Q02 non applicabile</option>{choices.documents.map(doc => <option key={doc.id} value={doc.id}>{doc.label}</option>)}</select></label>
           <label>Riferimento della versione dell’agente usata<input name="agentVersionReference" className={field} pattern="[A-Za-z][A-Za-z0-9_-]+" placeholder="Riferimento verificabile, nessun valore inventato"/></label></> : null}

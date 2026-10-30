@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { notFound } from 'next/navigation';
 import { requireAnyPermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { AdminOperationalShortcut } from '@/components/admin-operational-shortcut';
 import { Card, PageHeader } from '@/components/ui';
 import { PrimaryButton } from '@/components/actions';
 import { ManualMessageDownload } from '@/components/manual-message-download';
@@ -126,7 +127,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
   const replyParent = query.reply ? data.messages.find(message => message.replies.some(reply => reply.id === query.reply)) : undefined;
   const replySource = replyParent?.replies.find(reply => reply.id === query.reply);
-  if (query.reply && (!data.canWrite || !replySource)) notFound();
+  if (query.reply && (!data.canWrite || !replySource || replySource.lifecycleState !== 'ACTIVE' || !replyParent?.operational)) notFound();
   const ordinaryAuthority = await ordinaryEmailUiAuthorityFromRequest(session);
   const feedback: Record<string, string> = { RECORDED: 'Operazione registrata.', DENIED: 'Accesso o contesto non più valido.', CONFLICT: 'La versione è cambiata o l’operazione è già conclusa. Aggiorna e verifica la timeline.', SENDER_NOT_READY: 'Il mittente deve essere configurato, collaudato e abilitato.', INVALID: 'Controlla i campi del messaggio e i limiti degli allegati.', RECONCILIATION_REQUIRED: 'Registra o riconcilia il tentativo aperto prima di prepararne un altro.' };
   return <div className="min-w-0 crm-space-y-6 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni approvate" description={`Comunicazioni · ${data.label}`} />
@@ -134,6 +135,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     {data.thread && data.personal && data.thread.ownerUserId === session.userId ? <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Gestisci partecipanti della conversazione interna</summary>
       <InternalCommunicationEditor key={`${data.thread.id}-${data.thread.version}`} id={data.thread.id} version={data.thread.version} title={data.thread.title}
         selectedIds={data.participantIds} people={data.directory} stepUpActive={ordinaryAuthority?.stepUpActive ?? false} /></details> : null}
+    {!data.contextOperational&&<p>Il contesto è sospeso amministrativamente. La consultazione rimane disponibile secondo i permessi correnti.</p>}
     <p className="text-sm">Per l’invio manuale, scarica il messaggio approvato e usa il tuo client email. Quando l’invio dal CRM è disponibile, scegli «Approva e invia» sulla versione esatta. Le due modalità conservano ricevute distinte.</p>
     {data.isAdmin ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     {query.result && feedback[query.result] ? <p role="status" className="rounded-xl bg-slate-100 p-3">{feedback[query.result]}</p> : null}
@@ -152,6 +154,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <Draft data={data} updateDraft={updatePrefill} requestSource={requestPrefill} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
     </Card> : null}
     {data.messages.map(message => <Card key={message.id} title={`${message.snapshot.subject} · v${message.currentRevision}`}>
+      <AdminOperationalShortcut session={session} model="ApprovedCommunication" id={message.id} state={message.lifecycleState}/>
+      {message.operational&&message.needsFreshVersion&&<p>La scheda è stata ripristinata. Salva una nuova versione prima di richiedere un’approvazione o preparare un invio.</p>}
       <p className="font-bold">{communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts)}</p>
       <dl className="my-3 grid gap-1 text-sm"><div><dt className="inline font-bold">Da: </dt><dd className="inline">{message.snapshot.from}</dd></div><div><dt className="inline font-bold">Reply-To: </dt><dd className="inline">{message.snapshot.replyTo}</dd></div>
         <div><dt className="inline font-bold">A: </dt><dd className="inline">{message.snapshot.to.join(', ')}</dd></div><div><dt className="inline font-bold">CC: </dt><dd className="inline">{message.snapshot.cc.join(', ') || 'Nessuna'}</dd></div><div><dt className="inline font-bold">BCC: </dt><dd className="inline">{message.snapshot.bcc.join(', ') || 'Nessuna'}</dd></div></dl>
@@ -159,16 +163,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
       <div className="my-4 grid gap-4">
-        {data.canWrite && (!message.updateDeliveryId || message.updateDraft) && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
+        {data.canWrite && message.operational && (!message.updateDeliveryId || message.updateDraft) && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
           key={`${message.id}-${message.currentRevision}-${message.snapshotHash}`} messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash}
-          eligible={!message.updateDraft?.stale && ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
+          eligible={!message.needsFreshVersion && !message.updateDraft?.stale && ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
             && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && !message.attempts.some(attempt => ['SENDING','UNCERTAIN','SENT'].includes(attempt.state))}
           stepUpActive={ordinaryAuthority?.stepUpActive ?? false}>
           <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} requestSource={message.requestSource ?? undefined} updateDraft={message.updateDraft ?? undefined} /></details>
         </OrdinaryEmailReview> : null}
-        {data.canWrite && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'DRAFT' ? <PreservedWorkflowForm action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></PreservedWorkflowForm> : null}
-        {data.isAdmin && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'PENDING' ? <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></PreservedWorkflowForm> : null}
-        {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
+        {data.canWrite && message.operational && !message.needsFreshVersion && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'DRAFT' ? <PreservedWorkflowForm action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></PreservedWorkflowForm> : null}
+        {data.isAdmin && message.operational && !message.needsFreshVersion && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'PENDING' ? <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></PreservedWorkflowForm> : null}
+        {data.canPrepare && message.operational && !message.needsFreshVersion && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && message.state === 'SENDING' && message.attempts[0] ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={message.attempts[0].requestId} resume /> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && (message.state === 'SENDING' || (message.state === 'UNCERTAIN' && data.isAdmin)) && message.attempts[0] ? <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid gap-3 rounded-xl border p-4">
           <BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="evidence" /><input type="hidden" name="attemptId" value={message.attempts[0].id} /><input type="hidden" name="reconciliation" value={String(message.state === 'UNCERTAIN')} />
@@ -183,6 +187,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <div className="mt-4"><h3 className="font-bold">Risposte collegate</h3>
         {message.ordinaryReceipts.some(receipt => receipt.outcome === 'ACCEPTED') ? <OrdinaryEmailInboundRefresh messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} /> : null}
         {message.replies.map(reply => <article className="mt-3 break-words rounded-xl border p-3" key={reply.id} data-linked-reply={reply.id}>
+          <AdminOperationalShortcut session={session} model="CommunicationReply" id={reply.id} state={reply.lifecycleState}/>
           <p>{reply.receivedAt.toISOString()} · {reply.sender}</p><h4 className="font-bold">{reply.subject}</h4><p className="whitespace-pre-wrap">{reply.body}</p>
           <p className="text-xs">Riferimento di acquisizione: {reply.evidenceReference}</p>
           {data.isAdmin && <Link className="block font-bold underline" href={`/admin/records/CommunicationReply/${reply.id}`}>Fonte originale e rettifiche amministrative</Link>}
@@ -192,7 +197,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
               replyId={reply.id} file={file} downloadName={sanitizeFileName(file.filename)} />)}
             <p className="text-sm">File ricevuti dall’esterno. Il download non li aggiunge ai documenti della pratica o alla bozza.</p>
           </section> : null}
-          {data.canWrite ? <Link className="font-bold underline" href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page}&reply=${reply.id}`}>Prepara risposta</Link> : null}
+          {data.canWrite && message.operational && reply.lifecycleState === 'ACTIVE' ? <Link className="font-bold underline" href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page}&reply=${reply.id}`}>Prepara risposta</Link> : null}
         </article>)}{message.replies.length === 0 ? <p>Nessuna risposta collegata.</p> : null}</div>
     </Card>)}
     <nav aria-label="Pagine comunicazioni" className="flex gap-4">{data.page > 1 ? <Link href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page - 1}`}>Pagina precedente</Link> : null}{data.hasMore ? <Link href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page + 1}`}>Pagina successiva</Link> : null}</nav>

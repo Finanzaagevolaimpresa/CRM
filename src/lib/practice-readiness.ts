@@ -1517,11 +1517,14 @@ export async function listAccessiblePracticeReadiness(
       for (const row of rows) {
         try {
           const { client, project } = await practiceScope(tx, a, row.id, false);
+          const lifecycle = await assertOperationalAccess(tx, 'PracticeReadiness', row.id, a.role, false);
+          const intakeLifecycle = await assertOperationalAccess(tx, 'ControlledIntake', row.controlledIntakeId, a.role, false);
+          const operational = (!lifecycle || lifecycle.state === 'ACTIVE') && (!intakeLifecycle || intakeLifecycle.state === 'ACTIVE');
           const prerequisites = await resolvePrerequisites(tx, row.id, a);
           // Resolve link eligibility against the complete authoritative context,
           // before concealing contract identifiers from operational readers.
           const linkableServices: { id: string; label: string }[] = [];
-          if (!row.startedAt && row.currentFormalizationId && hasPermission(a, 'service.write') && canEditClient(a, client)) {
+          if (operational && !row.startedAt && row.currentFormalizationId && hasPermission(a, 'service.write') && canEditClient(a, client)) {
             const revision = await tx.serviceCatalogRevision.findUnique({ where: { id: row.serviceRevisionId } });
             if (revision) {
               const candidates = await tx.clientService.findMany({ where: {
@@ -1567,7 +1570,7 @@ export async function listAccessiblePracticeReadiness(
               formalizations.push(formalization);
           }
           visible.push({
-            ...row,
+            ...row, lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, operational,
             contractId: canReadContracts ? row.contractId : null,
             currentFormalizationId: canReadContracts ? row.currentFormalizationId : null,
             signedDocumentId: canReadContracts ? row.signedDocumentId : null,
@@ -1581,7 +1584,7 @@ export async function listAccessiblePracticeReadiness(
             linkableServices,
             formalizations: canReadContracts ? formalizations : [],
             prerequisites: {
-              missing: [...new Set(prerequisites.missing.map(code =>
+              missing: [...(!operational ? ['BLOCCO_AMMINISTRATIVO'] : []), ...new Set(prerequisites.missing.map(code =>
                 (code === 'accredito_iniziale' && !canReadPayments) || (code === 'incarico_formalizzato' && !canReadContracts)
                   ? 'VERIFICA_AMMINISTRATIVA' : code))],
               availableFunding: canReadPayments ? prerequisites.paid.toFixed(2) : null,

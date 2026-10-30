@@ -6,6 +6,8 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 import { syntheticPerson } from '../selective-sharing/fixtures';
 import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
 import { loadAdminRecord, saveAdminRecord, closeAdminRecordAttempt, readAdminRecordReceipt } from '../../src/lib/admin-records';
+import { adminHistoryFixture } from '../admin-records/history-fixture';
+import { readAdminOperationalState, saveAdminOperationalState, reconcileAdminOperationalState } from '../../src/lib/admin-operational-lifecycle';
 
 const db = new PrismaClient();
 async function main() {
@@ -33,8 +35,19 @@ async function main() {
   const persisted = await db.client.findUniqueOrThrow({ where: { id: client.id } });
   assert.equal(persisted.displayName, 'SYNTHETIC_ADMIN_PRESERVED'); assert.equal(persisted.deletedAt, null);
   assert.equal(await db.adminRecordRevision.count({ where: { actorId: admin.user.id } }), 4);
+  const lifecycle=await adminHistoryFixture(db,admin.user.id),lifecycleCommands:string[]=[];
+  for(const state of ['BLOCKED','ACTIVE','ARCHIVED'] as const){
+    const form=await readAdminOperationalState(db,admin.session,'ControlledIntake',lifecycle.intake.id);
+    const command={commandId:randomUUID(),model:'ControlledIntake' as const,id:lifecycle.intake.id,state,
+      expectedVersion:form.expectedVersion,reason:'Synthetic operational restart preservation',confirmed:true};
+    await saveAdminOperationalState(db,admin.session,command,proof);lifecycleCommands.push(command.commandId);
+  }
+  const lifecycleClosedId=randomUUID();
+  assert.equal((await reconcileAdminOperationalState(db,admin.session,{commandId:lifecycleClosedId,model:'ControlledIntake',
+    id:lifecycle.intake.id,close:true})).status,'CLOSED');
   writeFileSync(process.env.R05_ADMIN_RECORD_RECOVERY_FIXTURE, JSON.stringify({ synthetic: true, noSend: true,
-    adminEmail: admin.user.email, clientId: client.id, title: persisted.displayName, commandIds, closedId }, null, 2) + '\n');
-  console.log('SCHEMA72_ADMIN_RECORD_RESTART_STATES_READY');
+    adminEmail: admin.user.email, clientId: client.id, title: persisted.displayName, commandIds, closedId,
+    lifecycleIntakeId:lifecycle.intake.id,lifecycleCommands,lifecycleClosedId }, null, 2) + '\n');
+  console.log('SCHEMA73_ADMIN_RECORD_RESTART_STATES_READY');
 }
-void main().finally(() => db.$disconnect()).catch(() => { console.error('SCHEMA72_ADMIN_RECORD_RESTART_FIXTURE_FAILED'); process.exitCode = 1; });
+void main().finally(() => db.$disconnect()).catch(() => { console.error('SCHEMA73_ADMIN_RECORD_RESTART_FIXTURE_FAILED'); process.exitCode = 1; });

@@ -34,7 +34,7 @@ before(async () => {
   if (!enabled) return;
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
-  assert.equal((await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].n, 72n);
+  assert.equal((await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].n, 73n);
   root = await realpath(process.env.LOCAL_DOCUMENT_STORAGE_ROOT!);
   assert(root.startsWith(await realpath(process.env.RUNNER_TEMP!) + path.sep));
   assert(path.basename(root).startsWith('fai-upload-db-only-'));

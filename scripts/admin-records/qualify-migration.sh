@@ -5,12 +5,13 @@ node --input-type=module -e 'const u=new URL(process.env.DATABASE_URL);if(u.host
 db="${DATABASE_URL%%\?*}"
 test "$(psql "$db" -Atc "SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()")" = FAI_CRM_EPHEMERAL_TEST_ONLY_V1
 evidence="$ADMIN_RECORD_EVIDENCE/migration72"
-mkdir -p "$evidence/baseline71"
+mkdir -p "$evidence/baseline71" "$evidence/baseline72"
 ddl=prisma/migrations/20261029190000_admin_record_revisions_v1/migration.sql
 # A wrong base must fail before creating any journal object.
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
 test "$(psql "$db" -Atc "SELECT to_regclass('public.\"AdminRecordRevision\"') IS NULL")" = t
 git archive 60b7b1ea78c85c945b7637f75c3c5e312a508e04 prisma | tar -x -C "$evidence/baseline71"
+git archive 58cad80a324a78e8ec9138df3c1e2d9ec0e2f4a3 prisma | tar -x -C "$evidence/baseline72"
 npx prisma migrate deploy --schema "$evidence/baseline71/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
 psql "$db" -v ON_ERROR_STOP=1 -c "INSERT INTO \"Client\"(id,\"displayName\",type,\"updatedAt\") VALUES ('admin-synthetic-migration-client','Cliente migrazione sintetico','societa',clock_timestamp())"
@@ -33,7 +34,7 @@ test "$(psql "$db" -Atc "SELECT to_regclass('public.\"AdminRecordRevision\"') IS
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname LIKE 'fai_admin_record_revision_%'")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npm run prisma:migrate:deploy
+npx prisma migrate deploy --schema "$evidence/baseline72/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 72
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261029190000_admin_record_revisions_v1' ORDER BY migration_name" > "$evidence/prefix71-after.txt"
 cmp "$evidence/prefix71-before.txt" "$evidence/prefix71-after.txt"
@@ -42,7 +43,7 @@ cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "AdminRecordRevision"')" = 0
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq ADMIN_RECORD_SCHEMA71_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/baseline72/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"
 printf '{"synthetic":true,"before":71,"after":72,"prefix71Unchanged":true,"allPriorRowsPreserved":true,"emptyNewJournal":true,"atomicFailureRolledBack":true,"wrongBaseDenied":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"

@@ -5,6 +5,10 @@ export const adminOperationalModels = ['ControlledIntake','PracticeReadiness','A
 export const adminOperationalStates = ['ACTIVE','BLOCKED','ARCHIVED','TRASHED'] as const;
 export type AdminOperationalModel = typeof adminOperationalModels[number];
 export type AdminOperationalState = typeof adminOperationalStates[number];
+export const adminOperationalModelLabels: Record<AdminOperationalModel,string> = {
+  ControlledIntake: 'Acquisizioni controllate', PracticeReadiness: 'Pratiche preventivo e avvio',
+  ApprovedCommunication: 'Comunicazioni', CommunicationReply: 'Risposte ricevute', Document: 'Documenti acquisiti privatamente',
+};
 export const adminOperationalLabels: Record<AdminOperationalState,string> = {
   ACTIVE: 'Operativo', BLOCKED: 'Bloccato', ARCHIVED: 'Archiviato', TRASHED: 'Nel cestino',
 };
@@ -20,19 +24,19 @@ export function operationalReference(model: unknown, id: unknown) {
 }
 export type OperationalStateRow = {
   model: AdminOperationalModel; recordId: string; state: AdminOperationalState; version: number;
-  lastCommandId: string; createdAt: Date; updatedAt: Date;
+  lastCommandId: string|null; createdAt: Date; updatedAt: Date;
 };
 type Tx = Prisma.TransactionClient;
 
-/** Lock absence as well as a present state. This is shared with the SQL writer guard.
- * No cache, synthetic fallback or privilege is derived from a missing query result. */
+/** Native writers and transitions share the same lock and persistent state row.
+ * A missing registration is denied; no privilege comes from a fallback. */
 export async function readOperationalState(tx: Tx, model: AdminOperationalModel, id: string) {
   const reference = operationalReference(model,id);
   await tx.$queryRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${'admin-operational-state:'+reference.model+':'+reference.id},0))::text`;
   const rows = await tx.$queryRaw<OperationalStateRow[]>`SELECT "model","recordId","state","version","lastCommandId","createdAt","updatedAt"
     FROM "AdminOperationalState" WHERE "model"=${reference.model} AND "recordId"=${reference.id} FOR SHARE`;
-  if (rows.length > 1) throw new AdminOperationalStateError('DENIED');
-  return rows[0] ?? null;
+  if (rows.length !== 1) throw new AdminOperationalStateError('DENIED');
+  return rows[0];
 }
 export async function lockOperationalStateTransition(tx: Tx, model: AdminOperationalModel, id: string) {
   const reference = operationalReference(model,id);
@@ -44,7 +48,7 @@ export function operationalStateVisible(state: AdminOperationalState, role: stri
 }
 export async function assertOperationalAccess(tx: Tx, model: AdminOperationalModel, id: string,
   role: string, write: boolean, administrativeHistory = false) {
-  const row = await readOperationalState(tx,model,id), state = row?.state ?? 'ACTIVE';
+  const row = await readOperationalState(tx,model,id), state = row.state;
   if (administrativeHistory && role !== 'admin') throw new AdminOperationalStateError('DENIED');
   if (!administrativeHistory && (write ? state !== 'ACTIVE' : !operationalStateVisible(state,role)))
     throw new AdminOperationalStateError('INACTIVE');

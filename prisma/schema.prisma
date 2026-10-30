@@ -4144,7 +4144,7 @@ model AdminOperationalState {
   recordId String @db.VarChar(128)
   state String @db.VarChar(12)
   version Int
-  lastCommandId String @unique @db.Uuid
+  lastCommandId String? @unique @db.Uuid
   controlledIntakeId String? @unique @db.Uuid
   readinessId String? @unique @db.Uuid
   messageId String? @unique @db.Uuid
@@ -4158,7 +4158,7 @@ model AdminOperationalState {
   message ApprovedCommunication? @relation("AdminMessageState", fields: [messageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   reply CommunicationReply? @relation("AdminReplyState", fields: [replyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   document Document? @relation("AdminPrivateDocumentState", fields: [documentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  lastCommand AdminRecordRevision @relation("AdminOperationalStateCommand", fields: [lastCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  lastCommand AdminRecordRevision? @relation("AdminOperationalStateCommand", fields: [lastCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
   @@id([model, recordId])
   @@index([model, state, updatedAt, recordId], map: "AdminOperationalState_list_idx")
 }

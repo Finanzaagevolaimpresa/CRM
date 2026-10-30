@@ -11,6 +11,9 @@ import { adminHistoryFixture } from './history-fixture';
 import { adminContextFixture, adminGraphFixture } from './context-fixture';
 import { paymentCorrectionFixture } from './payment-fixture';
 import { romeDateTimeInput } from '../../src/lib/rome-date-time';
+import { lifecycleReadinessFixture } from '../admin-lifecycle/fixtures';
+import { readAdminOperationalState, saveAdminOperationalState } from '../../src/lib/admin-operational-lifecycle';
+import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
@@ -651,4 +654,94 @@ test('an interrupted native upload can be closed before a fresh choice and its l
   await upload.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText:'Operazione registrata.' })).toBeVisible();
   expect(await db.communicationContextFile.count({where:{id:fresh}})).toBe(1);
+});
+
+async function lifecycleChoice(page:Page,state:string,note='Cambio di stato sintetico verificato nel browser'){
+  await page.getByRole('combobox',{name:'Nuovo stato',exact:true}).selectOption(state);
+  await page.getByRole('textbox',{name:'Motivazione',exact:true}).fill(note);
+  await page.getByRole('checkbox',{name:'Confermo il cambio di stato e la conservazione delle prove originali.',exact:true}).check();
+}
+async function lifecycleSave(page:Page){
+  await page.getByRole('button',{name:'Registra stato amministrativo',exact:true}).click();
+  await expect(page.getByRole('link',{name:'Riapri e verifica lo stato',exact:true})).toBeVisible();
+  await page.getByRole('link',{name:'Riapri e verifica lo stato',exact:true}).click();
+  await expect(page.getByRole('combobox',{name:'Nuovo stato',exact:true})).toBeEnabled();
+}
+test('lifecycle keeps the selected state and reason through inline confirmation, then reopens block archive trash and restore',async({page,context})=>{
+  const actor=await db.user.findUniqueOrThrow({where:{email:f.adminEmail}}),source=await adminHistoryFixture(db,actor.id);
+  await login(page);const path='/admin/lifecycle/ControlledIntake/'+source.intake.id;await page.goto(path);
+  await lifecycleChoice(page,'BLOCKED','Motivazione conservata dopo riconferma');
+  await context.clearCookies({name:'fai_crm_privileged_step_up'});
+  await page.getByRole('button',{name:'Registra stato amministrativo',exact:true}).click();
+  const confirmation=page.getByRole('region',{name:'Conferma identità senza lasciare il lavoro',exact:true});
+  await expect(confirmation).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'Nuovo stato',exact:true})).toHaveValue('BLOCKED');
+  await expect(page.getByRole('textbox',{name:'Motivazione',exact:true})).toHaveValue('Motivazione conservata dopo riconferma');
+  await confirmation.getByLabel('Password corrente',{exact:true}).fill(password);
+  await confirmation.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();
+  await expect(confirmation).toContainText('Identità confermata.');
+  await lifecycleSave(page);
+  for(const state of ['ARCHIVED','TRASHED','ACTIVE']){
+    await lifecycleChoice(page,state);await lifecycleSave(page);
+    expect((await db.adminOperationalState.findUniqueOrThrow({where:{model_recordId:{model:'ControlledIntake',recordId:source.intake.id}}})).state).toBe(state);
+  }
+  expect(await db.adminRecordRevision.count({where:{model:'ControlledIntake',recordId:source.intake.id}})).toBe(4);
+  expect(await db.controlledIntake.findUniqueOrThrow({where:{id:source.intake.id}})).toEqual(source.intake);
+  await page.goto('/admin/lifecycle?model=ControlledIntake&state=ACTIVE&query='+source.intake.id);
+  await expect(page.locator('a[href="'+path+'"]')).toHaveCount(1);
+});
+test('a lost lifecycle response is recovered after reload with a single persisted transition',async({page})=>{
+  const actor=await db.user.findUniqueOrThrow({where:{email:f.adminEmail}}),source=await adminHistoryFixture(db,actor.id);
+  await login(page);await page.goto('/admin/lifecycle/ControlledIntake/'+source.intake.id);
+  const commandId=new URL(page.url()).searchParams.get('command')!;await lifecycleChoice(page,'ARCHIVED');
+  let lost=false,posts=0;const pattern='**/admin/lifecycle/ControlledIntake/**';
+  await page.route(pattern,async route=>{
+    if(route.request().method()!=='POST')return route.continue();
+    posts++;await route.fetch();lost=true;await route.abort('failed');
+  });
+  await page.getByRole('button',{name:'Registra stato amministrativo',exact:true}).click();
+  await expect.poll(()=>lost).toBe(true);await page.unroute(pattern);await page.reload();
+  await page.getByRole('button',{name:'Verifica esito registrato',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
+  expect(posts).toBe(1);expect(await db.adminRecordRevision.count({where:{commandId}})).toBe(1);
+  expect(await db.auditLog.count({where:{id:'admin-record:'+commandId}})).toBe(1);
+  await page.getByRole('link',{name:'Riapri e verifica lo stato',exact:true}).click();
+  await expect(page.getByText('Archiviato',{exact:true}).first()).toBeVisible();
+});
+test('an interrupted lifecycle attempt is closed before a new command and a delayed old writer is denied',async({page})=>{
+  const actor=await db.user.findUniqueOrThrow({where:{email:f.adminEmail}}),person=await syntheticSession(db,actor),source=await adminHistoryFixture(db,actor.id);
+  const before=await readAdminOperationalState(db,person.session,'ControlledIntake',source.intake.id);
+  await login(page);await page.goto('/admin/lifecycle/ControlledIntake/'+source.intake.id);
+  const commandId=new URL(page.url()).searchParams.get('command')!,pattern='**/admin/lifecycle/ControlledIntake/**';
+  await lifecycleChoice(page,'BLOCKED');await page.route(pattern,route=>route.request().method()==='POST'?route.abort('failed'):route.continue());
+  await page.getByRole('button',{name:'Registra stato amministrativo',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Verifica esito registrato',exact:true})).toBeVisible();
+  await page.unroute(pattern);await page.reload();
+  await page.getByRole('checkbox',{name:'Chiudi il tentativo soltanto se non ha prodotto una modifica.',exact:true}).check();
+  await page.getByRole('button',{name:'Riconcilia e chiudi il tentativo',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza modifica.');
+  const key={version:Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION),secret:process.env.PRIVILEGED_STEP_UP_SECRET!};
+  await expect(saveAdminOperationalState(db,person.session,{commandId,model:'ControlledIntake',id:source.intake.id,
+    state:'BLOCKED',expectedVersion:before.expectedVersion,reason:'Late synthetic writer',confirmed:true},
+    {key,sessionToken:person.token,stepUpToken:createPrivilegedStepUpToken({key,userId:actor.id,sessionToken:person.token,role:'admin'})})).rejects.toThrow('CLOSED');
+  await page.getByRole('link',{name:'Riapri i dati correnti per una nuova operazione',exact:true}).click();
+  await expect.poll(()=>new URL(page.url()).searchParams.get('command')).not.toBe(commandId);
+  const fresh=new URL(page.url()).searchParams.get('command');expect(fresh).not.toBe(commandId);
+  await lifecycleChoice(page,'BLOCKED');await lifecycleSave(page);
+  expect((await db.adminOperationalState.findUniqueOrThrow({where:{model_recordId:{model:'ControlledIntake',recordId:source.intake.id}}})).version).toBe(1);
+});
+test('native dossier actions disappear while its readiness is blocked and reappear after explicit restore',async({page})=>{
+  const actor=await db.user.findUniqueOrThrow({where:{email:f.adminEmail}}),person=await syntheticSession(db,actor);
+  const source=await lifecycleReadinessFixture(db,person.session);
+  await login(page);const path='/admin/lifecycle/PracticeReadiness/'+source.practice.id;
+  await page.goto(path);await lifecycleChoice(page,'BLOCKED');await lifecycleSave(page);
+  await page.goto('/client-dossiers/'+source.dossier.id);
+  await expect(page.getByRole('status')).toContainText('La pratica o l’acquisizione collegata è sospesa.');
+  await expect(page.getByRole('button',{name:'Salva come nuova versione',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Salva responsabilità del servizio',exact:true})).toHaveCount(0);
+  await page.getByRole('link',{name:'Gestisci lo stato della pratica',exact:true}).click();
+  await lifecycleChoice(page,'ACTIVE');await lifecycleSave(page);
+  await page.goto('/client-dossiers/'+source.dossier.id);
+  await expect(page.getByRole('button',{name:'Salva come nuova versione',exact:true})).toBeVisible();
+  expect((await db.clientDossier.findUniqueOrThrow({where:{id:source.dossier.id}})).currentVersionId).toBe(source.version.id);
 });

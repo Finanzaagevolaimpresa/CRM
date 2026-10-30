@@ -13,7 +13,7 @@ import { hasPermission } from './permission-evaluator';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { readTechnicalUploadPrivateFile } from './technical-upload-storage';
 import { documentPreviewMime } from './document-preview';
-import { assertOperationalActive } from './admin-operational-state';
+import { assertOperationalActive, readOperationalState } from './admin-operational-state';
 
 type Tx = Prisma.TransactionClient;
 const deny = (): never => { throw new TechnicalAssignmentError('DENIED'); };
@@ -67,12 +67,15 @@ export async function listPersonalAcquiredDocuments(db: PrismaClient, claimed: A
     const result = [];
     for (const document of rows) {
       try {
-        const saved = await selectedTechnicalAcquisition(tx, state.current.userId, document);
+        const saved = state.current.role === 'admin'
+          ? await adminTechnicalAcquisitionHistory(tx, state.current.userId, document)
+          : await selectedTechnicalAcquisition(tx, state.current.userId, document);
         if (!saved || hasSelectiveClientContext(state.current, document) || hasSelectiveContext(state.current, document)
           || (saved.record.receipt.reference.kind === 'TechnicalPractice' && isSelectivePractice(state.current, saved.record.receipt.reference.targetId))
           || !await canAccessFinancialDocument(tx, state.current, document)
           || (document.containsSensitiveData && !hasPermission(state.current, 'document.sensitive.read'))) continue;
-        result.push({ id: document.id, title: document.title, fileName: document.fileName, mimeType: document.mimeType, versionId: saved.version.id,
+        const lifecycle = await readOperationalState(tx, 'Document', document.id);
+        result.push({ lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, available: (!lifecycle || lifecycle.state === 'ACTIVE') && (!document.validUntil || document.validUntil > await technicalAssignmentClock(tx)), id: document.id, title: document.title, fileName: document.fileName, mimeType: document.mimeType, versionId: saved.version.id,
           classification: saved.record.command.classification, acquiredAt: saved.record.receipt.recordedAt });
       } catch { /* A stale private record does not become an ordinary document. */ }
     }

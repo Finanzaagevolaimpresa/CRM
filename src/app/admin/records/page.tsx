@@ -9,7 +9,7 @@ export default async function Page() {
   const session = await requireSession(); if (session.role !== 'admin') notFound();
   const policies = adminRecordCatalogue.filter(policy => recordUpdatePermission(session, policy.permission));
   return <div className="crm-space-y-6"><PageHeader title="Controllo Admin" description="Correggi i dati operativi, gestisci i collegamenti e ritrova le rettifiche conservate per ogni scheda." />
-    <nav className="flex flex-wrap gap-4"><Link className="underline" href="/settings/users">Account e permessi</Link>
+    <nav className="flex flex-wrap gap-4"><Link className="underline" href="/admin/lifecycle">Blocco, archivio e ripristino delle fonti</Link><Link className="underline" href="/settings/users">Account e permessi</Link>
       <Link className="underline" href="/admin-requests">Richieste all’Admin</Link><Link className="underline" href="/settings/security">Conferma Admin</Link>
       <Link className="underline" href="/projects">Progetti e condivisioni</Link><Link className="underline" href="/technical-office/practices">Pratiche e incarichi</Link></nav>
     {[...new Set(policies.map(policy => policy.group))].map(group => <Card key={group} title={group}>

@@ -48,7 +48,7 @@ async function confirm(f: Awaited<ReturnType<typeof fixture>>, proposed?: VideoC
 
 test('schema71 prefix, restrictive relations and no implicit publication', options, async () => {
   const [r] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(r.count, 72);
+  assert.equal(r.count, 73);
   assert.equal(await db.videoEntry.count(), 0);
   const f = await fixture();
   assert.equal((await readVideoSetup(db, admin.session, f.id)).state, 'DRAFT');

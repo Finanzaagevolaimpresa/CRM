@@ -10,7 +10,11 @@ import { isSelectiveLead } from './selective-lead-policy';
 import { adminPracticeReadinessSource } from './practice-readiness';
 import { adminCommunicationSourceContext } from './approved-communications';
 import { adminTechnicalAcquisitionHistory } from './technical-document-acquired-access';
-import { mapSerializableConflict } from './serializable';
+import { mapSerializableConflict, SerializableConflictError } from './serializable';
+import { PracticeReadinessError } from './practice-readiness';
+import { ApprovedCommunicationError } from './approved-communication-contract';
+import { TechnicalAssignmentError } from './technical-assignment-transaction';
+import { RecordUpdateError } from './record-update-contract';
 import { adminOperationalModels, adminOperationalStates, operationalReference, readOperationalState,
   lockOperationalStateTransition, AdminOperationalStateError, type AdminOperationalModel, type AdminOperationalState } from './admin-operational-state';
 
@@ -83,24 +87,21 @@ function stateSnapshot(id: string, state: AdminOperationalState, version: number
 }
 async function assertNoOpenDispatch(tx: Tx, model: AdminOperationalModel, id: string) {
   if (!['ControlledIntake','PracticeReadiness','ApprovedCommunication'].includes(model)) return;
-  const messages=await tx.$queryRaw<Array<{id:string;state:string}>>`SELECT DISTINCT m.id,m.state FROM "ApprovedCommunication" m
+  // The exclusive source-state lock is already held. Native reservations share
+  // that lock; query the existence of an unresolved outcome, not a bounded
+  // sample of the history. A large completed history must remain administrable.
+  const [pending]=await tx.$queryRaw<Array<{blocked:boolean}>>`SELECT EXISTS(SELECT 1 FROM "ApprovedCommunication" m
     LEFT JOIN "PracticeReadiness" p ON p.id=m."readinessId"
     LEFT JOIN "TechnicalPractice" t ON t.id=m."technicalPracticeId"
     LEFT JOIN "PracticeReadiness" sp ON sp."clientServiceId"=t."clientServiceId"
     LEFT JOIN "ControlledIntake" i ON i."leadId"=m."leadId"
-    WHERE (${model}='ApprovedCommunication' AND m.id::text=${id})
+    WHERE ((${model}='ApprovedCommunication' AND m.id::text=${id})
       OR (${model}='PracticeReadiness' AND (p.id::text=${id} OR sp.id::text=${id}))
-      OR (${model}='ControlledIntake' AND (i.id::text=${id} OR p."controlledIntakeId"::text=${id} OR sp."controlledIntakeId"::text=${id}))
-    ORDER BY m.id LIMIT 201`;
-  if(messages.length>200)throw new AdminOperationalStateError('IN_FLIGHT');
-  for(const message of messages){
-    await tx.$queryRaw`SELECT id FROM "ApprovedCommunication" WHERE id=${message.id}::uuid FOR UPDATE`;
-    const [pending]=await tx.$queryRaw<Array<{blocked:boolean}>>`SELECT
-      EXISTS(SELECT 1 FROM "ApprovedCommunication" WHERE id=${message.id}::uuid AND state IN ('SENDING','UNCERTAIN'))
-      OR EXISTS(SELECT 1 FROM "CommunicationAttempt" WHERE "messageId"=${message.id}::uuid AND state IN ('SENDING','UNCERTAIN'))
-      OR EXISTS(SELECT 1 FROM "OrdinaryEmailAttempt" WHERE "messageId"=${message.id}::uuid AND state IN ('RESERVED','CLAIMED','UNCERTAIN')) AS blocked`;
-    if(pending.blocked)throw new AdminOperationalStateError('IN_FLIGHT');
-  }
+      OR (${model}='ControlledIntake' AND (i.id::text=${id} OR p."controlledIntakeId"::text=${id} OR sp."controlledIntakeId"::text=${id})))
+    AND (m.state IN ('SENDING','UNCERTAIN')
+      OR EXISTS(SELECT 1 FROM "CommunicationAttempt" a WHERE a."messageId"=m.id AND a.state IN ('SENDING','UNCERTAIN'))
+      OR EXISTS(SELECT 1 FROM "OrdinaryEmailAttempt" a WHERE a."messageId"=m.id AND a.state IN ('RESERVED','CLAIMED','UNCERTAIN')))) AS blocked`;
+  if(pending.blocked)throw new AdminOperationalStateError('IN_FLIGHT');
 }
 async function journal(tx: Tx,current:Authority,input:{commandId:string;model:AdminOperationalModel;id:string;reason:string},
   requestHash:string,operation:'UPDATE'|'TRASH'|'RESTORE'|'CLOSE',before:unknown,after:unknown){
@@ -112,20 +113,21 @@ async function journal(tx: Tx,current:Authority,input:{commandId:string;model:Ad
     event:operation==='CLOSE'?'admin_record_attempt_closed':'admin_record_changed',
     after:operation==='CLOSE'?{commandId:input.commandId}:{commandId:input.commandId,action:operation,beforeHash,afterHash,changedPaths:['operationalLifecycle']}}});
 }
-export async function readAdminOperationalState(db:PrismaClient,session:AuthSession,rawModel:string,rawId:string){
+export async function readAdminOperationalState(db:PrismaClient,session:AuthSession,rawModel:string,rawId:string,page=1){
+  z.number().int().min(1).max(10000).parse(page);
   const reference=operationalReference(rawModel,rawId);
   return transaction(db,async tx=>{
     const current=await authority(tx,session,reference.model), admitted=await source(tx,session,current,reference.model,reference.id);
     const stored=await readOperationalState(tx,reference.model,reference.id);
     const state=stored?.state??'ACTIVE',version=stored?.version??0;
     const history=await tx.adminRecordRevision.findMany({where:{model:reference.model,recordId:reference.id,
-      after:{path:['operationalLifecycle','version'],not:Prisma.AnyNull}},orderBy:[{createdAt:'desc'},{commandId:'desc'}],take:50,
+      after:{path:['operationalLifecycle','version'],not:Prisma.AnyNull}},orderBy:[{createdAt:'desc'},{commandId:'desc'}],skip:(page-1)*50,take:51,
       select:{commandId:true,operation:true,reason:true,createdAt:true,before:true,after:true}});
     await current.finish();
     return {...reference,label:admitted.label,kindLabel:policy[reference.model].label,href:admitted.href,state,version,
       expectedVersion:digest({source:admitted.row,state:stored}),
       canWrite:recordUpdatePermission(current.actor,policy[reference.model].write),
-      history:history.map(row=>({...row,createdAt:row.createdAt.toISOString()}))};
+      page,hasMore:history.length>50,history:history.slice(0,50).map(row=>({...row,createdAt:row.createdAt.toISOString()}))};
   });
 }
 export async function saveAdminOperationalState(db:PrismaClient,session:AuthSession,raw:unknown,proof:UpdateCredentials){
@@ -144,29 +146,23 @@ export async function saveAdminOperationalState(db:PrismaClient,session:AuthSess
     }
     const state=await lockOperationalStateTransition(tx,input.model,input.id);
     const admitted=await source(tx,session,current,input.model,input.id,true);
-    if(digest({source:admitted.row,state})!==input.expectedVersion||(state?.state??'ACTIVE')===input.state)throw new AdminOperationalStateError('STALE');
+    if(digest({source:admitted.row,state})!==input.expectedVersion||state.state===input.state)throw new AdminOperationalStateError('STALE');
     await assertNoOpenDispatch(tx,input.model,input.id);
-    const nextVersion=(state?.version??0)+1,sourceHash=digest(admitted.row);
-    const before=stateSnapshot(input.id,state?.state??'ACTIVE',state?.version??0,sourceHash);
-    if(input.model==='Document')await tx.document.update({where:{id:input.id},data:{selectiveEpoch:{increment:1}}});
-    if(state){
-      await tx.$executeRaw`UPDATE "AdminOperationalState" SET state=${input.state},version=${nextVersion},"lastCommandId"=${input.commandId}::uuid
-        WHERE model=${input.model} AND "recordId"=${input.id}`;
-    }else{
-      await tx.$executeRaw`INSERT INTO "AdminOperationalState" (model,"recordId",state,version,"lastCommandId","controlledIntakeId","readinessId","messageId","replyId","documentId")
-        VALUES (${input.model},${input.id},${input.state},1,${input.commandId}::uuid,
-          ${input.model==='ControlledIntake'?input.id:null}::uuid,${input.model==='PracticeReadiness'?input.id:null}::uuid,
-          ${input.model==='ApprovedCommunication'?input.id:null}::uuid,${input.model==='CommunicationReply'?input.id:null}::uuid,${input.model==='Document'?input.id:null})`;
-    }
+    const nextVersion=state.version+1,sourceHash=digest(admitted.row);
+    const before=stateSnapshot(input.id,state.state,state.version,sourceHash);
+
+    await tx.$executeRaw`UPDATE "AdminOperationalState" SET state=${input.state},version=${nextVersion},"lastCommandId"=${input.commandId}::uuid
+      WHERE model=${input.model} AND "recordId"=${input.id}`;
     const operation=input.state==='TRASHED'?'TRASH':input.state==='ACTIVE'?'RESTORE':'UPDATE';
-    await journal(tx,current,input,requestHash,operation,before,stateSnapshot(input.id,input.state,nextVersion,sourceHash));
+    const afterSourceHash=input.model==='Document'?digest(await tx.document.findUniqueOrThrow({where:{id:input.id}})):sourceHash;
+    await journal(tx,current,input,requestHash,operation,before,stateSnapshot(input.id,input.state,nextVersion,afterSourceHash));
     await current.finish();return {commandId:input.commandId,model:input.model,id:input.id,replayed:false};
   });
 }
 export async function reconcileAdminOperationalState(db:PrismaClient,session:AuthSession,raw:unknown){
   const input=z.object({commandId:z.string().uuid(),model:z.enum(adminOperationalModels),id:z.string(),close:z.boolean()}).strict().parse(raw);
   input.id=operationalReference(input.model,input.id).id;
-  return transaction(db,async tx=>{
+  const settle=()=>transaction(db,async tx=>{
     const current=await authority(tx,session,input.model);
     if(!recordUpdatePermission(current.actor,policy[input.model].write))return deny();
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-record:'+input.commandId},0))::text`;
@@ -181,5 +177,39 @@ export async function reconcileAdminOperationalState(db:PrismaClient,session:Aut
     await journal(tx,current,{...input,reason:'Tentativo di lifecycle verificato e chiuso senza modifica operativa.'},
       digest({protocol:'ADMIN_OPERATIONAL_STATE_V1',close:input}),'CLOSE',null,null);
     await current.finish();return {status:'CLOSED' as const};
+  });
+  for(let attempt=0;;attempt++){
+    try{return await settle();}
+    catch(error){if(!(error instanceof SerializableConflictError)||attempt>=2)throw error;}
+  }
+}
+
+/** Bounded metadata index. Each candidate must pass its own native admission. */
+export async function listAdminOperationalSources(db:PrismaClient,session:AuthSession,raw:unknown){
+  const input=z.object({model:z.enum(adminOperationalModels),state:z.enum([...adminOperationalStates,'ALL']),
+    query:z.string().trim().max(128),page:z.number().int().min(1).max(10000)}).strict().parse(raw);
+  return transaction(db,async tx=>{
+    const current=await authority(tx,session,input.model);
+    const table={ControlledIntake:Prisma.sql`"ControlledIntake"`,PracticeReadiness:Prisma.sql`"PracticeReadiness"`,
+      ApprovedCommunication:Prisma.sql`"ApprovedCommunication"`,CommunicationReply:Prisma.sql`"CommunicationReply"`,Document:Prisma.sql`"Document"`}[input.model];
+    const privateOnly=input.model==='Document'?Prisma.sql`AND t."visibilityLevel"='technical_admin_private_v1'`:Prisma.empty;
+    const candidates=await tx.$queryRaw<Array<{id:string}>>(Prisma.sql`SELECT t.id::text AS id FROM ${table} t
+      LEFT JOIN "AdminOperationalState" s ON s.model=${input.model} AND s."recordId"=t.id::text
+      WHERE (${input.state}='ALL' OR COALESCE(s.state,'ACTIVE')=${input.state})
+      AND position(lower(${input.query}) in lower(t.id::text))>0 ${privateOnly}
+      ORDER BY t.id LIMIT 51 OFFSET ${(input.page-1)*50}`);
+    const records=[];
+    for(const candidate of candidates.slice(0,50)){
+      try{
+        const admitted=await source(tx,session,current,input.model,candidate.id);
+        const state=await readOperationalState(tx,input.model,candidate.id);
+        records.push({id:candidate.id,label:admitted.label,state:state?.state??'ACTIVE' as const,href:admitted.href});
+      }catch(error){
+        if(error instanceof AdminOperationalStateError||error instanceof PracticeReadinessError
+          ||error instanceof ApprovedCommunicationError||error instanceof TechnicalAssignmentError||error instanceof RecordUpdateError)continue;
+        throw error;
+      }
+    }
+    await current.finish();return {...input,records,hasMore:candidates.length>50,kindLabel:policy[input.model].label};
   });
 }

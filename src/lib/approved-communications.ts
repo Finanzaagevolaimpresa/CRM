@@ -84,6 +84,12 @@ async function operationalCommunicationContext(tx: Tx, context: CommunicationCon
     references.push({ model: 'PracticeReadiness', id: context.id });
     const p = await tx.practiceReadiness.findUnique({ where: { id: context.id }, select: { controlledIntakeId: true } });
     if (p) references.push({ model: 'ControlledIntake', id: p.controlledIntakeId });
+  } else if (context.kind === 'TECHNICAL') {
+    const technical = await tx.technicalPractice.findUnique({ where: { id: context.id }, select: { clientServiceId: true } });
+    const practice = technical?.clientServiceId ? await tx.practiceReadiness.findUnique({
+      where: { clientServiceId: technical.clientServiceId }, select: { id: true, controlledIntakeId: true },
+    }) : null;
+    if (practice) references.push({ model: 'PracticeReadiness', id: practice.id }, { model: 'ControlledIntake', id: practice.controlledIntakeId });
   } else if (context.kind === 'LEAD') {
     const intake = await tx.controlledIntake.findUnique({ where: { leadId: context.id }, select: { id: true } });
     if (intake) references.push({ model: 'ControlledIntake', id: intake.id });
@@ -307,7 +313,7 @@ async function messageScope(tx: Tx, current: CommunicationPrincipal, id: string,
   const scope = await contextScope(tx, current, rowContext(row), write);
   const version = row.versions.find((item) => item.revision === row.currentRevision);
   if (!version || row.clientId !== (scope.client?.id ?? null)) denied();
-  if (requireFreshSource && (await operationalCommunicationContext(tx,scope.context,id)).some(state => state.updatedAt >= version.createdAt)) conflict();
+  if (requireFreshSource && (await operationalCommunicationContext(tx,scope.context,id)).some(state => state.version > 0 && state.updatedAt >= version.createdAt)) conflict();
   const snapshot = parse(approvedMessageSnapshotSchema, version.snapshot);
   if (snapshot.messageId !== row.id || snapshot.clientId !== row.clientId || snapshot.revision !== row.currentRevision
     || canonicalSha256(snapshot.context) !== canonicalSha256(rowContext(row)) || snapshot.mailboxId !== row.mailboxId
@@ -383,10 +389,11 @@ export async function admitCommunicationNotice(tx: Tx, current: CommunicationPri
       await tx.$queryRaw`SELECT "id" FROM "CommunicationReply" WHERE "id"=${replyId}::uuid FOR SHARE`;
       const reply = await tx.communicationReply.findUnique({ where: { id: replyId } });
       if (!reply?.linkedById || reply.messageId !== messageId || !(await filterAdmittedOrdinaryReplies(tx, [reply])).length) return null;
+      await assertOperationalAccess(tx, 'CommunicationReply', reply.id, current.role, false);
     }
     return { accessUntil: Math.min(accessUntil, detail.updateUntil) };
   } catch (error) {
-    if (error instanceof ApprovedCommunicationError) return null;
+    if (error instanceof ApprovedCommunicationError || error instanceof AdminOperationalStateError) return null;
     throw error;
   }
 }
@@ -482,6 +489,8 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
       if (existing || input.expectedRevision !== 0) conflict();
       const reply = await tx.communicationReply.findUnique({ where: { id: input.replySource.id } });
       if (!reply?.messageId || reply.contentHash !== input.replySource.contentHash) denied();
+      try { await assertOperationalAccess(tx, 'CommunicationReply', reply.id, current.role, true); }
+      catch (error) { if (error instanceof AdminOperationalStateError) denied(); throw error; }
       const parent = await loadOrdinaryReplyCandidateContext(tx,current,reply.messageId,runtime);
       if (canonicalSha256(parent.scope.context) !== canonicalSha256(input.context)
         || (parent.box.restricted && !box.restricted)
@@ -642,6 +651,8 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: focusMessageId ? 0 : (page - 1) * 100, take: 101 });
     const messages = [];
     for (const row of rows.slice(0, 100)) {
+      const lifecycle = await readOperationalState(tx, 'ApprovedCommunication', row.id);
+      if (current.role !== 'admin' && lifecycle && ['ARCHIVED','TRASHED'].includes(lifecycle.state)) continue;
       // Confidential content is filtered before loading history or replies.
       const version = await tx.communicationVersion.findUnique({ where: { messageId_revision: { messageId: row.id, revision: row.currentRevision } } });
       const candidate = approvedMessageSnapshotSchema.safeParse(version?.snapshot);
@@ -659,7 +670,15 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       ]);
       const messageUntil = await readableMessageAttachments(tx, current, detail);
       if (messageUntil === null) continue;
-      const replies = await filterAdmittedOrdinaryReplies(tx,storedReplies);
+      const replies = [];
+      for (const reply of await filterAdmittedOrdinaryReplies(tx,storedReplies)) {
+        const state = await readOperationalState(tx, 'CommunicationReply', reply.id);
+        if (current.role !== 'admin' && state && ['ARCHIVED','TRASHED'].includes(state.state)) continue;
+        replies.push({ ...reply, lifecycleState: state?.state ?? 'ACTIVE' as const });
+      }
+      const operationalStates = await operationalCommunicationContext(tx,context,row.id);
+      const operational = operationalStates.every(state => state.state === 'ACTIVE');
+      const needsFreshVersion = operationalStates.some(state => state.version > 0 && state.updatedAt >= detail.version.createdAt);
       const receivedAttachments = await readAdmittedOrdinaryAttachmentMetadata(tx, replies, current);
       // Only admitted messages reach the receipt query. Locks stay held until
       // the final DB-clock expiry check; consultation needs no new step-up.
@@ -667,6 +686,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       accessUntil = Math.min(accessUntil, messageUntil, detail.updateUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
         snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, requestSource: detail.requestSource,
+        lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, operational, needsFreshVersion,
         updateDraft: detail.updateAdmission && current.userId === detail.updateAdmission.author.id ? {
           deliveryId: detail.row.updateDeliveryId!, sourceHash: detail.updateAdmission.proposal.sourceHash,
           recipientId: detail.updateAdmission.recipient.id, recipientName: detail.updateAdmission.recipient.name,
@@ -712,13 +732,14 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       .map(({ id, fileName, mimeType, sizeBytes, classification, sha256 }) => ({ id, fileName, mimeType, sizeBytes, classification, sha256 }));
     const [finished] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (finished.now.getTime() >= accessUntil) denied();
-    return { context, label: scope.label, client: scope.client ? { id: scope.client.id, name: scope.client.displayName } : null,
+    const contextOperational = (await operationalCommunicationContext(tx,context)).every(row => row.state === 'ACTIVE');
+    return { context, label: scope.label, client: scope.client ? { id: scope.client.id, name: scope.client.displayName } : null, contextOperational,
       messages, documents, contextFiles, directory, thread: scope.thread, participantIds: scope.participants?.map(person => person.userId),
       suggestedRecipients,
       page, hasMore: rows.length > 100 && page < 200,
       mailboxes: boxesWithQualification,
-      canWrite: hasPermission(current, 'practice_communications.write') && (['READINESS','TECHNICAL'].includes(context.kind) || personal),
-      canPrepare: hasPermission(current, 'practice_communications.mark_used') && (['READINESS','TECHNICAL'].includes(context.kind) || personal),
+      canWrite: contextOperational && hasPermission(current, 'practice_communications.write') && (['READINESS','TECHNICAL'].includes(context.kind) || personal),
+      canPrepare: contextOperational && hasPermission(current, 'practice_communications.mark_used') && (['READINESS','TECHNICAL'].includes(context.kind) || personal),
       isAdmin: current.role === 'admin', personal };
   });
 }
@@ -910,6 +931,8 @@ export async function linkAmbiguousReply(db: Db, claimed: AuthSession, raw: unkn
     await tx.$queryRaw`SELECT "id" FROM "CommunicationReply" WHERE "id"=${input.replyId}::uuid FOR UPDATE`;
     const reply = await tx.communicationReply.findUnique({ where: { id: input.replyId } });
     if (!reply || (reply.messageId && reply.messageId !== message.row.id)) conflict();
+    try { await assertOperationalAccess(tx, 'CommunicationReply', reply.id, current.role, true); }
+    catch (error) { if (error instanceof AdminOperationalStateError) denied(); throw error; }
     const replyMailbox = await tx.communicationMailbox.findUnique({ where: { id: reply.canonicalMailboxId } });
     if (!replyMailbox || (replyMailbox.restricted && !message.box.restricted && message.snapshot.classification !== 'COMPLAINT')) denied();
     if (reply.messageId) return reply;
