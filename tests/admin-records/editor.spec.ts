@@ -187,6 +187,34 @@ test('historical values are restored by an explicit new revision and retained af
   expect((await db.project.findUniqueOrThrow({ where: { id: f.projects[1].id } })).title).toBe(f.projects[1].title);
   expect(await db.adminRecordRevision.count({ where: { model: 'Project', recordId: f.projects[1].id } })).toBe(2);
 });
+
+test('an incompatible promoter is refused atomically while the complete draft remains editable', async ({ page }) => {
+  const otherClient = await db.client.create({ data: { displayName: 'Cliente diverso per rifiuto sintetico', type: 'societa' } });
+  const wrong = await db.incorporationSubject.create({ data: { promoterClientId: otherClient.id, plannedActivity: 'Promotore incompatibile sintetico' } });
+  const right = await db.incorporationSubject.create({ data: { promoterClientId: f.clientId, plannedActivity: 'Promotore coerente sintetico' } });
+  const original = await db.project.create({ data: { clientId: f.clientId, title: 'Progetto prima del rifiuto sintetico' } });
+  await login(page); await page.goto('/admin/records/Project/' + original.id);
+  await page.getByRole('combobox', { name: 'Soggetto da costituire', exact: true }).selectOption(wrong.id);
+  await page.getByRole('textbox', { name: 'Titolo', exact: true }).fill('Bozza conservata dopo rifiuto del contesto');
+  await page.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('urgente');
+  await page.getByRole('spinbutton', { name: 'Importo richiesto', exact: true }).fill('3210.45'); await reason(page);
+  const commandId = new URL(page.url()).searchParams.get('command')!;
+  await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('I collegamenti selezionati non appartengono allo stesso contesto');
+  await expect(page.getByRole('textbox', { name: 'Titolo', exact: true })).toHaveValue('Bozza conservata dopo rifiuto del contesto');
+  await expect(page.getByRole('combobox', { name: 'Priorità', exact: true })).toHaveValue('urgente');
+  await expect(page.getByRole('spinbutton', { name: 'Importo richiesto', exact: true })).toHaveValue('3210.45');
+  await expect(page.getByRole('textbox', { name: 'Motivazione della correzione', exact: true })).toHaveValue('Correzione sintetica verificata nel browser');
+  await expect(page.getByRole('combobox', { name: 'Soggetto da costituire', exact: true })).toHaveValue(wrong.id);
+  expect(await db.project.findUniqueOrThrow({ where: { id: original.id } })).toEqual(original);
+  expect(await db.adminRecordRevision.count({ where: { commandId } })).toBe(0);
+  expect(await db.auditLog.count({ where: { id: `admin-record:${commandId}` } })).toBe(0);
+  await page.getByRole('combobox', { name: 'Soggetto da costituire', exact: true }).selectOption(right.id);
+  await save(page); await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Titolo', exact: true })).toHaveValue('Bozza conservata dopo rifiuto del contesto');
+  await expect(page.getByRole('combobox', { name: 'Soggetto da costituire', exact: true })).toHaveValue(right.id);
+  expect(await db.adminRecordRevision.count({ where: { commandId } })).toBe(1);
+});
 test('create, trash and restore an expense without duplicating identity or losing its amount', async ({ page }) => {
   await login(page); await page.goto('/admin/records/ProjectExpense/new');
   await page.getByRole('combobox', { name: 'Progetto', exact: true }).selectOption(f.projects[2].id);

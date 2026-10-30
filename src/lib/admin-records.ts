@@ -222,30 +222,33 @@ async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Ro
 }
 async function linkedRows(tx: Tx, model: string, row: Row, actor: Actor) {
   const links = new Map<string, Row>();
-  for (const name of adminRecordPolicy(model).fields) {
+  const policy = adminRecordPolicy(model), fields = metadata(model).fields;
+  for (const name of new Set([...policy.fields, ...Object.keys(relationTargets)])) {
+    if (!fields.some(field => field.name === name)) continue;
     const field = relation(model, name);
-    // Only operational links, never provenance, approvals, private paths or keys.
+    // Include retained operational parents: an immutable contract/payment link
+    // still constrains the editable context. Provenance and keys are excluded.
     if (!field || !row[name]) continue;
     await lock(tx, field.type, String(row[name]));
     const target = await delegate(tx, field.type).findUnique({ where: { id: String(row[name]) } });
-    if (!target || target.deletedAt || target.active === false) fail('CONTEXT');
+    if (!target || (policy.fields.includes(name) && (target.deletedAt || target.active === false))) fail('CONTEXT');
     if (field.type !== 'User') await assertContextVisible(tx, actor, field.type, target);
-    links.set(field.type, target);
+    // Key by relation, so two references to the same model cannot hide one another.
+    links.set(name, target);
   }
   return links;
 }
 async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | null, after: Row, actor: Actor) {
   await assertContextVisible(tx, actor, policy.model, after);
   const links = await linkedRows(tx, policy.model, after, actor);
-  const clientIds = [after.clientId, after.promoterClientId, ...[...links.values()].map(row => row.clientId)].filter(Boolean);
-  if (new Set(clientIds).size > 1) fail('CONTEXT');
-  const projects = [after.projectId, ...[...links.values()].map(row => row.projectId)].filter(Boolean);
-  if (new Set(projects).size > 1) fail('CONTEXT');
-  const companyIds = [after.companyId, ...[...links.values()].map(row => row.companyId)].filter(Boolean);
-  if (new Set(companyIds).size > 1) fail('CONTEXT');
+  const context = [after, ...links.values()];
+  for (const names of [['clientId', 'promoterClientId'], ['projectId'], ['companyId'], ['clientServiceId'],
+    ['contractId'], ['grantAssessmentId'], ['technicalPracticeId']]) {
+    if (new Set(context.flatMap(row => names.map(name => row[name])).filter(Boolean)).size > 1) fail('CONTEXT');
+  }
   if (policy.model === 'CommercialOffer' && !after.leadId && !after.clientId) fail('CONTEXT');
   if (after.documentId) {
-    const document = links.get('Document');
+    const document = links.get('documentId');
     if (document && ((Object.hasOwn(after, 'clientId') && document.clientId !== after.clientId)
       || (Object.hasOwn(after, 'projectId') && document.projectId && document.projectId !== after.projectId))) fail('CONTEXT');
   }
@@ -257,8 +260,10 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
     if (!target || target.deletedAt || target.technicalPrivate === true) fail('CONTEXT');
     await assertContextVisible(tx, actor, targetPolicy.model, target);
   }
-  if (before && ['Client', 'Company', 'Project', 'TechnicalPractice', 'ClientService', 'GrantAssessment', 'Document'].includes(policy.model)
-    && ['clientId', 'companyId', 'projectId', 'clientServiceId'].some(key => before[key] !== after[key])) {
+  const structuralChange = before && (policy.fields.some(name => before[name] !== after[name]
+    && relation(policy.model, name) && relation(policy.model, name)!.type !== 'User')
+    || (policy.model === 'Deadline' && ['entityType', 'entityId'].some(name => before[name] !== after[name])));
+  if (before && structuralChange) {
     // Reparenting a graph is a separate explicit operation. Never silently move
     // a parent while retaining contradictory children, grants or signed context.
     for (const dependent of models) for (const field of dependent.fields.filter(item => item.kind !== 'object'

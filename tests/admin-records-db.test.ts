@@ -15,6 +15,7 @@ import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, c
 import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-item-contract';
 import { paymentCorrectionFixture } from './admin-records/payment-fixture';
 import { adminDossierFixture } from './admin-records/dossier-fixture';
+import { adminContextFixture, adminContextSnapshot } from './admin-records/context-fixture';
 import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
 import { canReviewAiOutput, canApproveAiOutput } from '../src/lib/access-control';
@@ -581,6 +582,86 @@ test('inconsistent parent links and reparenting graphs with dependent records ar
   await db.projectExpense.create({ data: { projectId: a.project.id, category: 'software', description: 'Voce collegata', amount: '1' } });
   await assert.rejects(save(await command('Project', a.project.id, { clientId: b.client.id })), /DEPENDENCIES/);
   assert.equal((await db.project.findUniqueOrThrow({ where: { id: a.project.id } })).clientId, a.client.id);
+});
+
+async function rejectContextChange(input: AdminRecordCommand, capture: () => Promise<unknown>, code: 'CONTEXT' | 'DEPENDENCIES') {
+  const before = await capture();
+  await assert.rejects(save(input), new RegExp(`ADMIN_RECORD_${code}`));
+  assert.deepEqual(await capture(), before);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+  assert.equal(await db.auditLog.count({ where: { id: `admin-record:${input.commandId}` } }), 0);
+  assert.equal(await readAdminRecordReceipt(db, admin.session, input.commandId), null);
+}
+
+test('R1 project update rejects an incorporation subject promoted by a different client atomically', options, async () => {
+  const f = await adminContextFixture(db);
+  await rejectContextChange(await command('Project', f.projects[0].id, { incorporationSubjectId: f.subjects[1].id }),
+    () => adminContextSnapshot(db, f), 'CONTEXT');
+});
+
+test('R1 project creation rejects a foreign promoter without leaving a record or success receipt', options, async () => {
+  const f = await adminContextFixture(db), id = randomUUID();
+  const input = await command('Project', id, { clientId: f.clients[0].id, incorporationSubjectId: f.subjects[1].id,
+    title: 'Progetto incoerente da rifiutare' }, 'CREATE');
+  await rejectContextChange(input, async () => ({ graph: await adminContextSnapshot(db, f),
+    created: await db.project.findUnique({ where: { id } }) }), 'CONTEXT');
+});
+
+test('R1 service correction validates the retained contract even when its field is not editable', options, async () => {
+  const f = await adminContextFixture(db);
+  await rejectContextChange(await command('ClientService', f.service.id, { clientId: f.clients[1].id, projectId: f.projects[1].id }),
+    () => adminContextSnapshot(db, f), 'CONTEXT');
+});
+
+test('R2 changing a promoter cannot leave a dependent project with its original client', options, async () => {
+  const f = await adminContextFixture(db);
+  await rejectContextChange(await command('IncorporationSubject', f.subjects[0].id, { promoterClientId: f.clients[1].id }),
+    () => adminContextSnapshot(db, f), 'DEPENDENCIES');
+});
+
+test('R2 changing an unsigned contract cannot leave its purchased service in the previous context', options, async () => {
+  const f = await adminContextFixture(db);
+  await rejectContextChange(await command('Contract', f.contract.id, { clientId: f.clients[1].id, projectId: f.projects[1].id }),
+    () => adminContextSnapshot(db, f), 'DEPENDENCIES');
+});
+
+test('R2 structural dependency protection also covers a preanalysis with a dependent draft dossier', options, async () => {
+  const f = await adminContextFixture(db);
+  const pre = await db.preAnalysis.create({ data: { clientId: f.clients[0].id, projectId: f.projects[0].id } });
+  const dossier = await db.dossier.create({ data: { preAnalysisId: pre.id, clientId: f.clients[0].id,
+    projectId: f.projects[0].id, title: 'Dossier dipendente sintetico', type: 'nota', status: 'bozza_consulente' } });
+  await rejectContextChange(await command('PreAnalysis', pre.id, { clientId: f.clients[1].id, projectId: f.projects[1].id }),
+    async () => ({ graph: await adminContextSnapshot(db, f), pre: await db.preAnalysis.findUnique({ where: { id: pre.id } }),
+      dossier: await db.dossier.findUnique({ where: { id: dossier.id } }) }), 'DEPENDENCIES');
+});
+
+test('R1 a document from a different purchased service cannot be attached to a checklist in the same project', options, async () => {
+  const f = await adminContextFixture(db);
+  const otherService = await db.clientService.create({ data: { clientId: f.clients[0].id, projectId: f.projects[0].id,
+    serviceCatalogId: f.catalog.id, contractId: f.contract.id } });
+  const doc = await db.document.create({ data: { clientId: f.clients[0].id, projectId: f.projects[0].id, clientServiceId: otherService.id,
+    title: 'Fonte di altro servizio sintetico', type: 'altro', fileName: 'synthetic.txt', mimeType: 'text/plain', sizeBytes: 1,
+    storagePath: 'synthetic/context-check.txt', checksum: 'a'.repeat(64), uploadedById: admin.user.id } });
+  const id = randomUUID();
+  await rejectContextChange(await command('DocumentChecklistItem', id, { clientId: f.clients[0].id, projectId: f.projects[0].id,
+    clientServiceId: f.service.id, documentId: doc.id, title: 'Checklist incoerente sintetica' }, 'CREATE'),
+    async () => ({ graph: await adminContextSnapshot(db, f), document: await db.document.findUnique({ where: { id: doc.id } }),
+      checklist: await db.documentChecklistItem.findUnique({ where: { id } }) }), 'CONTEXT');
+});
+
+test('coherent subjects and retained financial links stay usable and a subject without children can be reparented', options, async () => {
+  const f = await adminContextFixture(db), id = randomUUID();
+  const create = await command('Project', id, { clientId: f.clients[0].id, incorporationSubjectId: f.subjects[0].id,
+    title: 'Progetto con promotore coerente' }, 'CREATE');
+  await save(create); assert.equal((await save(create)).replayed, true);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id } })).incorporationSubjectId, f.subjects[0].id);
+  await db.serviceCatalog.update({ where: { id: f.catalog.id }, data: { active: false } });
+  await save(await command('ClientService', f.service.id, { internalNotes: 'Nota ammessa su acquisto preesistente' }));
+  const saved = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } });
+  assert.equal(saved.internalNotes, 'Nota ammessa su acquisto preesistente'); assert.equal(saved.contractId, f.contract.id);
+  const leaf = await db.incorporationSubject.create({ data: { promoterClientId: f.clients[0].id } });
+  await save(await command('IncorporationSubject', leaf.id, { promoterClientId: f.clients[1].id }));
+  assert.equal((await db.incorporationSubject.findUniqueOrThrow({ where: { id: leaf.id } })).promoterClientId, f.clients[1].id);
 });
 test('non-Admin and explicit write denials cannot use the editor or receipt oracle', options, async () => {
   const f = await fixture(), other = await syntheticPerson(db, 'Tecnico sintetico', 'consulente');

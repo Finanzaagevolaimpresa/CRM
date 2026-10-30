@@ -73,8 +73,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-records-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 41' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 41' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 49' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 49' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
       - name: Prepare isolated browser accounts
@@ -97,7 +97,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_RECORD_EVIDENCE/playwright.json" npx playwright test --config tests/admin-records/playwright.config.ts --reporter=line,json
-          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==14 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==15 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Preserve exact source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$ADMIN_RECORD_EVIDENCE/source.txt"
