@@ -11,7 +11,7 @@ tree="$(git rev-parse HEAD^{tree})"
 recovery_head="$head"
 recovery_tree="$tree"
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-# Schema71 also retains exact reminder instants, cancellations and read receipts. Qualify only
+# Schema72 also retains Admin correction history and closed-command receipts. Qualify only
 # a restart of this exact candidate; an older binary is never a safe rollback.
 node scripts/m4/verify-schema.mjs
 git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
@@ -105,6 +105,7 @@ export R05_TECHNICAL_RECOVERY_FIXTURE="$evidence/technical-fixture.json"
 export R05_ADMIN_REQUEST_RECOVERY_FIXTURE="$evidence/admin-request-fixture.json"
 export R05_UPLOAD_RECOVERY_FIXTURE="$evidence/upload-fixture.json"
 export R05_REMINDER_RECOVERY_FIXTURE="$evidence/reminder-fixture.json"
+export R05_ADMIN_RECORD_RECOVERY_FIXTURE="$evidence/admin-record-fixture.json"
 export R05_HISTORICAL_RECOVERY_FIXTURE="$evidence/historical-fixture.json"
 [[ ! -e "$LOCAL_DOCUMENT_STORAGE_ROOT" && ! -e "$R05_M1_RECOVERY_FIXTURE" ]] || exit 1
 mkdir -p "$PRACTICE_READINESS_BROWSER_EVIDENCE_DIR"
@@ -201,6 +202,7 @@ node --import tsx tests/pr140-release/admin-request-state.ts
 node --import tsx tests/pr140-release/upload-state.ts
 node --import tsx tests/pr140-release/historical-state.ts
 node --import tsx tests/pr140-release/reminder-state.ts
+node --import tsx tests/pr140-release/admin-record-state.ts
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
 run_browser candidate-context tests/pr140-release/playwright.config.ts context-recovery.spec.ts 1
 run_browser candidate-updates tests/pr140-release/playwright.config.ts updates-recovery.spec.ts 1
@@ -210,6 +212,7 @@ run_browser candidate-admin-requests tests/pr140-release/playwright.config.ts ad
 run_browser candidate-uploads tests/pr140-release/playwright.config.ts upload-recovery.spec.ts 1
 run_browser candidate-historical tests/pr140-release/playwright.config.ts historical-recovery.spec.ts 1
 run_browser candidate-reminders tests/pr140-release/playwright.config.ts reminder-recovery.spec.ts 1
+run_browser candidate-admin-records tests/pr140-release/playwright.config.ts admin-record-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
 node --import tsx tests/pr140-release/state.ts epochs "$evidence/before-recovery-epochs.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
@@ -242,6 +245,7 @@ run_browser restart-admin-requests tests/pr140-release/playwright.config.ts admi
 run_browser restart-uploads tests/pr140-release/playwright.config.ts upload-recovery.spec.ts 1
 run_browser restart-historical tests/pr140-release/playwright.config.ts historical-recovery.spec.ts 1
 run_browser restart-reminders tests/pr140-release/playwright.config.ts reminder-recovery.spec.ts 1
+run_browser restart-admin-records tests/pr140-release/playwright.config.ts admin-record-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-recovery.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
 [[ "$(docker exec "$app" sha256sum /var/lib/fai-crm/documents/r05-synthetic.txt | cut -d ' ' -f1)" == "$document_before" ]]
@@ -271,11 +275,12 @@ run_browser resume-admin-requests tests/pr140-release/playwright.config.ts admin
 run_browser resume-uploads tests/pr140-release/playwright.config.ts upload-recovery.spec.ts 1
 run_browser resume-historical tests/pr140-release/playwright.config.ts historical-recovery.spec.ts 1
 run_browser resume-reminders tests/pr140-release/playwright.config.ts reminder-recovery.spec.ts 1
+run_browser resume-admin-records tests/pr140-release/playwright.config.ts admin-record-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-resume.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA71_RECORD_REMINDER_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":71,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"reminderInstantsReadReceiptsCancellationAndCurrentSourceDenialPreserved":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA72_ADMIN_RECORD_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":72,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"reminderInstantsReadReceiptsCancellationAndCurrentSourceDenialPreserved":true,"adminCorrectionsRestoreHistoryAndClosedReceiptsPreserved":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"
