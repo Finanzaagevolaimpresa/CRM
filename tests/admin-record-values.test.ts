@@ -15,7 +15,7 @@ test('the Admin catalogue excludes security, provenance and protocol mutations',
     'provider', 'futureModel', 'systemPrompt', 'inputSchema', 'outputSchema', 'configVersion', 'promptVersion']);
   for (const policy of adminRecordCatalogue) {
     if (policy.historyOnly) {
-      assert(['PrivacyEvidenceReceipt', 'ControlledIntake'].includes(policy.model));
+      assert(['PrivacyEvidenceReceipt', 'ControlledIntake', 'CommunicationReply', 'CommunicationContextFile'].includes(policy.model));
       assert.equal(policy.create, false); assert.equal(policy.trash, null);
       for (const creating of [true, false]) assert.throws(() => parseAdminRecordValues(policy, values(policy.model, {}), creating), /HISTORY/);
     }

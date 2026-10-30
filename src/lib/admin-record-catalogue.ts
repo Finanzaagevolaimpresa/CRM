@@ -14,6 +14,12 @@ const item = (model: string, label: string, group: string, permission: Permissio
  * Provenance, signatures, receipts, transport and security controls are absent
  * from every editable allowlist. Creation is enabled only for ordinary records. */
 export const adminRecordCatalogue = [
+  item('CommunicationReply', 'Risposte ricevute · fonte e rettifiche', 'Comunicazioni', 'practice_communications.write',
+    'sender subject body receivedAt externalMessageId inReplyTo contentHash evidenceReference createdAt',
+    { historyOnly: true, href: '/settings/communications', guidance: 'Consulta il messaggio ricevuto originale e annota la rettifica motivata. Mittente, testo, hash, data e collegamento originali restano conservati. Una rettifica non prepara né invia una risposta.' }),
+  item('CommunicationContextFile', 'File delle comunicazioni · fonte e rettifiche', 'Comunicazioni', 'practice_communications.write',
+    'contextKind fileName mimeType classification sizeBytes sha256 createdAt revokedAt',
+    { historyOnly: true, href: '/communications', guidance: 'Metadati e byte della fonte restano conservati. La rettifica annotata non modifica il file e non annulla una revoca; una sostituzione richiede una nuova versione da scegliere esplicitamente nella bozza.' }),
   item('PrivacyEvidenceReceipt', 'Ricevute privacy · rettifiche delle prove', 'Impostazioni operative', 'settings.manage',
     'purposeCode legalBasisCode evidenceKind decision catalogVersion sourceSystem formCode formVersion sourceSubmittedAt sourceEvidenceDigest evidenceHash createdAt',
     { historyOnly: true, href: '/legal-compliance/privacy', guidance: 'Consulta la ricevuta originale e registra una rettifica motivata collegata alla sua identità. La rettifica resta visibile nello storico; non riscrive la decisione, non crea un consenso e non modifica le autorizzazioni di contatto.' }),
@@ -110,6 +116,10 @@ export function adminRecordPolicy(model: string): AdminRecordPolicy {
   return found;
 }
 export const adminFieldLabels: Record<string, string> = {
+  sender: 'Mittente originale', subject: 'Oggetto originale', body: 'Testo originale', receivedAt: 'Data originale di ricezione',
+  externalMessageId: 'Identificativo originale del messaggio', inReplyTo: 'Riferimento del messaggio precedente', evidenceReference: 'Riferimento della prova originale',
+  contextKind: 'Tipo di contesto', fileName: 'Nome del file originale', mimeType: 'Formato del file', classification: 'Riservatezza del file',
+  sizeBytes: 'Dimensione in byte', sha256: 'SHA256 dei byte originali', revokedAt: 'Data della revoca',
   noticeCode: 'Codice informativa', noticeVersion: 'Versione informativa', purposeCode: 'Codice finalità', legalBasisCode: 'Codice base giuridica',
   evidenceKind: 'Tipo di evidenza', contentHash: 'SHA256 del testo della versione',
   operationalScope: 'Ambito operativo', requiredDataChecklist: 'Dati richiesti · elenco JSON', expectedOutput: 'Risultato atteso', toneStyle: 'Tono e stile',

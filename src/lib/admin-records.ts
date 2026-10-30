@@ -20,6 +20,8 @@ import { admitsTechnicalAssignmentManager } from './technical-assignment-permiss
 import { createHash } from 'node:crypto';
 import { readPrivateDocumentBounded } from './storage';
 import { assertAdminEngagementDossierLifecycle, EngagementDossierError } from './engagement-dossier';
+import { adminCommunicationSourceContext } from './approved-communications';
+import { ApprovedCommunicationError } from './approved-communication-contract';
 
 type Tx = Prisma.TransactionClient;
 async function withSerializableTransaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
@@ -169,10 +171,10 @@ const readPermission = (policy: AdminRecordPolicy): Permission => ['PrivacyNotic
   : policy.permission.replace(/\.write$/, '.read') as Permission;
 async function lock(tx: Tx, model: string, id: string) {
   metadata(model);
-  const identity = ['CommercialLeadSlaPolicyVersion', 'EngagementDossierDeliveryAuthorization', 'EngagementDossierDeliveryReceipt', 'PrivacyNoticeVersion', 'PrivacyEvidenceReceipt', 'ControlledIntake', 'ServiceCatalogRevision'].includes(model) ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
+  const identity = ['CommercialLeadSlaPolicyVersion', 'EngagementDossierDeliveryAuthorization', 'EngagementDossierDeliveryReceipt', 'PrivacyNoticeVersion', 'PrivacyEvidenceReceipt', 'ControlledIntake', 'ServiceCatalogRevision', 'CommunicationReply', 'CommunicationContextFile'].includes(model) ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
   await tx.$queryRaw(Prisma.sql`SELECT id FROM ${Prisma.raw('"' + model + '"')} WHERE id=${identity} FOR UPDATE`);
 }
-const label = (row: Row) => String(row.title ?? row.displayName ?? row.name ?? (row.publicName ? row.publicName + ' · revisione ' + row.version : null) ?? row.contractNumber ?? row.internalMeasureName ?? row.description
+const label = (row: Row) => String(row.title ?? row.fileName ?? row.subject ?? row.displayName ?? row.name ?? (row.publicName ? row.publicName + ' · revisione ' + row.version : null) ?? row.contractNumber ?? row.internalMeasureName ?? row.description
   ?? ([row.firstName, row.lastName].filter(Boolean).join(' ') || row.id));
 const relationTargets: Record<string, string> = { leadId: 'Lead', clientId: 'Client', promoterClientId: 'Client', companyId: 'Company', personId: 'Person',
   projectId: 'Project', incorporationSubjectId: 'IncorporationSubject', clientServiceId: 'ClientService', serviceCatalogId: 'ServiceCatalog',
@@ -191,6 +193,10 @@ function admittedRow(actor: Awaited<ReturnType<typeof updateActor>>['actor'], ro
 }
 
 type Actor = Awaited<ReturnType<typeof updateActor>>['actor'];
+async function communicationSourceContext(tx: Tx, actor: Actor, model: 'CommunicationReply' | 'CommunicationContextFile', id: string) {
+  try { return await adminCommunicationSourceContext(tx, { ...actor, userId: actor.id }, model, id); }
+  catch (error) { if (error instanceof ApprovedCommunicationError) fail('DENIED'); throw error; }
+}
 const privateFields: Record<string, string[]> = {
   Task: ['title', 'description', 'priority', 'dueAt', 'status'],
   DocumentChecklistItem: ['title', 'notes', 'status', 'active'],
@@ -219,6 +225,7 @@ async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Ro
   if (!admittedRow(actor, row)) fail('DENIED');
   const policy = adminRecordCatalogue.find(item => item.model === model);
   if (policy && !recordUpdatePermission(actor, readPermission(policy))) fail('DENIED');
+  if (model === 'CommunicationReply' || model === 'CommunicationContextFile') await communicationSourceContext(tx, actor, model, row.id);
   if (privateFields[model] && row.technicalPrivate === true) await admitPrivateItem(tx, actor, model, row);
   if (model === 'Document') {
     if (!ordinaryDocumentVisibilityAllows(row.visibilityLevel)
@@ -913,7 +920,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
     const descriptor: AdminField = { name, label: adminFieldLabels[name] ?? name.replace(/([A-Z])/g, ' $1').toLowerCase(),
       required: field.isRequired && !field.hasDefaultValue, readOnly: !editable.includes(name),
       type: field.type === 'DateTime' ? 'date' : field.type === 'Boolean' ? 'boolean' : ['Decimal', 'Int'].includes(field.type) ? 'number'
-        : field.type === 'Json' ? 'json' : /notes|description|summary|content|conditions|rationale|issues|findings|documents|text/i.test(name) ? 'longtext' : 'text' };
+        : field.type === 'Json' ? 'json' : /notes|description|summary|content|body|conditions|rationale|issues|findings|documents|text/i.test(name) ? 'longtext' : 'text' };
     if (related) {
       if (!referenceModels.includes(related.type)) fail('INVALID');
       const found = await referenceRows(tx, actor, related.type);
@@ -984,6 +991,9 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     if (memberships.length !== relationships.length) fail('DENIED');
     if (model === 'ControlledIntake' && row?.leadId) relationships.push({ label: 'Apri il lead: dati correnti, assegnazione e archivio', href: `/leads/${row.leadId}` });
     if (model === 'PrivacyEvidenceReceipt' && row?.noticeVersionId) relationships.push({ label: 'Apri la versione originale dell’informativa', href: `/admin/records/PrivacyNoticeVersion/${row.noticeVersionId}` });
+    if ((model === 'CommunicationReply' || model === 'CommunicationContextFile') && row) {
+      relationships.push({ label: 'Apri il contesto originale della comunicazione', ...(await communicationSourceContext(tx, current.actor, model, id)) });
+    }
     if (deliveryDossier) relationships.push({ label: 'Apri il dossier e le prove originali della consegna', href: `/client-dossiers/${deliveryDossier}` });
     let draftRow = row;
     if (revisionId) {
@@ -1010,7 +1020,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
       guidance: privateTarget ? 'Elemento tecnico privato: puoi correggere il contenuto, archiviare e ripristinare entro la tua autorità personale. Origine e collegamenti restano conservati. I cambi di stato e lifecycle invalidano i perimetri precedenti: dopo il ripristino verifica e conferma di nuovo gli incarichi necessari.' : policy.guidance ?? null,
       href: privateTarget ? privateTarget.kind === 'Project' ? `/projects/${privateTarget.targetId}/assignments` : `/technical-office/practices/${privateTarget.targetId}/assignments` : policy.href.replace('{id}', id), relationships, restoringRevision: revisionId ?? null,
       history: history.map(item => ({ id: item.commandId, action: item.operation, at: item.createdAt.toISOString(), reason: item.reason,
-        actor: `${item.actor.name} · ${item.actor.email}`, canRestore: !['PrivacyNoticeVersion','PrivacyEvidenceReceipt','ControlledIntake','ServiceCatalogRevision'].includes(model) && policy.fields.length > 0 && !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
+        actor: `${item.actor.name} · ${item.actor.email}`, canRestore: !policy.historyOnly && !['PrivacyNoticeVersion','ServiceCatalogRevision'].includes(model) && policy.fields.length > 0 && !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
   });
 }
 export async function listAdminRecords(db: PrismaClient, session: AuthSession, model: string, query = '', page = 1, trash = false) {
@@ -1018,8 +1028,8 @@ export async function listAdminRecords(db: PrismaClient, session: AuthSession, m
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000 || query.length > 200) fail('INVALID');
   return withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy);
-    const search = metadata(model).fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'contractNumber', 'code', 'noticeCode', 'publicName'].includes(field.name));
-    const uuidId = ['CommercialLeadSlaPolicyVersion','EngagementDossierDeliveryAuthorization','EngagementDossierDeliveryReceipt','PrivacyNoticeVersion','PrivacyEvidenceReceipt','ControlledIntake','ServiceCatalogRevision'].includes(model);
+    const search = metadata(model).fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'contractNumber', 'code', 'noticeCode', 'publicName', 'subject', 'sender', 'fileName'].includes(field.name));
+    const uuidId = ['CommercialLeadSlaPolicyVersion','EngagementDossierDeliveryAuthorization','EngagementDossierDeliveryReceipt','PrivacyNoticeVersion','PrivacyEvidenceReceipt','ControlledIntake','ServiceCatalogRevision','CommunicationReply','CommunicationContextFile'].includes(model);
     const where = { ...(query ? { OR: [...(!uuidId || z.string().uuid().safeParse(query).success ? [{ id: query }] : []), ...search.map(field => ({ [field.name]: { contains: query, mode: 'insensitive' } }))] } : {}),
       ...(policy.trash === 'soft' ? { deletedAt: trash ? { not: null } : null } : {}) };
     let rows: Row[];

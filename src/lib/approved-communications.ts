@@ -745,6 +745,37 @@ export async function loadCommunicationFileContext(tx: Tx, claimed: AuthSession,
   return { current, scope, check };
 }
 
+/** Admission for administrative annotations of original sources. It grants no
+ * content access beyond the native message/file readers and never sends mail. */
+export async function adminCommunicationSourceContext(tx: Tx, current: CommunicationPrincipal,
+  model: 'CommunicationReply' | 'CommunicationContextFile', id: string): Promise<{ href: string }> {
+  uuid.parse(id);
+  if (current.role !== 'admin' || !hasPermission(current, 'practice_communications.read')) denied();
+  if (model === 'CommunicationReply') {
+    await tx.$queryRaw`SELECT "id" FROM "CommunicationReply" WHERE "id"=${id}::uuid FOR SHARE`;
+    const reply = await tx.communicationReply.findUnique({ where: { id } });
+    if (!reply) denied();
+    // The administration page already admits original, unlinked sources to an
+    // Admin. Linked sources must additionally satisfy the complete message scope.
+    if (!reply.messageId) return { href: '/settings/communications' };
+    const detail = await messageScope(tx, current, reply.messageId, false, false);
+    if (!(await filterAdmittedOrdinaryReplies(tx, [reply])).length) denied();
+    const until = await readableMessageAttachments(tx, current, detail);
+    const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    if (until === null || clock.now.getTime() >= Math.min(until, detail.updateUntil)) denied();
+    return { href: '/communications?' + new URLSearchParams({ kind: detail.scope.context.kind,
+      practice: detail.scope.context.id, focus: reply.messageId }) };
+  }
+  await tx.$queryRaw`SELECT "id" FROM "CommunicationContextFile" WHERE "id"=${id}::uuid FOR SHARE`;
+  const file = await tx.communicationContextFile.findUnique({ where: { id } });
+  if (!file || !canReadCommunicationFile(current, file.classification)) denied();
+  const contextId = file.contextKind === 'CLIENT' ? file.clientId : file.contextKind === 'LEAD' ? file.leadId
+    : file.contextKind === 'READINESS' ? file.readinessId : file.contextKind === 'TECHNICAL' ? file.technicalPracticeId : file.internalThreadId;
+  const context = parse(communicationContextSchema, { kind: file.contextKind, id: contextId });
+  await contextScope(tx, current, context);
+  return { href: '/communications?' + new URLSearchParams({ kind: context.kind, practice: context.id }) };
+}
+
 const mailboxConfigurationSchema = z.object({
   mailboxId: uuid, expectedRevision: revision, kind: z.enum(['MAILBOX', 'ALIAS', 'FORWARD']),
   canonicalMailboxId: uuid.nullable(), providerReference: identifier, responsibleUserId: identifier,

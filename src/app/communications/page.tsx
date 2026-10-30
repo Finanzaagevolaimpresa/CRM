@@ -133,7 +133,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     {query.result && feedback[query.result] ? <p role="status" className="rounded-xl bg-slate-100 p-3">{feedback[query.result]}</p> : null}
     <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Allegati del contesto</summary>
       <CommunicationFiles key={`${data.context.kind}-${data.context.id}-${data.contextFiles.map(file=>file.id).join(',')}`}
-        context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} requestId={randomUUID()} />
+        context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} isAdmin={data.isAdmin} requestId={randomUUID()} />
     </details>
     {query.focus && <div className="space-y-2 rounded-xl border p-3"><p>Verifica del messaggio conservato. Nessuna operazione viene ripetuta.</p>
       {!data.messages.length && <p>Il messaggio non risulta disponibile nel contesto corrente. Conserva il riferimento e verifica prima di preparare un’altra operazione.</p>}
@@ -179,6 +179,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
         {message.replies.map(reply => <article className="mt-3 break-words rounded-xl border p-3" key={reply.id} data-linked-reply={reply.id}>
           <p>{reply.receivedAt.toISOString()} · {reply.sender}</p><h4 className="font-bold">{reply.subject}</h4><p className="whitespace-pre-wrap">{reply.body}</p>
           <p className="text-xs">Riferimento di acquisizione: {reply.evidenceReference}</p>
+          {data.isAdmin && <Link className="block font-bold underline" href={`/admin/records/CommunicationReply/${reply.id}`}>Fonte originale e rettifiche amministrative</Link>}
           {reply.receivedAttachments.length ? <section aria-label="Allegati ricevuti" className="my-3 grid gap-2">
             <h5 className="font-bold">Allegati ricevuti</h5>
             {reply.receivedAttachments.map(file => <OrdinaryEmailAttachmentDownload key={file.ordinal}

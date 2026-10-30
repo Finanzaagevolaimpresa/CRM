@@ -2,12 +2,13 @@
 
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import type { CommunicationContext } from '@/lib/approved-communication-contract';
 import { uploadCommunicationFileAction, revokeCommunicationFileAction } from '@/lib/communication-file-actions';
 
 type ContextFile = { id: string; fileName: string; sizeBytes: number; sha256: string; classification: string };
-export function CommunicationFiles({ context, files, canWrite, requestId }: {
-  context: CommunicationContext; files: ContextFile[]; canWrite: boolean; requestId: string;
+export function CommunicationFiles({ context, files, canWrite, requestId, isAdmin = false }: {
+  context: CommunicationContext; files: ContextFile[]; canWrite: boolean; requestId: string; isAdmin?: boolean;
 }) {
   const router = useRouter(), pending = useRef(false);
   const [busy,setBusy] = useState(false), [blocked,setBlocked] = useState(false), [message,setMessage] = useState('');
@@ -47,6 +48,7 @@ export function CommunicationFiles({ context, files, canWrite, requestId }: {
     </form>:null}
     <ul className="grid gap-3">{files.map(file=><li key={file.id} className="grid gap-2 break-words rounded-xl border p-3">
       <p>{file.fileName} · {file.sizeBytes} byte · {file.classification==='ORDINARY'?'Ordinario':file.classification==='SENSITIVE'?'Sensibile':'Reclamo'}</p>
+      {isAdmin && <Link className="font-bold underline" href={`/admin/records/CommunicationContextFile/${file.id}`}>Fonte e rettifiche amministrative del file</Link>}
       <button className="text-left font-bold underline" disabled={busy} onClick={()=>download(file)}>Scarica {file.fileName}</button>
       {canWrite?<details><summary className="cursor-pointer">Revoca disponibilità</summary><form action={form=>form.get('confirm')==='REVOKE'?mutate(()=>revokeCommunicationFileAction({id:file.id,context,sha256:file.sha256})):Promise.resolve()} className="grid gap-2">
         <p>Blocca download e nuovi invii che includono questo file. Il file e lo storico restano conservati.</p>
