@@ -67,6 +67,7 @@ export const adminRecordCommand = z.object({ commandId: z.string().uuid(), model
   operation: z.enum(['CREATE', 'UPDATE', 'TRASH', 'RESTORE', 'RECTIFY']), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().trim().min(3).max(2000), values: z.record(z.string(), z.string().max(100_000)),
   paymentCorrection: z.object({ evidenceVersionId: identifier, effectiveAt: z.string().datetime({ offset: true }), confirmed: z.literal(true) }).strict().optional(),
+  deliveryRevocation: z.literal(true).optional(),
 }).strict();
 export type AdminRecordCommand = z.infer<typeof adminRecordCommand>;
 
@@ -119,6 +120,10 @@ export function parseAdminRecordValues(policy: AdminRecordPolicy, values: Record
   if (policy.model === 'Payment' && creating) { result.status ??= 'da_incassare'; if (result.status !== 'da_incassare') fail('HISTORY'); }
   if (policy.model === 'PracticeCommunication' && (result.type === 'cliente' || result.channel !== 'nota_interna')) fail('HISTORY');
   if (policy.model === 'AiAgent' && !z.array(z.string().min(1).max(2000)).max(100).safeParse(result.requiredDataChecklist).success) fail('INVALID');
+  if (policy.model === 'PrivacyNoticeVersion' && (!/^[A-Z0-9][A-Z0-9_.:-]{0,119}$/.test(String(result.noticeCode))
+    || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(String(result.noticeVersion))
+    || !['purposeCode', 'legalBasisCode'].every(name => /^[A-Z0-9][A-Z0-9_]{0,119}$/.test(String(result[name])))
+    || !/^[a-f0-9]{64}$/.test(String(result.contentHash)))) fail('INVALID');
   if (creating && archives[policy.model] && result.status !== archives[policy.model].draft) fail('HISTORY');
   if (policy.model === 'CommercialLeadSlaPolicyVersion' && (!['STAGED', 'ACTIVE'].includes(String(result.status))
     || !Number.isSafeInteger(result.responseTargetSeconds) || Number(result.responseTargetSeconds) < 60 || Number(result.responseTargetSeconds) > 2_592_000)) fail('INVALID');
@@ -131,11 +136,12 @@ async function auth(tx: Tx, session: AuthSession, policy: AdminRecordPolicy, pro
     || !recordUpdatePermission(current.actor, readPermission(policy))) fail('DENIED');
   return current;
 }
-const readPermission = (policy: AdminRecordPolicy): Permission => policy.permission === 'document.upload' ? 'document.download'
+const readPermission = (policy: AdminRecordPolicy): Permission => policy.model === 'PrivacyNoticeVersion' ? 'privacy.evidence.read'
+  : policy.permission === 'document.upload' ? 'document.download'
   : policy.permission.replace(/\.write$/, '.read') as Permission;
 async function lock(tx: Tx, model: string, id: string) {
   metadata(model);
-  const identity = model === 'CommercialLeadSlaPolicyVersion' ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
+  const identity = ['CommercialLeadSlaPolicyVersion', 'EngagementDossierDeliveryAuthorization', 'EngagementDossierDeliveryReceipt', 'PrivacyNoticeVersion'].includes(model) ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
   await tx.$queryRaw(Prisma.sql`SELECT id FROM ${Prisma.raw('"' + model + '"')} WHERE id=${identity} FOR UPDATE`);
 }
 const label = (row: Row) => String(row.title ?? row.displayName ?? row.name ?? row.contractNumber ?? row.internalMeasureName ?? row.description
@@ -143,7 +149,8 @@ const label = (row: Row) => String(row.title ?? row.displayName ?? row.name ?? r
 const relationTargets: Record<string, string> = { leadId: 'Lead', clientId: 'Client', promoterClientId: 'Client', companyId: 'Company', personId: 'Person',
   projectId: 'Project', incorporationSubjectId: 'IncorporationSubject', clientServiceId: 'ClientService', serviceCatalogId: 'ServiceCatalog',
   contractId: 'Contract', paymentId: 'Payment', documentId: 'Document', technicalPracticeId: 'TechnicalPractice',
-  grantAssessmentId: 'GrantAssessment', preAnalysisId: 'PreAnalysis', assignedToId: 'User' };
+  grantAssessmentId: 'GrantAssessment', preAnalysisId: 'PreAnalysis', assignedToId: 'User',
+  dossierId: 'ClientDossier', authorizationId: 'EngagementDossierDeliveryAuthorization' };
 const relation = (model: string, field: string) => metadata(model).fields.find(item => item.kind === 'object'
   && item.relationFromFields?.length === 1 && item.relationFromFields[0] === field)
   ?? (relationTargets[field] ? { type: relationTargets[field] } : undefined);
@@ -355,8 +362,20 @@ async function readDeleted(tx: Tx, model: string, id: string) {
   return latest?.operation === 'TRASH' && latest.after === null ? latest : null;
 }
 
+async function deliveryDossierId(tx: Tx, model: string, row: Row | null) {
+  if (!row) return null;
+  if (model === 'EngagementDossierDeliveryAuthorization') return String(row.dossierId);
+  if (model === 'EngagementDossierDeliveryReceipt') {
+    const authorization = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { id: String(row.authorizationId) } });
+    if (!authorization) fail('CONTEXT');
+    return authorization.dossierId;
+  }
+  return null;
+}
+
 export async function saveAdminRecord(db: PrismaClient, session: AuthSession, raw: unknown, proof: UpdateCredentials) {
   const command = adminRecordCommand.parse(raw), policy = adminRecordPolicy(command.model);
+  if (command.deliveryRevocation && (policy.model !== 'EngagementDossierDeliveryAuthorization' || command.operation !== 'UPDATE')) fail('INVALID');
   const requestHash = adminRecordVersion({ command, actor: session.userId, sessionId: session.sessionId });
   if (!proof) fail('DENIED');
   return withSerializableTransaction(db, async tx => {
@@ -373,6 +392,8 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
     const records = delegate(tx, policy.model), before = await records.findUnique({ where: { id: command.id } });
     const removed = !before && command.operation === 'RESTORE' ? await readDeleted(tx, policy.model, command.id) : null;
     if (before) await assertContextVisible(tx, current.actor, policy.model, before);
+    const deliveryDossier = await deliveryDossierId(tx, policy.model, before);
+    if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
     if (policy.model === 'ClientDossier' && before?.practiceReadinessId) await dossierLifecycleContext(tx, session, command.id);
     if (removed) await assertContextVisible(tx, current.actor, policy.model, removed.before as unknown as Row);
     if (adminRecordVersion(removed ? removed.before : before) !== command.expectedVersion) fail('STALE');
@@ -381,7 +402,14 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       if (command.operation === 'CREATE' ? !policy.create || before !== null : !before || Boolean(before.deletedAt)) fail('DENIED');
       const values = parseAdminRecordValues(policy, command.values, command.operation === 'CREATE');
       const changed = Object.keys(values).filter(key => adminRecordVersion(before?.[key] ?? null) !== adminRecordVersion(values[key]));
+      if (deliveryDossier) {
+        if (policy.model !== 'EngagementDossierDeliveryAuthorization' || !command.deliveryRevocation || !before
+          || before.revokedAt || !recordUpdatePermission(current.actor, 'dossier.approve')
+          || await tx.engagementDossierDeliveryReceipt.count({ where: { authorizationId: before.id } })) fail('HISTORY');
+        values.revokedAt = await current.finish();
+      }
       if (before) await assertEditable(tx, policy, before, changed);
+      if (before && policy.model === 'PrivacyNoticeVersion') fail('HISTORY');
       if (command.paymentCorrection && (policy.model !== 'Payment' || !before || !changed.includes('status'))) fail('INVALID');
       if (policy.model === 'Payment' && before && changed.includes('status'))
         await correctPaymentStatus(tx, current.actor, command, before, String(values.status), await current.finish());
@@ -610,6 +638,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
   const values: Record<string, string> = {}, result: AdminField[] = [];
   let editable = [...policy.fields];
   if (row) {
+    if (policy.model === 'PrivacyNoticeVersion') editable = [];
     if (['DocumentExtraction', 'VisuraAnalysis'].includes(policy.model)) editable = editable.filter(name => name !== 'documentId');
     if (row.technicalPrivate === true && privateFields[policy.model]) editable = privateFields[policy.model];
     if ((policy.model === 'PreAnalysis' && (row.reviewedById || row.approvedById || row.approvedAt || !['da_avviare', 'raccolta_dati', 'bozza_generata'].includes(String(row.status))))
@@ -688,6 +717,8 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     const row = existing ?? (removed?.before as unknown as Row | undefined) ?? null;
     if (creating ? !policy.create || Boolean(row) : !row) fail('DENIED');
     if (row) await assertContextVisible(tx, current.actor, model, row);
+    const deliveryDossier = await deliveryDossierId(tx, model, row);
+    if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
     if (model === 'ClientDossier' && row?.practiceReadinessId) await dossierLifecycleContext(tx, session, id);
     const privateTarget = row?.technicalPrivate === true && privateFields[model] ? await admitPrivateItem(tx, current.actor, model, row) : null;
     const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
@@ -699,6 +730,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
       return company && admittedRow(current.actor, company) ? [{ label: `${company.name} · ${link.role}`, href: `/companies/${company.id}` }] : [];
     });
     if (memberships.length !== relationships.length) fail('DENIED');
+    if (deliveryDossier) relationships.push({ label: 'Apri il dossier e le prove originali della consegna', href: `/client-dossiers/${deliveryDossier}` });
     let draftRow = row;
     if (revisionId) {
       if (creating || !row || row.deletedAt || removed) fail('DENIED');
@@ -714,10 +746,13 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     return { model, id, version: adminRecordVersion(row), label: creating ? `Nuovo · ${policy.label}` : label(row!),
       ...form, create: creating, trash: Boolean(policy.trash), deleted: Boolean(row?.deletedAt || removed),
       paymentCorrection: model === 'Payment' && !creating,
+      revokeDelivery: model === 'EngagementDossierDeliveryAuthorization' && !row?.revokedAt
+        && recordUpdatePermission(current.actor, 'dossier.approve')
+        && !await tx.engagementDossierDeliveryReceipt.count({ where: { authorizationId: id } }),
       guidance: privateTarget ? 'Elemento tecnico privato: puoi correggere il contenuto, archiviare e ripristinare entro la tua autorità personale. Origine e collegamenti restano conservati. I cambi di stato e lifecycle invalidano i perimetri precedenti: dopo il ripristino verifica e conferma di nuovo gli incarichi necessari.' : policy.guidance ?? null,
       href: privateTarget ? privateTarget.kind === 'Project' ? `/projects/${privateTarget.targetId}/assignments` : `/technical-office/practices/${privateTarget.targetId}/assignments` : policy.href.replace('{id}', id), relationships, restoringRevision: revisionId ?? null,
       history: history.map(item => ({ id: item.commandId, action: item.operation, at: item.createdAt.toISOString(), reason: item.reason,
-        actor: `${item.actor.name} · ${item.actor.email}`, canRestore: !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
+        actor: `${item.actor.name} · ${item.actor.email}`, canRestore: policy.fields.length > 0 && !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
   });
 }
 export async function listAdminRecords(db: PrismaClient, session: AuthSession, model: string, query = '', page = 1, trash = false) {
@@ -739,7 +774,11 @@ export async function listAdminRecords(db: PrismaClient, session: AuthSession, m
     } else rows = trash && !policy.trash ? [] : await delegate(tx, model).findMany({ where, take: 51, skip: (page - 1) * 50, orderBy: { id: 'asc' } });
     const visible = [];
     for (const row of rows.slice(0, 50)) {
-      try { await assertContextVisible(tx, current.actor, model, row); }
+      try {
+        await assertContextVisible(tx, current.actor, model, row);
+        const deliveryDossier = await deliveryDossierId(tx, model, row);
+        if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
+      }
       catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
       visible.push({ id: row.id, label: label(row), deleted: Boolean(row.deletedAt), status: String(row.status ?? ''),
         dueAt: row.dueAt instanceof Date ? row.dueAt.toISOString() : row.dueDate instanceof Date ? row.dueDate.toISOString() : null });

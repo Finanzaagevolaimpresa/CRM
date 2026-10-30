@@ -44,6 +44,51 @@ async function command(model: string, id: string, patch: Record<string, string> 
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
 
+test('privacy notice drafts and rectifications preserve immutable identity and never activate a notice', options, async () => {
+  const id = randomUUID(), noticeCode = 'SYNTHETIC-' + randomUUID().replaceAll('-', '').toUpperCase();
+  const values = { noticeCode, noticeVersion: 'v1', purposeCode: 'SYNTHETIC_TEST', legalBasisCode: 'SYNTHETIC_TEST',
+    evidenceKind: 'NOTICE_ACKNOWLEDGEMENT', contentHash: 'a'.repeat(64) };
+  const create = await command('PrivacyNoticeVersion', id, values, 'CREATE');
+  await save(create); assert.equal((await save(create)).replayed, true);
+  const original = await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id } });
+  assert.equal(original.status, 'DRAFT'); assert.equal(original.effectiveFrom, null); assert.equal(original.retiredAt, null);
+  await assert.rejects(save(await command('PrivacyNoticeVersion', id, { contentHash: 'b'.repeat(64) })), /HISTORY/);
+  await assert.rejects(save(await command('PrivacyNoticeVersion', id, { status: 'ACTIVE' })), /INVALID/);
+  await save(await command('PrivacyNoticeVersion', id, {}, 'RECTIFY'));
+  assert.deepEqual(await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id } }), original);
+  const secondId = randomUUID();
+  await save(await command('PrivacyNoticeVersion', secondId, { ...values, noticeVersion: 'v2', contentHash: 'b'.repeat(64) }, 'CREATE'));
+  const reopened = await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', id);
+  assert(reopened.fields.every(field => field.readOnly)); assert.equal(reopened.history[0].action, 'RECTIFY');
+  assert.equal((await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id: secondId } })).status, 'DRAFT');
+});
+
+test('single delivery revocation is durable and receipt corrections never rewrite delivery evidence', options, async () => {
+  const f = await adminDossierFixture(db, admin.session);
+  const before = await loadAdminRecord(db, admin.session, 'EngagementDossierDeliveryAuthorization', f.pending.id);
+  assert.equal(before.revokeDelivery, true);
+  const revoke = { ...await command('EngagementDossierDeliveryAuthorization', f.pending.id), deliveryRevocation: true as const };
+  const receipt = await save(revoke); assert.equal((await save(revoke)).replayed, true);
+  assert.equal((await readAdminRecordReceipt(db, admin.session, receipt.commandId))?.id, f.pending.id);
+  const after = await db.engagementDossierDeliveryAuthorization.findUniqueOrThrow({ where: { id: f.pending.id } });
+  assert(after.revokedAt); assert.deepEqual({ ...after, revokedAt: null }, f.pending);
+  assert.equal((await loadAdminRecord(db, admin.session, 'EngagementDossierDeliveryAuthorization', f.pending.id)).revokeDelivery, false);
+  await assert.rejects(recordEngagementDossierDelivery(db, f.actors.operator, { authorizationId: f.pending.id, outcome: 'DELIVERED',
+    evidence: { reference: 'MUST_NOT_BE_REUSED_AFTER_REVOKE', deliveredAt: new Date(), synthetic: true } }));
+  await assert.rejects(save({ ...await command('EngagementDossierDeliveryAuthorization', f.consumed.id), deliveryRevocation: true }), /HISTORY/);
+  await assert.rejects(save(await command('EngagementDossierDeliveryAuthorization', f.pending.id, {}, 'RESTORE')), /DENIED/);
+  await assert.rejects(save(await command('EngagementDossierDeliveryReceipt', f.receipt.id)), /HISTORY/);
+  const annotation = await command('EngagementDossierDeliveryReceipt', f.receipt.id, {}, 'RECTIFY');
+  await save(annotation); assert.equal((await save(annotation)).replayed, true);
+  assert.deepEqual(await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { id: f.receipt.id } }), f.receipt);
+  assert.deepEqual(await db.engagementDossierDeliveryAuthorization.findUniqueOrThrow({ where: { id: f.consumed.id } }), f.consumed);
+  const reopened = await loadAdminRecord(db, admin.session, 'EngagementDossierDeliveryReceipt', f.receipt.id);
+  assert.equal(reopened.history.length, 1); assert.equal(reopened.history[0].action, 'RECTIFY');
+  assert.equal(reopened.history[0].canRestore, false);
+  assert(reopened.relationships.some(link => link.href === `/client-dossiers/${f.dossier.id}`));
+  await assert.rejects(loadAdminRecord(db, f.actors.operator, 'EngagementDossierDeliveryReceipt', f.receipt.id), /DENIED/);
+});
+
 test('CRM agent metadata corrections create one immutable version without changing execution configuration', options, async () => {
   const row = await db.aiAgent.create({ data: { code: 'SYNTHETIC-' + randomUUID(), name: 'Agente sintetico', promptVersion: 'v1',
     systemPrompt: 'Istruzione originale da conservare', active: false, provider: 'mock', inputSchema: { type: 'object' }, outputSchema: { type: 'object' } } });

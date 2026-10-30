@@ -1,12 +1,13 @@
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import { Badge, Card, EmptyState, PageHeader, Table, formatDateTime } from '@/components/ui';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
 export default async function Page() {
-  await requirePermission('privacy.evidence.read');
+  const session = await requirePermission('privacy.evidence.read');
   const [notices, evidence] = await Promise.all([
     prisma.privacyNoticeVersion.findMany({
       orderBy: [{ noticeCode: 'asc' }, { noticeVersion: 'desc' }],
@@ -22,6 +23,7 @@ export default async function Page() {
 
   return <div className="crm-space-y-6">
     <PageHeader title="Privacy e consensi" description="Registro interno minimizzato e in sola lettura. Le versioni devono essere validate prima dell’attivazione dei canali di acquisizione." />
+    <AdminRecordShortcut session={session} model="PrivacyNoticeVersion"/>
     <Card title="Versioni informative">
       {notices.length === 0 ? <EmptyState title="Nessuna informativa registrata">La fondazione resta fail-closed finché una versione validata non viene registrata con finalità, base giuridica e hash espliciti.</EmptyState> : <Table
         headers={['Codice / versione', 'Finalità', 'Base giuridica', 'Tipo', 'Hash contenuto', 'Stato', 'Decorrenza']}

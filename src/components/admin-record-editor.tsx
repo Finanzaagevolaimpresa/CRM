@@ -33,7 +33,8 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
     if (!ready || pending || (result?.uncertain && !replay)) return;
     const command = replay && submitted ? submitted : { commandId, model: data.model, id: data.id, operation,
       expectedVersion: data.version, reason, values: operation === 'CREATE' || operation === 'UPDATE' ? values : {},
-      ...(correctingPayment && declared ? { paymentCorrection: { evidenceVersionId, effectiveAt, confirmed: true as const } } : {}) };
+      ...(correctingPayment && declared ? { paymentCorrection: { evidenceVersionId, effectiveAt, confirmed: true as const } } : {}),
+      ...(data.revokeDelivery && operation === 'UPDATE' ? { deliveryRevocation: true as const } : {}) };
     setSubmitted(command); setPending(true); remember(true);
     try { const saved = await saveAdminRecordAction(command); setResult(saved); if (!saved.uncertain && !saved.ok) remember(false); }
     catch { setResult({ ok: false, uncertain: true, message: 'Risposta interrotta. Il comando è conservato: verifica l’esito prima di proseguire.' }); }
@@ -51,7 +52,7 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
         {!data.create && <label className="block font-semibold">Operazione<select aria-label="Operazione" className={fieldClass} value={operation}
           onChange={event => setOperation(event.target.value as AdminRecordCommand['operation'])}>
           {data.deleted ? <option value="RESTORE">Ripristina la scheda conservata</option> : <>
-            {canUpdate && <option value="UPDATE">Correggi i dati operativi</option>}<option value="RECTIFY">Registra una rettifica motivata nelle evidenze</option>
+            {canUpdate && <option value="UPDATE">Correggi i dati operativi</option>}{data.revokeDelivery && <option value="UPDATE">Revoca questa autorizzazione di consegna</option>}<option value="RECTIFY">Registra una rettifica motivata nelle evidenze</option>
             {data.trash && <option value="TRASH">Sposta nel cestino recuperabile</option>}</>}
         </select></label>}
         {(operation === 'CREATE' || operation === 'UPDATE' || !canUpdate) && <div className="grid gap-4 md:grid-cols-2">{data.fields.map(field => {
@@ -82,6 +83,7 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
           <label className="flex gap-3"><input type="checkbox" required checked={declared} onChange={event => setDeclared(event.target.checked)} />Dichiaro di avere verificato la prova e lo stato amministrativo indicato; non sto registrando un nuovo incasso.</label>
         </section>}
         {operation === 'RECTIFY' && <p>La rettifica viene aggiunta al registro della scheda. Non cambia il contenuto originale, non sostituisce una firma e non attesta una consegna o una presa in carico.</p>}
+        {data.revokeDelivery && operation === 'UPDATE' && <p>La revoca impedisce di registrare una consegna usando questa autorizzazione. Destinatari, versione e decisione originale restano conservati. Nessuna autorizzazione già consumata può essere revocata.</p>}
         {operation === 'TRASH' && <p>Il record e il suo contenuto vengono conservati per il ripristino. I collegamenti e le prove storiche non vengono ricreati.</p>}
         <label className="block font-semibold">Motivazione della correzione<textarea required minLength={3} maxLength={2000} className={fieldClass}
           value={reason} onChange={event => setReason(event.target.value)} /></label>

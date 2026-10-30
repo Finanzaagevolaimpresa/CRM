@@ -11,6 +11,27 @@ const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
 
+test('Admin creates a notice draft and annotates it after reopening without rewriting or activating it', async ({ page }) => {
+  await login(page); await page.goto('/admin/records/PrivacyNoticeVersion/new');
+  await expect(page.getByRole('button', { name: 'Salva operazione', exact: true })).toBeEnabled();
+  const code = 'SYNTHETIC_BROWSER_' + Date.now();
+  for (const [label, value] of [['Codice informativa', code], ['Versione informativa', 'v1'], ['Codice finalità', 'SYNTHETIC_TEST'],
+    ['Codice base giuridica', 'SYNTHETIC_TEST'], ['SHA256 del testo della versione', 'c'.repeat(64)]])
+    await page.getByRole('textbox', { name: label, exact: true }).fill(value);
+  await page.getByRole('combobox', { name: 'Tipo di evidenza', exact: true }).selectOption('NOTICE_ACKNOWLEDGEMENT');
+  await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'SHA256 del testo della versione', exact: true })).toBeDisabled();
+  await expect(page.getByRole('combobox', { name: 'Operazione', exact: true })).toHaveValue('RECTIFY');
+  const original = await db.privacyNoticeVersion.findFirstOrThrow({ where: { noticeCode: code } });
+  expect(original.status).toBe('DRAFT'); expect(original.effectiveFrom).toBeNull();
+  await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Correzioni e rettifiche registrate', exact: true })).toBeVisible();
+  expect(await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id: original.id } })).toEqual(original);
+  expect(await db.adminRecordRevision.count({ where: { model: 'PrivacyNoticeVersion', recordId: original.id, operation: 'RECTIFY' } })).toBe(1);
+});
+
 test('legacy dossier exports contain current saved content and retain the exact reader perimeter', async ({ page, browser }) => {
   const dossier = await db.dossier.create({ data: { clientId: f.clientId, projectId: f.projects[0].id,
     title: 'Dossier export sintetico', type: 'verifica', status: 'bozza_consulente',

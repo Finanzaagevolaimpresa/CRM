@@ -14,6 +14,9 @@ const item = (model: string, label: string, group: string, permission: Permissio
  * Provenance, signatures, receipts, transport and security controls are absent
  * from every editable allowlist. Creation is enabled only for ordinary records. */
 export const adminRecordCatalogue = [
+  item('PrivacyNoticeVersion', 'Informative · nuove versioni e rettifiche', 'Impostazioni operative', 'settings.manage',
+    'noticeCode noticeVersion purposeCode legalBasisCode evidenceKind contentHash',
+    { create: true, href: '/legal-compliance/privacy', guidance: 'Registra una nuova versione in bozza con l’hash SHA256 del testo verificato. Identità, finalità, base giuridica e hash restano immutabili anche in bozza: per correggerli crea una nuova versione e annota la rettifica sulla precedente. Questa funzione non valida il testo, non attiva canali e non modifica le ricevute di consenso. Attivazione e ritiro mantengono il processo di validazione dedicato.' }),
   item('AiAgent', 'Agenti CRM · metadati operativi', 'Impostazioni operative', 'ai_agents.write',
     'name description operationalScope requiredDataChecklist expectedOutput toneStyle',
     { href: '/settings/ai-agents', guidance: 'Ogni correzione crea una versione completa dei metadati, conservando quelle precedenti. Identità, prompt, provider, modello, attivazione e schemi restano invariati. Nessuna esecuzione viene avviata.' }),
@@ -66,6 +69,10 @@ export const adminRecordCatalogue = [
     { create: true, guidance: 'Solo bozze modificabili. Dalla lista puoi creare una nuova bozza manuale; le approvazioni, le esportazioni e le prove di consegna del documento precedente restano conservate.' }),
   item('ClientDossier', 'Dossier cliente', 'Analisi e dossier', 'dossier.write', 'clientId clientServiceId projectId title type content status',
     { create: true, href: '/client-dossiers/{id}', guidance: 'Le nuove bozze manuali non ereditano approvazioni. I dossier versionati usano il proprio editor; qui puoi annotare rettifiche e archiviare o ripristinare lo stato registrato. L’archivio revoca le autorizzazioni di consegna non consumate; il ripristino non le riattiva.' }),
+  item('EngagementDossierDeliveryAuthorization', 'Consegne dossier · autorizzazioni', 'Analisi e dossier', 'dossier.write', '',
+    { guidance: 'Puoi revocare una singola autorizzazione non consumata. Destinatari, versione e decisione originale restano conservati. Una revoca non si annulla: un’eventuale nuova consegna richiede una nuova decisione nel percorso del dossier.' }),
+  item('EngagementDossierDeliveryReceipt', 'Consegne dossier · rettifiche delle ricevute', 'Analisi e dossier', 'dossier.write', '',
+    { guidance: 'Aggiungi una rettifica motivata alla ricevuta esatta. Esito, data, autore e prova della registrazione originale restano invariati. Questa operazione non esegue né attesta una nuova consegna.' }),
   item('AiOutput', 'Output AI · revisione del contenuto', 'Analisi e dossier', 'ai.review', 'title content status',
     { guidance: 'Correzione delle bozze prima dell’approvazione, con conservazione del testo originario. Non avvia esecuzioni né modifica provider o approvazioni.' }),
   item('Contract', 'Contratti · dati operativi', 'Servizi e amministrazione', 'contract.write',
@@ -94,6 +101,8 @@ export function adminRecordPolicy(model: string): AdminRecordPolicy {
   return found;
 }
 export const adminFieldLabels: Record<string, string> = {
+  noticeCode: 'Codice informativa', noticeVersion: 'Versione informativa', purposeCode: 'Codice finalità', legalBasisCode: 'Codice base giuridica',
+  evidenceKind: 'Tipo di evidenza', contentHash: 'SHA256 del testo della versione',
   operationalScope: 'Ambito operativo', requiredDataChecklist: 'Dati richiesti · elenco JSON', expectedOutput: 'Risultato atteso', toneStyle: 'Tono e stile',
   leadId: 'Lead', services: 'Servizi proposti', includedActivities: 'Attività incluse', operationalConditions: 'Condizioni operative',
   sentAt: 'Data dichiarata di invio manuale', followUpAt: 'Prossimo seguito commerciale', followUpNote: 'Nota sul seguito', outcomeNote: 'Nota sull’esito',
@@ -153,4 +162,5 @@ export type AdminRecordForm = { model: string; id: string; version: string; labe
   values: Record<string, string>; create: boolean; trash: boolean; deleted: boolean; guidance: string | null; href: string;
   relationships: { label: string; href: string }[]; restoringRevision: string | null;
   paymentCorrection?: boolean;
+  revokeDelivery?: boolean;
   history: { id: string; action: string; at: string; reason: string; actor: string; canRestore: boolean }[] };
