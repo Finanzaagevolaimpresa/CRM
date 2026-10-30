@@ -395,89 +395,10 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  if (enabled) {
-    const engagementDossiers = await db.clientDossier.findMany({ where: { clientId: { in: [a.client.id, b.client.id] } }, select: { id: true } });
-    const engagementDossierIds = engagementDossiers.map((row) => row.id);
-    const authorizations = await db.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId: { in: engagementDossierIds } }, select: { id: true } });
-    await db.engagementDossierDeliveryReceipt.deleteMany({ where: { authorizationId: { in: authorizations.map((row) => row.id) } } });
-    await db.engagementDossierDeliveryAuthorization.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
-    await db.engagementDossierExport.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
-    await db.engagementDossierReview.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
-    await db.clientDossier.updateMany({ where: { id: { in: engagementDossierIds } }, data: { currentVersionId: null, approvedVersionId: null } });
-    await db.engagementDossierVersion.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
-    await db.clientDossier.deleteMany({ where: { id: { in: engagementDossierIds } } });
-    await db.preAnalysis.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
-    await db.practiceMaterialEvidence.deleteMany({
-      where: { practice: { clientId: { in: [a.client.id, b.client.id] } } },
-    });
-    await db.practiceFundingEvidence.deleteMany({
-      where: { practice: { clientId: { in: [a.client.id, b.client.id] } } },
-    });
-    await db.practiceReadiness.updateMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-      data: { materialsCompleteEvidenceId: null, currentFormalizationId: null },
-    });
-    await db.practiceFormalization.deleteMany({
-      where: { practice: { clientId: { in: [a.client.id, b.client.id] } } },
-    });
-    await db.practiceMaterialAttestation.deleteMany({
-      where: { practice: { clientId: { in: [a.client.id, b.client.id] } } },
-    });
-    await db.practiceReadiness.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    const revisionRows = await db.practiceOfferRevision.findMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-      select: { id: true },
-    });
-    await db.practiceOfferAcceptance.deleteMany({
-      where: { offerRevisionId: { in: revisionRows.map((row) => row.id) } },
-    });
-    await db.practiceOfferRevision.deleteMany({
-      where: { id: { in: revisionRows.map((row) => row.id) } },
-    });
-    await db.documentChecklistItem.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    await db.clientService.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    await db.contract.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    const cleanupDocuments = await db.document.findMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-      select: { id: true },
-    });
-    await db.documentVersion.deleteMany({
-      where: { documentId: { in: cleanupDocuments.map((row) => row.id) } },
-    });
-    await db.document.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    await db.controlledIntake.deleteMany({
-      where: { id: { in: [a.intake.id, b.intake.id] } },
-    });
-    await db.commercialOffer.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    await db.project.deleteMany({
-      where: { clientId: { in: [a.client.id, b.client.id] } },
-    });
-    await db.lead.deleteMany({ where: { id: { in: [a.lead.id, b.lead.id] } } });
-    await db.client.deleteMany({
-      where: { id: { in: [a.client.id, b.client.id] } },
-    });
-    await db.auditLog.deleteMany({
-      where: { actorId: { in: [ids.userA, ids.userB, ids.manager] } },
-    });
-    await db.internalSession.deleteMany({
-      where: { id: { in: [ids.sessionA, ids.sessionB, ids.managerSession] } },
-    });
-    await db.user.deleteMany({
-      where: { id: { in: [ids.userA, ids.userB, ids.manager] } },
-    });
-  }
+  // The guarded synthetic database is owned by the qualification job. Schema73
+  // preserves native source rows and their lifecycle journal with RESTRICT FKs.
+  // Retain the complete fixture graph until the isolated database is disposed;
+  // deleting individual sources here would contradict that retention guarantee.
   if (previousMode === undefined) delete process.env.PRACTICE_READINESS_MODE;
   else process.env.PRACTICE_READINESS_MODE = previousMode;
   await db.$disconnect();
