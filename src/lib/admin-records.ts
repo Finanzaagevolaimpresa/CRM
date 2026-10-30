@@ -6,7 +6,7 @@ import { administrativeCatalogDefinition } from './admin-catalog-revision';
 import { catalogV2RevisionHash, DIGITAL_PROJECT_TYPES } from './service-catalog-v2';
 import { updateActor, type UpdateCredentials } from './record-updates';
 import { recordUpdatePermission } from './record-update-context';
-import { mapSerializableConflict } from './serializable';
+import { mapSerializableConflict, SerializableConflictError } from './serializable';
 import { adminRecordCatalogue, adminRecordPolicy, adminFieldLabels, type AdminField, type AdminRecordForm, type AdminRecordPolicy } from './admin-record-catalogue';
 import { isFinancialDocument, type FinancialDocumentMetadata } from './financial-privacy-policy';
 import type { Permission } from './permissions';
@@ -817,12 +817,17 @@ export async function readAdminRecordReceipt(db: PrismaClient, session: AuthSess
 export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSession, raw: unknown) {
   const input = z.object({ commandId: z.string().uuid(), model: z.string(), id: identifier }).strict().parse(raw);
   const policy = adminRecordPolicy(input.model);
-  return withSerializableTransaction(db, async tx => {
+  // A concurrent successful command can invalidate the settlement snapshot.
+  // Retry only a known rolled-back serialization conflict, with the same ID;
+  // this path can observe a receipt or close an unused command, never replay it.
+  const settle = () => withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy);
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`admin-record:${input.commandId}`},0))::text`;
     const previous = await tx.adminRecordRevision.findUnique({ where: { commandId: input.commandId } });
     if (previous) {
       if (previous.actorId !== current.actor.id || previous.model !== input.model || previous.recordId !== input.id) fail('DENIED');
+      if (previous.before) await assertContextVisible(tx, current.actor, input.model, previous.before as unknown as Row);
+      if (previous.after) await assertContextVisible(tx, current.actor, input.model, previous.after as unknown as Row);
       await current.finish();
       return { ...input, replayed: true, closed: previous.operation === 'CLOSE' };
     }
@@ -837,6 +842,10 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
     await current.finish();
     return { ...input, replayed: false, closed: true };
   });
+  for (let attempt = 0; ; attempt++) {
+    try { return await settle(); }
+    catch (error) { if (!(error instanceof SerializableConflictError) || attempt >= 2) throw error; }
+  }
 }
 
 const referenceModels = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'DocumentVersion', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
@@ -994,6 +1003,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     if ((model === 'CommunicationReply' || model === 'CommunicationContextFile') && row) {
       relationships.push({ label: 'Apri il contesto originale della comunicazione', ...(await communicationSourceContext(tx, current.actor, model, id)) });
     }
+    if (model === 'CommunicationContextFile' && row) relationships.push({ label: 'Correggi versione, metadati o destinazione · recupera il file revocato', href: `/admin/communication-files/${id}` });
     if (deliveryDossier) relationships.push({ label: 'Apri il dossier e le prove originali della consegna', href: `/client-dossiers/${deliveryDossier}` });
     let draftRow = row;
     if (revisionId) {
@@ -1049,7 +1059,8 @@ export async function listAdminRecords(db: PrismaClient, session: AuthSession, m
         if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
       }
       catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
-      visible.push({ id: row.id, label: label(row), deleted: Boolean(row.deletedAt), status: String(row.status ?? ''),
+      visible.push({ id: row.id, label: label(row), deleted: Boolean(row.deletedAt),
+        status: model === 'CommunicationContextFile' ? row.revokedAt ? 'Revocato' : 'Disponibile' : String(row.status ?? ''),
         dueAt: row.dueAt instanceof Date ? row.dueAt.toISOString() : row.dueDate instanceof Date ? row.dueDate.toISOString() : null });
     }
     await current.finish();

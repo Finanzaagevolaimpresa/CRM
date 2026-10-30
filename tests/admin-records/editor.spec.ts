@@ -1,3 +1,5 @@
+import { storeCommunicationFile, revokeCommunicationFile } from '../../src/lib/communication-files';
+import { storedNoticeMessage, linkedOrdinaryNoticeReply } from '../record-updates/communication-fixtures';
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -487,4 +489,160 @@ test('Admin selects one open access session and preserves the others', async ({ 
   await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   await expect(panel.locator('input[name="targetSessionId"]')).toHaveCount(1);
   await expect(panel.locator('input[name="targetSessionId"][value="' + selected + '"]')).toHaveCount(0);
+});
+
+async function browserCommunicationFile() {
+  const actor = await db.user.findUniqueOrThrow({ where: { email: f.adminEmail } });
+  const session = await syntheticSession(db, actor);
+  const mailbox = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'comunicazioni@finanzaagevolaimpresa.it' } });
+  await db.$executeRaw`INSERT INTO "OrdinaryEmailAuthority" ("id","userId","mailboxId","enabled")
+    VALUES ('ordinary-email',${actor.id},${mailbox.id}::uuid,true)
+    ON CONFLICT ("id") DO UPDATE SET "userId"=EXCLUDED."userId","mailboxId"=EXCLUDED."mailboxId","enabled"=true,"revision"="OrdinaryEmailAuthority"."revision"+1`;
+  const lead = await db.lead.create({ data: { firstName: 'Fonte browser', lastName: 'Sintetica', email: randomUUID() + '@synthetic.invalid' } });
+  const context = { kind: 'LEAD' as const, id: lead.id }, id = randomUUID();
+  await storeCommunicationFile(db, session.session, { id, context, classification: 'ORDINARY' },
+    new File(['SYNTHETIC_BROWSER_ORIGINAL'], 'fonte-browser.txt', { type: 'text/plain' }));
+  const source = await db.communicationContextFile.findUniqueOrThrow({ where: { id } });
+  return { actor, session: session.session, source, context, lead };
+}
+
+test('file replacement keeps selected bytes, destination and choices through expired confirmation and reopens persisted metadata', async ({ page, context }) => {
+  const source = await browserCommunicationFile();
+  const target = await db.client.create({ data: { type: 'societa', displayName: 'Destinazione file browser ' + randomUUID() } });
+  await login(page); await page.goto('/admin/communication-files/' + source.source.id);
+  const contents = Buffer.from('SYNTHETIC_BROWSER_REPLACEMENT');
+  await page.getByLabel('Nuovo contenuto, facoltativo', { exact: false }).setInputFiles({ name: 'sostituita.txt', mimeType: 'text/plain', buffer: contents });
+  await page.getByLabel('Nome della nuova versione', { exact: true }).fill('corretta-browser.txt');
+  await page.getByLabel('Tipo di contesto', { exact: true }).selectOption('CLIENT');
+  await page.getByLabel('Cerca per nome', { exact: true }).fill(target.displayName);
+  await page.getByRole('button', { name: 'Cerca destinazione', exact: true }).click();
+  await page.getByRole('button', { name: 'Cliente: ' + target.displayName, exact: true }).click();
+  await page.getByLabel('Motivo della correzione o del recupero', { exact: true }).fill('Versione sintetica confermata nel browser');
+  const confirm = page.getByRole('checkbox', { name: /Confermo la nuova versione e la destinazione indicate/ });
+  await confirm.check(); await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible(); await expect(confirm).toBeChecked();
+  await expect(page.getByLabel('Nome della nuova versione', { exact: true })).toHaveValue('corretta-browser.txt');
+  await expect(page.getByText('Selezionato: sostituita.txt', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Destinazione scelta', { exact: true })).toContainText(target.displayName);
+  expect((await db.communicationContextFile.findUniqueOrThrow({ where: { id: source.source.id } })).revokedAt).toBe(null);
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
+  await page.getByRole('link', { name: 'Apri la nuova versione registrata', exact: true }).click();
+  await expect(page.getByLabel('Nome della nuova versione', { exact: true })).toHaveValue('corretta-browser.txt');
+  const id = new URL(page.url()).pathname.split('/').pop()!;
+  const saved = await db.communicationContextFile.findUniqueOrThrow({ where: { id } });
+  expect(saved.clientId).toBe(target.id); expect(saved.sha256).toBe(createHash('sha256').update(contents).digest('hex'));
+  expect((await db.communicationContextFile.findUniqueOrThrow({ where: { id: source.source.id } })).revokedAt).not.toBe(null);
+});
+
+test('a lost file-version response recovers its single receipt after reload without resending bytes', async ({ page }) => {
+  const source = await browserCommunicationFile();
+  await login(page); await page.goto('/admin/communication-files/' + source.source.id);
+  const before = new URL(page.url()), commandId = before.searchParams.get('command')!, versionId = before.searchParams.get('version')!;
+  await page.getByLabel('Nome della nuova versione', { exact: true }).fill('versione-recuperata-browser.txt');
+  await page.getByLabel('Motivo della correzione o del recupero', { exact: true }).fill('Risposta sintetica interrotta dopo commit');
+  await page.getByRole('checkbox', { name: /Confermo la nuova versione e la destinazione indicate/ }).check();
+  let posts = 0, discarded = false; const pattern = '**/admin/communication-files/**';
+  await page.route(pattern, async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts++; await route.fetch(); await route.abort('failed'); discarded = true;
+  });
+  await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
+  await expect.poll(() => discarded).toBe(true);
+  await page.unroute(pattern); await page.reload();
+  await expect(page.getByRole('button', { name: 'Registra nuova versione', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
+  await page.getByRole('link', { name: 'Apri la nuova versione registrata', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp('/admin/communication-files/' + versionId));
+  expect(await db.communicationContextFile.count({ where: { id: versionId } })).toBe(1);
+  expect(await db.adminRecordRevision.count({ where: { commandId } })).toBe(1); expect(posts).toBe(1);
+});
+
+test('received-source annotation and revoked-file recovery keep immutable history visible after reopening', async ({ page }) => {
+  const source = await browserCommunicationFile();
+  const message = await storedNoticeMessage(db, { leadId: source.lead.id, authorId: source.actor.id });
+  const incoming = await linkedOrdinaryNoticeReply(db, message.message.id, message.mailbox.id, source.actor.id);
+  await login(page); await page.goto('/admin/records/CommunicationReply/' + incoming.reply.id);
+  await expect(page.getByLabel('Operazione', { exact: true })).toHaveValue('RECTIFY');
+  await expect(page.getByRole('option', { name: 'Correggi i dati operativi', exact: true })).toHaveCount(0);
+  await page.getByLabel('Motivazione della correzione', { exact: true }).fill('Rettifica annotata della fonte sintetica ricevuta');
+  await save(page); await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByText('Rettifica annotata della fonte sintetica ricevuta', { exact: true })).toBeVisible();
+  expect(await db.communicationReply.findUniqueOrThrow({ where: { id: incoming.reply.id } })).toEqual(incoming.reply);
+  await revokeCommunicationFile(db, source.session, { id: source.source.id, context: source.context, sha256: source.source.sha256 });
+  const revoked = await db.communicationContextFile.findUniqueOrThrow({ where: { id: source.source.id } });
+  await page.goto('/admin/communication-files/' + source.source.id);
+  await expect(page.getByLabel('Operazione', { exact: true })).toHaveValue('RESTORE');
+  await page.getByLabel('Motivo della correzione o del recupero', { exact: true }).fill('Recupero sintetico della versione conservata');
+  await page.getByRole('checkbox', { name: /Confermo la nuova versione e la destinazione indicate/ }).check();
+  await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
+  await page.getByRole('link', { name: 'Apri la nuova versione registrata', exact: true }).click();
+  const id = new URL(page.url()).pathname.split('/').pop()!;
+  expect(id).not.toBe(revoked.id);
+  expect((await db.communicationContextFile.findUniqueOrThrow({ where: { id } })).sha256).toBe(revoked.sha256);
+  expect(await db.communicationContextFile.findUniqueOrThrow({ where: { id: revoked.id } })).toEqual(revoked);
+  await expect(page.getByRole('link', { name: 'Apri la versione precedente', exact: true })).toBeVisible();
+});
+
+test('native upload and revocation recover their outcomes after lost responses without duplicate file effects', async ({ page }) => {
+  const source = await browserCommunicationFile();
+  await login(page); await page.goto('/communications?kind=LEAD&practice=' + source.lead.id);
+  const upload = page.locator('form').filter({ has: page.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }) });
+  const id = await upload.locator('input[name="id"]').inputValue();
+  await upload.getByLabel('Allegato da caricare', { exact: true }).setInputFiles({ name: 'esito-nativo.txt', mimeType: 'text/plain', buffer: Buffer.from('SYNTHETIC_NATIVE_OUTCOME') });
+  let lost = false, posts = 0; const pattern = '**/communications?*';
+  const lose = async () => page.route(pattern, async route => {
+    if(route.request().method()!=='POST')return route.continue();
+    posts++;await route.fetch();await route.abort('failed');lost=true;
+  });
+  await lose(); await upload.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }).click();
+  await expect.poll(()=>lost).toBe(true);await page.unroute(pattern);await page.reload();
+  const recovery = page.getByRole('region', { name: 'Verifica operazione allegato', exact: true });
+  await recovery.getByRole('button', { name: 'Verifica esito allegato', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Operazione già registrata.' })).toBeVisible();
+  expect(await db.communicationContextFile.count({ where: { id } })).toBe(1);
+  expect(await db.auditLog.count({ where: { entityId: id, event: 'communication_file_uploaded' } })).toBe(1);
+  await page.getByRole('button', { name: 'Prepara un’altra operazione sugli allegati', exact: true }).click();
+  const item = page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Scarica esito-nativo.txt', exact: true }) });
+  await item.getByText('Revoca disponibilità', { exact: true }).click();
+  await item.getByRole('checkbox', { name: 'Confermo la revoca di questo allegato.', exact: true }).check();
+  lost=false;await lose();await item.getByRole('button', { name: 'Conferma revoca', exact: true }).click();
+  await expect.poll(()=>lost).toBe(true);await page.unroute(pattern);await page.reload();
+  await recovery.getByRole('button', { name: 'Verifica esito allegato', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Operazione già registrata.' })).toBeVisible();
+  expect((await db.communicationContextFile.findUniqueOrThrow({ where: { id } })).revokedAt).not.toBe(null);
+  expect(await db.auditLog.count({ where: { entityId: id, event: 'communication_file_revoked' } })).toBe(1);expect(posts).toBe(2);
+  await expect(page.getByRole('button', { name: 'Scarica esito-nativo.txt', exact: true })).toHaveCount(0);
+});
+
+test('an interrupted native upload can be closed before a fresh choice and its late command cannot create the file', async ({ page }) => {
+  const source = await browserCommunicationFile();
+  await login(page);await page.goto('/communications?kind=LEAD&practice=' + source.lead.id);
+  const upload = page.locator('form').filter({ has: page.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }) });
+  const id = await upload.locator('input[name="id"]').inputValue();
+  await upload.getByLabel('Allegato da caricare', { exact: true }).setInputFiles({ name: 'tentativo-chiuso.txt', mimeType: 'text/plain', buffer: Buffer.from('SYNTHETIC_CLOSED_UPLOAD') });
+  const pattern='**/communications?*';
+  await page.route(pattern,route=>route.request().method()==='POST'?route.abort('failed'):route.continue());
+  await upload.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Verifica operazione allegato', exact: true })).toBeVisible();
+  await page.unroute(pattern);await page.reload();
+  const recovery=page.getByRole('region', { name: 'Verifica operazione allegato', exact: true });
+  await recovery.getByRole('checkbox', { name: 'Chiudi il tentativo solo se non ha prodotto l’operazione.', exact: true }).check();
+  await recovery.getByRole('button', { name: 'Riconcilia e chiudi operazione allegato', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Tentativo chiuso senza modifica del file' })).toBeVisible();
+  expect((await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId:id } })).operation).toBe('CLOSE');
+  await expect(storeCommunicationFile(db,source.session,{id,context:source.context,classification:'ORDINARY'},
+    new File(['SYNTHETIC_CLOSED_UPLOAD'],'tentativo-chiuso.txt',{type:'text/plain'}))).rejects.toThrow('CONFLICT');
+  expect(await db.communicationContextFile.findUnique({where:{id}})).toBe(null);
+  await page.getByRole('button', { name: 'Prepara un’altra operazione sugli allegati', exact: true }).click();
+  const fresh=await upload.locator('input[name="id"]').inputValue();expect(fresh).not.toBe(id);
+  await upload.getByLabel('Allegato da caricare', { exact: true }).setInputFiles({name:'nuovo-tentativo.txt',mimeType:'text/plain',buffer:Buffer.from('SYNTHETIC_NEW_UPLOAD')});
+  await upload.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText:'Operazione registrata.' })).toBeVisible();
+  expect(await db.communicationContextFile.count({where:{id:fresh}})).toBe(1);
 });

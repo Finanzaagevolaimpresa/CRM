@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
+import { z } from 'zod';
 import { notFound } from 'next/navigation';
 import { requireAnyPermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -78,8 +79,13 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { da
   </PreservedWorkflowForm>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
+  const pendingFile = query.fileCommand || query.fileId || query.fileOperation
+    ? z.object({commandId:z.string().uuid(),id:z.string().uuid(),operation:z.enum(['UPLOAD','REVOKE'])}).strict()
+      .safeParse({commandId:query.fileCommand,id:query.fileId,operation:query.fileOperation}) : null;
+  if(pendingFile && !pendingFile.success)notFound();
+
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
   if (!context.success) {
     if (query.kind || query.practice || query.update || query.request || query.focus) notFound();
@@ -132,8 +138,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     {data.isAdmin ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     {query.result && feedback[query.result] ? <p role="status" className="rounded-xl bg-slate-100 p-3">{feedback[query.result]}</p> : null}
     <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Allegati del contesto</summary>
-      <CommunicationFiles key={`${data.context.kind}-${data.context.id}-${data.contextFiles.map(file=>file.id).join(',')}`}
-        context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} isAdmin={data.isAdmin} requestId={randomUUID()} />
+      <CommunicationFiles key={`${data.context.kind}-${data.context.id}`}
+        context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} isAdmin={data.isAdmin} pendingAttempt={pendingFile?.success ? pendingFile.data : undefined} requestId={randomUUID()} />
     </details>
     {query.focus && <div className="space-y-2 rounded-xl border p-3"><p>Verifica del messaggio conservato. Nessuna operazione viene ripetuta.</p>
       {!data.messages.length && <p>Il messaggio non risulta disponibile nel contesto corrente. Conserva il riferimento e verifica prima di preparare un’altra operazione.</p>}
