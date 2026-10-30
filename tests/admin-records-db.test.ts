@@ -21,6 +21,7 @@ import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from 
 import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
 import { withProjectResources } from '../src/lib/project-resource-guard';
 import { createProjectExpenseRecord } from '../src/lib/project-expenses';
+import { updateClientServiceStatusRecord, updateClientServicePipelineRecord, assignClientServiceRecord, linkDocumentToServiceRecord } from '../src/lib/client-service-operations';
 import { adminCatalogVersion } from '../src/lib/admin-catalog-revision';
 import { catalogV2Storage } from '../src/lib/service-catalog-v2';
 import { selectableStoredCatalogRevision } from '../src/lib/service-catalog-v2-persistence';
@@ -1046,6 +1047,154 @@ test('ordinary expense creation rechecks a revoked permission after page-time ad
   assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 0);
   assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, event: 'project_expense_create' } }), 0);
 });
+
+async function serviceCase(actor: Person) {
+  const f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: actor.user.id } });
+  const catalog = await db.serviceCatalog.create({ data: { code: 'synthetic_' + randomUUID(), name: 'Servizio isolato', category: 'sintetico' } });
+  const service = await db.clientService.create({ data: { clientId: f.client.id, projectId: f.project.id, serviceCatalogId: catalog.id } });
+  return { ...f, service };
+}
+function pauseBeforeTransaction() {
+  let signal!: () => void, release!: () => void;
+  const reached = new Promise<void>(resolve => { signal = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = new Proxy(db, { get(target, property) {
+    if (property === '$transaction') return async (...args: unknown[]) => {
+      signal(); await gate; return Reflect.apply(target.$transaction, target, args);
+    };
+    const value = Reflect.get(target, property, target);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  return { delayed, reached, release };
+}
+const serviceWriters = {
+  status: (client: PrismaClient, actor: Person, id: string) => updateClientServiceStatusRecord(client, actor.session, id, 'sospeso'),
+  pipeline: (client: PrismaClient, actor: Person, id: string) => updateClientServicePipelineRecord(client, actor.session,
+    { id, operationalStatus: 'nuova', operationalNotes: 'Nota sintetica corrente' }, false),
+};
+for (const [operation, write] of Object.entries(serviceWriters)) {
+  test(`ordinary service ${operation} rejects an admitted old-client write after an Admin graph move, then accepts fresh destination authority`, options, async () => {
+    const writer = await syntheticPerson(db, 'Consulente servizio sintetico', 'consulente'), f = await serviceCase(writer);
+    const first = await write(db, writer, f.service.id);
+    assert.equal(first.id, f.service.id);
+    const auditWhere = { actorId: writer.user.id, entityType: 'ClientService', entityId: f.service.id };
+    const priorAudits = await db.auditLog.count({ where: auditWhere });
+    assert.equal(priorAudits, 1);
+    const destination = await db.client.create({ data: { displayName: 'Destinazione servizio sintetica', type: 'societa' } });
+    const input = await command('Project', f.project.id, { clientId: destination.id });
+    input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+    const gate = pauseBeforeTransaction(), writing = write(gate.delayed, writer, f.service.id);
+    const rejected = assert.rejects(writing, /PROJECT_NOT_OPERATIONAL|non accessibile/);
+    await gate.reached;
+    let moved!: typeof f.service;
+    try { await save(input); moved = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }); }
+    finally { gate.release(); }
+    await rejected;
+    assert.equal(moved.clientId, destination.id);
+    assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }), moved);
+    assert.equal(await db.auditLog.count({ where: auditWhere }), priorAudits);
+    assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 1);
+    await db.client.update({ where: { id: destination.id }, data: { consultantId: writer.user.id } });
+    assert.equal((await write(db, writer, f.service.id)).clientId, destination.id);
+    assert.equal(await db.auditLog.count({ where: auditWhere }), priorAudits + 1);
+  });
+  test(`ordinary service ${operation} rejects revoked permission, client responsibility and registry session after admission with zero effects`, options, async () => {
+    for (const revocation of ['permission', 'responsibility', 'session']) {
+      const writer = await syntheticPerson(db, 'Consulente servizio revocato', 'consulente'), f = await serviceCase(writer);
+      const gate = pauseBeforeTransaction(), writing = write(gate.delayed, writer, f.service.id), rejected = assert.rejects(writing);
+      await gate.reached;
+      try {
+        if (revocation === 'permission') await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'service.write', allowed: false } });
+        if (revocation === 'responsibility') await db.client.update({ where: { id: f.client.id }, data: { consultantId: null } });
+        if (revocation === 'session') await db.internalSession.update({ where: { id: writer.session.sessionId! }, data: { revokedAt: new Date() } });
+      } finally { gate.release(); }
+      await rejected;
+      assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }), f.service, revocation);
+      assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: f.service.id } }), 0, revocation);
+    }
+  });
+}
+
+test('ordinary service commands preserve current closure, financial and personal assignment restrictions', options, async () => {
+  const writer = await syntheticPerson(db, 'Consulente servizio vincolato', 'consulente'), f = await serviceCase(writer);
+  const target = await syntheticPerson(db, 'Altro tecnico sintetico', 'consulente');
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: writer.user.id, permission: 'service.close', allowed: false },
+    { userId: writer.user.id, permission: 'payment.read', allowed: false },
+  ] });
+  await assert.rejects(updateClientServiceStatusRecord(db, writer.session, f.service.id, 'chiuso'));
+  await assert.rejects(updateClientServiceStatusRecord(db, writer.session, f.service.id, 'pagato'));
+  await assert.rejects(updateClientServicePipelineRecord(db, writer.session, { id: f.service.id, operationalStatus: 'chiusa' }, false));
+  await assert.rejects(updateClientServicePipelineRecord(db, writer.session,
+    { id: f.service.id, operationalStatus: 'nuova', assignedToId: target.user.id }, true));
+  assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }), f.service);
+  assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: f.service.id } }), 0);
+});
+
+test('pipeline omission retains a concurrently assigned service owner from the locked current record', options, async () => {
+  const writer = await syntheticPerson(db, 'Admin pipeline sintetico', 'admin'), f = await serviceCase(writer);
+  const target = await syntheticPerson(db, 'Nuovo responsabile sintetico', 'consulente');
+  const gate = pauseBeforeTransaction(), writing = serviceWriters.pipeline(gate.delayed, writer, f.service.id);
+  await gate.reached;
+  try { await assignClientServiceRecord(db, admin.session, f.service.id, target.user.id); } finally { gate.release(); }
+  assert.equal((await writing).assignedToId, target.user.id);
+  assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId, target.user.id);
+});
+
+test('manual service assignment binds its old context and rechecks the current service.assign permission', options, async () => {
+  for (const change of ['context', 'permission']) {
+    const writer = await syntheticPerson(db, 'Admin incarico sintetico', 'admin'), f = await serviceCase(writer);
+    // Client responsibility is irrelevant to this Admin and is not transferred.
+    await db.client.update({ where: { id: f.client.id }, data: { consultantId: null } });
+    const target = await syntheticPerson(db, 'Tecnico incarico sintetico', 'consulente');
+    const gate = pauseBeforeTransaction();
+    const writing = assignClientServiceRecord(gate.delayed, writer.session, f.service.id, target.user.id), rejected = assert.rejects(writing);
+    await gate.reached;
+    try {
+      if (change === 'context') {
+        const destination = await db.client.create({ data: { displayName: 'Destinazione incarico sintetica', type: 'societa' } });
+        const input = await command('Project', f.project.id, { clientId: destination.id });
+        input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+        await save(input);
+      } else await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'service.assign', allowed: false } });
+    } finally { gate.release(); }
+    await rejected;
+    assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId, null);
+    assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: f.service.id } }), 0);
+  }
+});
+
+
+for (const change of ['context', 'permission']) {
+  test(`document service linking rejects a target ${change} change after admission without cross-client links or audit`, options, async () => {
+    const writer = await syntheticPerson(db, 'Consulente allegato sintetico', 'consulente'), f = await serviceCase(writer);
+    const doc = await db.document.create({ data: { clientId: f.client.id, title: 'Documento sintetico indipendente',
+      fileName: 'indipendente.txt', type: 'text/plain', mimeType: 'text/plain', sizeBytes: 4,
+      storagePath: 'synthetic/' + randomUUID(), uploadedById: writer.user.id, documentCategory: 'altro', serviceArea: 'progetto_investimento' } });
+    const raw = { documentId: doc.id, clientServiceId: f.service.id, serviceArea: 'progetto_investimento', documentCategory: 'altro' };
+    assert.equal((await linkDocumentToServiceRecord(db, writer.session, raw)).clientServiceId, f.service.id);
+    const unchanged = await linkDocumentToServiceRecord(db, writer.session, { ...raw, clientServiceId: undefined });
+    const gate = pauseBeforeTransaction();
+    const writing = linkDocumentToServiceRecord(gate.delayed, writer.session, raw), rejected = assert.rejects(writing);
+    await gate.reached;
+    try {
+      if (change === 'context') {
+        const destination = await db.client.create({ data: { displayName: 'Destinazione allegato sintetica', type: 'societa' } });
+        const input = await command('Project', f.project.id, { clientId: destination.id });
+        input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+        await save(input);
+        // Even authority over both clients must not make this old link consistent.
+        await db.client.update({ where: { id: destination.id }, data: { consultantId: writer.user.id } });
+      } else await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'service.write', allowed: false } });
+    } finally { gate.release(); }
+    await rejected;
+    assert.deepEqual(await db.document.findUniqueOrThrow({ where: { id: doc.id } }), unchanged);
+    assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: doc.id, event: 'document_service_link' } }), 2);
+    await assert.rejects(linkDocumentToServiceRecord(db, writer.session, raw));
+    assert.equal((await db.document.findUniqueOrThrow({ where: { id: doc.id } })).clientServiceId, null);
+  });
+}
 
 test('a new child after graph preview and an audit failure both preserve the entire original context', options, async () => {
   const f = await adminGraphFixture(db, admin.user.id);

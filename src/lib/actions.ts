@@ -9,17 +9,18 @@ import { assertNoSelectiveProjectMutation } from './selective-project-scope';
 import { assertNoSelectiveClientMutation } from './selective-client-scope';
 import { guardProjectResources, withProjectResources } from './project-resource-guard';
 import { createProjectExpenseRecord } from './project-expenses';
+import { updateClientServiceStatusRecord, updateClientServicePipelineRecord, assignClientServiceRecord, linkDocumentToServiceRecord } from './client-service-operations';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
 import { filterFinancialDocuments } from './financial-document-access';
-import { appendResponsibilityDecision, requireUnboundServiceAssignment } from './responsibility';
+import { appendResponsibilityDecision } from './responsibility';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
+import { clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
 import { getSession, hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import {
   createExternalAiPayload,
   externalAiDataCategories,
@@ -60,8 +61,6 @@ import {
   requireDocumentEditAccess,
   requireLeadEditAccess,
   requireProjectEditAccess,
-  requireServiceAssignAccess,
-  requireServiceEditAccess,
   requireTaskEditAccess,
   requireTechnicalPracticeEditAccess,
   requireTechnicalPracticeViewAccess,
@@ -82,7 +81,7 @@ import {
   resolveLeadDuplicateCase,
 } from './lead-duplicate-resolution';
 import { internalSessionMode } from './session';
-import { authorizeManualAssignment, changedAssignee, denyManualAssignment, withAssignmentGuard } from './manual-assignment-guard';
+import { changedAssignee, denyManualAssignment, withAssignmentGuard } from './manual-assignment-guard';
 import { createManualPreAnalysisRecord, ManualPreAnalysisError, updateManualPreAnalysisRecord } from './manual-preanalysis-service';
 import {
   assignCommercialLeadInboxItem,
@@ -1443,166 +1442,22 @@ export async function createClientService(form: FormData) {
 }
 
 export async function updateClientServiceStatus(id: string, status: string) {
-  const s = await requirePermission("service.write");
-  const next = serviceStatusSchema.parse(status);
-  if (!financialReadAccess(s).payment && next === "pagato") denyWriteAccess();
-  const before = await requireServiceEditAccess(s, id);
-  const finalStatuses = ["chiuso", "archiviato", "consegnato"];
-  if (
-    before.status !== next &&
-    (finalStatuses.includes(before.status) || finalStatuses.includes(next)) &&
-    !hasPermission(s, "service.close")
-  )
-    denyWriteAccess();
-  return prisma.$transaction(
-    async (tx) => {
-      await guardProjectResources(tx, s.userId, [{ clientServiceId: id }]);
-      await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${id} FOR UPDATE`;
-      if (!['richiesto', 'sospeso', 'chiuso', 'archiviato'].includes(next)) await assertClientOperational(tx, before.clientId);
-      if (
-        await tx.practiceReadiness.findUnique({
-          where: { clientServiceId: id },
-          select: { id: true },
-        })
-      ) {
-        throw new UserFacingActionError(
-          "Questa pratica è gestita dal percorso preventivo-avvio: usa il comando esplicito nella pratica.",
-        );
-      }
-      const service = await tx.clientService.update({
-        where: { id },
-        data: {
-          status: next,
-          completedAt: ["chiuso", "archiviato", "consegnato"].includes(next)
-            ? new Date()
-            : undefined,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorId: s.userId,
-          event: "client_service_status_change",
-          entityType: "ClientService",
-          entityId: id,
-          after: redactAuditPayload({
-            before,
-            after: service,
-          }) as Prisma.InputJsonValue,
-        },
-      });
-      return service;
-    },
-    { isolationLevel: "Serializable" },
-  );
+  const s = await requirePermission('service.write');
+  return updateClientServiceStatusRecord(prisma, s, id, status);
 }
 
 export async function assignClientService(id: string, assignedToId: string) {
   const s = await requirePermission('service.assign');
-  const before = await requireServiceAssignAccess(s, id);
-  await requireActiveUser(assignedToId || null);
-  return withAssignmentGuard(prisma, s, true, [{ userId: assignedToId }], async tx => {
-    await guardProjectResources(tx, s.userId, [{ clientServiceId: id }]);
-    await requireUnboundServiceAssignment(tx, id);
-    const service = await tx.clientService.update({ where: { id, assignedToId: before.assignedToId }, data: { assignedToId: assignedToId || null } });
-    await audit(s.userId, 'client_service_assign', 'ClientService', id, { before, after: service }, tx);
-    return service;
-  });
+  return assignClientServiceRecord(prisma, s, id, assignedToId);
 }
+
 export async function updateClientServicePipeline(form: FormData) {
-  const s = await requirePermission("service.write");
-  const assignmentSubmitted = form.has("assignedToId");
-  const data = clientServicePipelineSchema.parse(clean(form));
-  const before = await requireServiceEditAccess(s, data.id);
-  const nextAssignedToId = assignmentSubmitted
-    ? (data.assignedToId ?? null)
-    : before.assignedToId;
-  const assigneeChanged = before.assignedToId !== nextAssignedToId;
-  const finalOperationalStatuses = ["chiusa", "archiviata"];
-  if (
-    before.operationalStatus !== data.operationalStatus &&
-    (finalOperationalStatuses.includes(before.operationalStatus) ||
-      finalOperationalStatuses.includes(data.operationalStatus)) &&
-    !hasPermission(s, "service.close")
-  )
-    denyWriteAccess();
-  if (assigneeChanged && s.role !== 'admin') denyManualAssignment();
-  if (assigneeChanged) await requireActiveUser(nextAssignedToId);
-  return prisma.$transaction(
-    async (tx) => {
-      await guardProjectResources(tx, s.userId, [{ clientServiceId: data.id }]);
-      if (assigneeChanged) await authorizeManualAssignment(tx, s, [{ userId: nextAssignedToId }]);
-      if (assigneeChanged) await requireUnboundServiceAssignment(tx, data.id);
-      await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${data.id} FOR UPDATE`;
-      if (!['nuova', 'chiusa', 'archiviata'].includes(data.operationalStatus)) await assertClientOperational(tx, before.clientId);
-      if (
-        await tx.practiceReadiness.findUnique({
-          where: { clientServiceId: data.id },
-          select: { id: true },
-        })
-      ) {
-        throw new UserFacingActionError(
-          "Questa pratica è gestita dal percorso preventivo-avvio: usa il comando esplicito nella pratica.",
-        );
-      }
-      const service = await tx.clientService.update({
-        where: { id: data.id, ...(assigneeChanged ? { assignedToId: before.assignedToId } : {}) },
-        data: {
-          operationalStatus: data.operationalStatus,
-          statusUpdatedAt:
-            before.operationalStatus === data.operationalStatus
-              ? before.statusUpdatedAt
-              : new Date(),
-          practiceType: data.practiceType ?? null,
-          requestedAmount: data.requestedAmount ?? null,
-          plannedInvestment: data.plannedInvestment ?? null,
-          assignedToId: assigneeChanged ? nextAssignedToId : undefined,
-          operationalNotes: data.operationalNotes ?? null,
-        },
-      });
-      const events = ["client_service_pipeline_update"];
-      if (before.operationalStatus !== service.operationalStatus)
-        events.push("client_service_operational_status_change");
-      if (
-        String(before.requestedAmount ?? "") !==
-          String(service.requestedAmount ?? "") ||
-        String(before.plannedInvestment ?? "") !==
-          String(service.plannedInvestment ?? "")
-      )
-        events.push("client_service_amounts_change");
-      if (assigneeChanged) events.push("client_service_assign");
-      await tx.auditLog.createMany({
-        data: events.map((event) => ({
-          actorId: s.userId,
-          event,
-          entityType: "ClientService",
-          entityId: service.id,
-          after: redactAuditPayload({
-            before,
-            after: service,
-          }) as Prisma.InputJsonValue,
-        })),
-      });
-      return service;
-    },
-    { isolationLevel: "Serializable" },
-  );
+  const s = await requirePermission('service.write');
+  return updateClientServicePipelineRecord(prisma, s, clean(form), form.has('assignedToId'));
 }
 export async function linkDocumentToService(form: FormData) {
   const s = await requirePermission('service.write');
-  const data = documentServiceLinkSchema.parse(clean(form));
-  const currentDocument = await requireDocumentEditAccess(s, data.documentId);
-  if (currentDocument.clientServiceId && currentDocument.clientServiceId !== data.clientServiceId) {
-    await requireServiceEditAccess(s, currentDocument.clientServiceId);
-  }
-  if (data.clientServiceId) {
-    const service = await requireServiceEditAccess(s, data.clientServiceId);
-    if (!currentDocument.clientId || currentDocument.clientId !== service.clientId) denyWriteAccess();
-  }
-  return withProjectResources(prisma, s.userId, [{ ...currentDocument, documentId: currentDocument.id }, data], async tx => {
-    const document = await tx.document.update({ where: { id: data.documentId }, data: { clientServiceId: data.clientServiceId ?? null, serviceArea: data.serviceArea, documentCategory: data.documentCategory } });
-    await audit(s.userId, 'document_service_link', 'Document', document.id, { before: currentDocument, after: document }, tx);
-    return document;
-  });
+  return linkDocumentToServiceRecord(prisma, s, clean(form));
 }
 
 export async function updateDocumentSection(form: FormData) {
