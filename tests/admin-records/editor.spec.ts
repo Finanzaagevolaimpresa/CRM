@@ -72,12 +72,16 @@ test('service dates stay saved after reopening and the account role filter keeps
   await login(page, f.adminEmail);
   await page.goto('/admin/records/ClientService/' + setup.service.id);
   const corrected = new Date(Date.now() - 3 * 86_400_000); corrected.setSeconds(0, 0);
-  await page.getByLabel('Data amministrativa di acquisto · Europe/Rome', { exact: true }).fill(romeDateTimeInput(corrected));
+  // Native datetime-local inputs omit zero seconds when normalizing their value.
+  const correctedWall = romeDateTimeInput(corrected).slice(0, 16);
+  await page.getByLabel('Data amministrativa di acquisto · Europe/Rome', { exact: true }).fill(correctedWall);
   await page.getByLabel('Motivazione della correzione').fill('Data amministrativa corretta da prova sintetica');
   await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
   await page.getByRole('link', { name: 'Riapri e verifica il salvataggio' }).click();
-  await expect(page.getByLabel('Data amministrativa di acquisto · Europe/Rome', { exact: true })).toHaveValue(romeDateTimeInput(corrected));
-  expect((await db.clientService.findUniqueOrThrow({ where: { id: setup.service.id } })).contractId).toBe(setup.contract.id);
+  await expect(page.getByLabel('Data amministrativa di acquisto · Europe/Rome', { exact: true })).toHaveValue(correctedWall);
+  const persisted = await db.clientService.findUniqueOrThrow({ where: { id: setup.service.id } });
+  expect(persisted.purchasedAt?.getTime()).toBe(corrected.getTime());
+  expect(persisted.contractId).toBe(setup.contract.id);
   await page.goto('/settings/users?role=admin&q=' + encodeURIComponent(f.adminEmail));
   await expect(page.getByText(f.adminEmail, { exact: true })).toBeVisible();
   await expect(page.getByText(f.technicianEmail, { exact: true })).toHaveCount(0);
