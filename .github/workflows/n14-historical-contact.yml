@@ -73,7 +73,7 @@ jobs:
       - name: Apply the current schema71 after the pinned SQL70 qualification
         run: |
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 72
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 73
       - name: Qualify historical contact and exact conversion persistence
         shell: bash
         run: |

@@ -2,9 +2,11 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
+import { administrativeCatalogDefinition } from './admin-catalog-revision';
+import { catalogV2RevisionHash, DIGITAL_PROJECT_TYPES } from './service-catalog-v2';
 import { updateActor, type UpdateCredentials } from './record-updates';
 import { recordUpdatePermission } from './record-update-context';
-import { mapSerializableConflict } from './serializable';
+import { mapSerializableConflict, SerializableConflictError } from './serializable';
 import { adminRecordCatalogue, adminRecordPolicy, adminFieldLabels, type AdminField, type AdminRecordForm, type AdminRecordPolicy } from './admin-record-catalogue';
 import { isFinancialDocument, type FinancialDocumentMetadata } from './financial-privacy-policy';
 import type { Permission } from './permissions';
@@ -18,6 +20,8 @@ import { admitsTechnicalAssignmentManager } from './technical-assignment-permiss
 import { createHash } from 'node:crypto';
 import { readPrivateDocumentBounded } from './storage';
 import { assertAdminEngagementDossierLifecycle, EngagementDossierError } from './engagement-dossier';
+import { adminCommunicationSourceContext } from './approved-communications';
+import { ApprovedCommunicationError } from './approved-communication-contract';
 
 type Tx = Prisma.TransactionClient;
 async function withSerializableTransaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
@@ -40,7 +44,7 @@ type Delegate = {
   delete(args: object): Promise<Row>;
 };
 export class AdminRecordError extends Error {
-  constructor(readonly code: 'DENIED' | 'INVALID' | 'STALE' | 'HISTORY' | 'DEPENDENCIES' | 'CONTEXT' | 'CLOSED') { super(`ADMIN_RECORD_${code}`); }
+  constructor(readonly code: 'DENIED' | 'INVALID' | 'STALE' | 'HISTORY' | 'DEPENDENCIES' | 'CONTEXT' | 'CLOSED' | 'ACTIVE_NOTICE') { super(`ADMIN_RECORD_${code}`); }
 }
 function fail(code: AdminRecordError['code']): never { throw new AdminRecordError(code); }
 async function dossierLifecycleContext(tx: Tx, session: AuthSession, id: string) {
@@ -68,10 +72,15 @@ export const adminRecordCommand = z.object({ commandId: z.string().uuid(), model
   reason: z.string().trim().min(3).max(2000), values: z.record(z.string(), z.string().max(100_000)),
   paymentCorrection: z.object({ evidenceVersionId: identifier, effectiveAt: z.string().datetime({ offset: true }), confirmed: z.literal(true) }).strict().optional(),
   deliveryRevocation: z.literal(true).optional(),
+  noticeLifecycle: z.object({ action: z.enum(['ACTIVATE', 'RETIRE']), contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+    reviewed: z.literal(true) }).strict().optional(),
+  contextMove: z.object({ expectedGraphHash: z.string().regex(/^[a-f0-9]{64}$/), confirmed: z.literal(true) }).strict().optional(),
+  catalogPublication: z.object({ expectedCurrentHash: z.string().regex(/^[a-f0-9]{64}$/), confirmed: z.literal(true) }).strict().optional(),
 }).strict();
 export type AdminRecordCommand = z.infer<typeof adminRecordCommand>;
 
 export function parseAdminRecordValues(policy: AdminRecordPolicy, values: Record<string, string>, creating: boolean) {
+  if (policy.historyOnly) fail('HISTORY');
   if (Object.keys(values).some(key => !policy.fields.includes(key))) fail('INVALID');
   const result: Record<string, unknown> = {};
   for (const name of policy.fields) {
@@ -136,15 +145,36 @@ async function auth(tx: Tx, session: AuthSession, policy: AdminRecordPolicy, pro
     || !recordUpdatePermission(current.actor, readPermission(policy))) fail('DENIED');
   return current;
 }
-const readPermission = (policy: AdminRecordPolicy): Permission => policy.model === 'PrivacyNoticeVersion' ? 'privacy.evidence.read'
+async function catalogBinding(tx: Tx, id: string) {
+  identifier.parse(id);
+  await lock(tx, 'ServiceCatalog', id);
+  const master = await tx.serviceCatalog.findUnique({ where: { id } });
+  if (!master) fail('CONTEXT');
+  await tx.$queryRaw`SELECT id FROM "ServiceCatalogRevision" WHERE "serviceCatalogId"=${id} ORDER BY version FOR UPDATE`;
+  const revisions = await tx.serviceCatalogRevision.findMany({ where: { serviceCatalogId: id }, orderBy: { version: 'desc' } });
+  return { master, revisions, hash: adminRecordVersion({ master,
+    revisions: revisions.map(({ id, version, contentHash, status }) => ({ id, version, contentHash, status })) }) };
+}
+export async function prepareAdminCatalogPublication(db: PrismaClient, session: AuthSession, id: string) {
+  return withSerializableTransaction(db, async tx => {
+    const current = await auth(tx, session, adminRecordPolicy('ServiceCatalogRevision'));
+    const binding = await catalogBinding(tx, id);
+    await current.finish();
+    return { serviceId: id, serviceCode: binding.master.code, name: binding.master.name, hash: binding.hash,
+      digitalProjectTypes: binding.master.code === 'progetti_digitali' ? DIGITAL_PROJECT_TYPES : null,
+      activeVersions: binding.revisions.filter(row => row.status === 'PUBLISHED').map(row => ({
+        version: row.version, name: row.publicName, contentHash: row.contentHash })) };
+  });
+}
+const readPermission = (policy: AdminRecordPolicy): Permission => ['PrivacyNoticeVersion', 'PrivacyEvidenceReceipt'].includes(policy.model) ? 'privacy.evidence.read'
   : policy.permission === 'document.upload' ? 'document.download'
   : policy.permission.replace(/\.write$/, '.read') as Permission;
 async function lock(tx: Tx, model: string, id: string) {
   metadata(model);
-  const identity = ['CommercialLeadSlaPolicyVersion', 'EngagementDossierDeliveryAuthorization', 'EngagementDossierDeliveryReceipt', 'PrivacyNoticeVersion'].includes(model) ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
+  const identity = ['CommercialLeadSlaPolicyVersion', 'EngagementDossierDeliveryAuthorization', 'EngagementDossierDeliveryReceipt', 'PrivacyNoticeVersion', 'PrivacyEvidenceReceipt', 'ControlledIntake', 'ServiceCatalogRevision', 'CommunicationReply', 'CommunicationContextFile'].includes(model) ? Prisma.sql`${id}::uuid` : Prisma.sql`${id}`;
   await tx.$queryRaw(Prisma.sql`SELECT id FROM ${Prisma.raw('"' + model + '"')} WHERE id=${identity} FOR UPDATE`);
 }
-const label = (row: Row) => String(row.title ?? row.displayName ?? row.name ?? row.contractNumber ?? row.internalMeasureName ?? row.description
+const label = (row: Row) => String(row.title ?? row.fileName ?? row.subject ?? row.displayName ?? row.name ?? (row.publicName ? row.publicName + ' · revisione ' + row.version : null) ?? row.contractNumber ?? row.internalMeasureName ?? row.description
   ?? ([row.firstName, row.lastName].filter(Boolean).join(' ') || row.id));
 const relationTargets: Record<string, string> = { leadId: 'Lead', clientId: 'Client', promoterClientId: 'Client', companyId: 'Company', personId: 'Person',
   projectId: 'Project', incorporationSubjectId: 'IncorporationSubject', clientServiceId: 'ClientService', serviceCatalogId: 'ServiceCatalog',
@@ -156,13 +186,17 @@ const relation = (model: string, field: string) => metadata(model).fields.find(i
   ?? (relationTargets[field] ? { type: relationTargets[field] } : undefined);
 function admittedRow(actor: Awaited<ReturnType<typeof updateActor>>['actor'], row: Row) {
   const excluded = new Set<string>([...(actor.selectiveClientIds ?? []), ...(actor.selectiveProjectIds ?? []), ...(actor.selectiveLeadIds ?? []),
-    ...(actor.selectivePracticeIds ?? []), ...(actor.selectiveDocumentIds ?? []), ...(actor.selectiveClientCompanyIds ?? []), ...(actor.selectiveClientPersonIds ?? []),
+    ...(actor.selectivePracticeIds ?? []), ...(actor.selectiveLeadIntakeIds ?? []), ...(actor.selectiveDocumentIds ?? []), ...(actor.selectiveClientCompanyIds ?? []), ...(actor.selectiveClientPersonIds ?? []),
     ...(actor.selectiveServiceIds ?? []), ...(actor.selectiveContractIds ?? []), ...(actor.technicalTaskIds ?? []), ...(actor.technicalChecklistIds ?? [])]);
   return !excluded.has(row.id) && !['leadId', 'clientId', 'companyId', 'projectId', 'clientServiceId', 'contractId', 'paymentId', 'documentId', 'technicalPracticeId', 'personId']
     .some(key => typeof row[key] === 'string' && excluded.has(row[key] as string));
 }
 
 type Actor = Awaited<ReturnType<typeof updateActor>>['actor'];
+async function communicationSourceContext(tx: Tx, actor: Actor, model: 'CommunicationReply' | 'CommunicationContextFile', id: string) {
+  try { return await adminCommunicationSourceContext(tx, { ...actor, userId: actor.id }, model, id); }
+  catch (error) { if (error instanceof ApprovedCommunicationError) fail('DENIED'); throw error; }
+}
 const privateFields: Record<string, string[]> = {
   Task: ['title', 'description', 'priority', 'dueAt', 'status'],
   DocumentChecklistItem: ['title', 'notes', 'status', 'active'],
@@ -191,6 +225,7 @@ async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Ro
   if (!admittedRow(actor, row)) fail('DENIED');
   const policy = adminRecordCatalogue.find(item => item.model === model);
   if (policy && !recordUpdatePermission(actor, readPermission(policy))) fail('DENIED');
+  if (model === 'CommunicationReply' || model === 'CommunicationContextFile') await communicationSourceContext(tx, actor, model, row.id);
   if (privateFields[model] && row.technicalPrivate === true) await admitPrivateItem(tx, actor, model, row);
   if (model === 'Document') {
     if (!ordinaryDocumentVisibilityAllows(row.visibilityLevel)
@@ -238,7 +273,7 @@ async function linkedRows(tx: Tx, model: string, row: Row, actor: Actor) {
   }
   return links;
 }
-async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | null, after: Row, actor: Actor) {
+async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | null, after: Row, actor: Actor, graphValidated = false) {
   await assertContextVisible(tx, actor, policy.model, after);
   const links = await linkedRows(tx, policy.model, after, actor);
   const context = [after, ...links.values()];
@@ -263,7 +298,7 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
   const structuralChange = before && (policy.fields.some(name => before[name] !== after[name]
     && relation(policy.model, name) && relation(policy.model, name)!.type !== 'User')
     || (policy.model === 'Deadline' && ['entityType', 'entityId'].some(name => before[name] !== after[name])));
-  if (before && structuralChange) {
+  if (before && structuralChange && !graphValidated) {
     // Reparenting a graph is a separate explicit operation. Never silently move
     // a parent while retaining contradictory children, grants or signed context.
     for (const dependent of models) for (const field of dependent.fields.filter(item => item.kind !== 'object'
@@ -277,6 +312,8 @@ async function validateContext(tx: Tx, policy: AdminRecordPolicy, before: Row | 
 }
 
 async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, changed: string[]) {
+  if (policy.model === 'ServiceCatalog' && changed.includes('code') && await tx.serviceCatalogRevision.count({ where: { serviceCatalogId: before.id } })) fail('HISTORY');
+  if (policy.model === 'ServiceCatalogRevision' && (before.status !== 'PUBLISHED' || changed.some(name => name !== 'status'))) fail('HISTORY');
   if (['DocumentExtraction', 'VisuraAnalysis'].includes(policy.model) && changed.includes('documentId')) fail('HISTORY');
   if (before.technicalPrivate === true && privateFields[policy.model]
     && changed.some(name => !privateFields[policy.model].includes(name))) fail('HISTORY');
@@ -295,6 +332,171 @@ async function assertEditable(tx: Tx, policy: AdminRecordPolicy, before: Row, ch
     && (before.collectedAt || before.accountingDocumentId || !['da_incassare', 'scaduto'].includes(String(before.status))
       || await tx.clientService.count({ where: { paymentId: before.id } }))) fail('HISTORY');
 }
+
+const contextMoveRoots = ['Company', 'Project', 'TechnicalPractice'];
+const contextMoveFields = ['clientId', 'companyId', 'projectId', 'clientServiceId', 'incorporationSubjectId'];
+const contextGraphModels = new Set(['Company', 'Project', 'TechnicalPractice', 'CompanyPerson', 'ProjectExpense',
+  'BankabilityAssessment', 'CorporateFinancingAssessment', 'GrantAssessment', 'MeasureMatch', 'CumulabilityAssessment',
+  'Document', 'DocumentVersion', 'DocumentExtraction', 'VisuraAnalysis', 'PreAnalysis', 'Dossier', 'ClientDossier',
+  'Contract', 'Payment', 'ClientService', 'PracticeCommunication', 'Task', 'DocumentChecklistItem', 'Deadline']);
+const graphGenerationMetadata = new Set(['SelectiveCompanyGeneration', 'SelectiveMembershipGeneration']);
+const revokedGraphHistory = new Set(['SelectiveProjectGrant', 'SelectivePracticeGrant', 'TechnicalAssignment']);
+const graphBlockLabel: Record<string, string> = {
+  TechnicalAssignment: 'Revoca gli incarichi tecnici prima di spostare il contesto.',
+  SelectiveProjectGrant: 'Revoca le concessioni selettive del progetto prima di spostarlo.',
+  SelectivePracticeGrant: 'Revoca le concessioni selettive della pratica prima di spostarla.',
+  PracticeReadiness: 'Il contesto di una pratica formalizzata conserva le sue prove: usa una rettifica amministrativa.',
+  PracticeOfferRevision: 'Le revisioni di offerta conservano il contesto originale.',
+  TechnicalDocumentAcquisition: 'Un documento acquisito personalmente conserva il contesto della sua acquisizione.',
+  AiExecutionRequest: 'Le richieste di esecuzione conservano il contesto e le autorizzazioni originali.',
+};
+type ContextGraphNode = { model: string; before: Row; patch: Record<string, unknown> };
+type ContextGraphPlan = { nodes: ContextGraphNode[]; blocked: string[]; hash: string };
+const graphIdentity = (model: string, id: string) => model + ':' + id;
+function isContextMove(policy: AdminRecordPolicy, before: Row, values: Record<string, unknown>) {
+  return contextMoveRoots.includes(policy.model) && contextMoveFields.some(name =>
+    Object.hasOwn(values, name) && adminRecordVersion(before[name] ?? null) !== adminRecordVersion(values[name] ?? null));
+}
+/** Build the complete ordinary descendant set. Unsupported historical objects
+ * are disclosed as blockers, never silently reparented or granted access. */
+async function contextGraph(tx: Tx, actor: Actor, model: string, before: Row, values: Record<string, unknown>): Promise<ContextGraphPlan> {
+  const nodes = new Map<string, ContextGraphNode>(), queue: ContextGraphNode[] = [], blocked = new Set<string>();
+  const add = async (model: string, row: Row, patch: Record<string, unknown>) => {
+    const key = graphIdentity(model, row.id), prior = nodes.get(key);
+    if (!prior) {
+      if (nodes.size >= 300) fail('DEPENDENCIES');
+      if (model !== 'DocumentVersion') await assertContextVisible(tx, actor, model, row);
+      const node = { model, before: row, patch }; nodes.set(key, node); queue.push(node);
+    } else {
+      let changed = false;
+      for (const [name, value] of Object.entries(patch)) {
+        if (Object.hasOwn(prior.patch, name) && adminRecordVersion(prior.patch[name]) !== adminRecordVersion(value)) fail('CONTEXT');
+        if (!Object.hasOwn(prior.patch, name)) { prior.patch[name] = value; changed = true; }
+      }
+      if (changed) queue.push(prior);
+    }
+  };
+  await add(model, before, values);
+  const oldClients = new Set<string>();
+  for (let index = 0; index < queue.length; index++) {
+    if (index > 1500) fail('DEPENDENCIES');
+    const node = queue[index], changed = Object.keys(node.patch).filter(name =>
+      adminRecordVersion(node.before[name] ?? null) !== adminRecordVersion(node.patch[name] ?? null));
+    if (node.before.clientId) oldClients.add(String(node.before.clientId));
+    if (node.before.technicalPrivate === true) blocked.add('Gli elementi tecnici privati mantengono il contesto della creazione personale.');
+    // A child can inherit its new client solely through the same parent ID.
+    // Its named assignment must not follow that move even if no scalar changes.
+    if (['assignedToId', 'consultantId', 'commercialOwnerId', 'technicalOwnerId'].some(name => node.before[name]))
+      blocked.add('Rimuovi o riassegna gli incarichi nominativi dal percorso dedicato prima di spostare il contesto.');
+    for (const dependent of models) {
+      // Generation counters are derived guards, maintained by existing triggers.
+      if (graphGenerationMetadata.has(dependent.name)) continue;
+      const related = dependent.fields.filter(field => field.kind !== 'object' && relation(dependent.name, field.name)?.type === node.model);
+      if (!related.length) continue;
+      const where = { OR: related.map(field => ({ [field.name]: node.before.id })) };
+      if (revokedGraphHistory.has(dependent.name)) {
+        if (await delegate(tx, dependent.name).count({ where: { ...where, revokedAt: null } }))
+          blocked.add(graphBlockLabel[dependent.name]);
+        continue;
+      }
+      if (!contextGraphModels.has(dependent.name)) {
+        if (await delegate(tx, dependent.name).count({ where }))
+          blocked.add(graphBlockLabel[dependent.name] ?? 'Una prova collegata conserva il contesto originale; la correzione richiede il suo percorso amministrativo.');
+        continue;
+      }
+      const children = await delegate(tx, dependent.name).findMany({ where, take: 301, orderBy: { id: 'asc' } });
+      if (children.length > 300) fail('DEPENDENCIES');
+      for (const child of children) {
+        const patch: Record<string, unknown> = {};
+        for (const name of contextMoveFields.filter(name => changed.includes(name))) {
+          if (Object.hasOwn(child, name) && child[name] != null && child[name] === node.before[name]) patch[name] = node.patch[name];
+        }
+        await add(dependent.name, child, patch);
+      }
+    }
+    const deadlines = await tx.deadline.findMany({ where: { entityType: node.model, entityId: node.before.id }, take: 301, orderBy: { id: 'asc' } });
+    if (deadlines.length > 300) fail('DEPENDENCIES');
+    for (const deadline of deadlines) await add('Deadline', deadline, {});
+  }
+  if (oldClients.size && await tx.selectiveClientGrant.count({ where: { clientId: { in: [...oldClients] }, revokedAt: null } }))
+    blocked.add('Revoca le concessioni selettive dei clienti interessati prima di spostare il contesto. Le prove delle concessioni restano conservate.');
+  const ordered = [...nodes.values()].sort((a, b) => graphIdentity(a.model, a.before.id).localeCompare(graphIdentity(b.model, b.before.id)));
+  for (const node of ordered) {
+    await lock(tx, node.model, node.before.id);
+    const latest = await delegate(tx, node.model).findUnique({ where: { id: node.before.id } });
+    if (adminRecordVersion(latest) !== adminRecordVersion(node.before)) fail('STALE');
+    if (node.model === 'DocumentVersion') continue;
+    const policy = adminRecordPolicy(node.model);
+    const changed = Object.keys(node.patch).filter(name => adminRecordVersion(node.before[name] ?? null) !== adminRecordVersion(node.patch[name] ?? null));
+    if (changed.length) {
+      if (!recordUpdatePermission(actor, policy.permission)) fail('DENIED');
+      await assertEditable(tx, policy, node.before, changed);
+      const inherited = node.model === 'PracticeCommunication' ? ['clientId', 'projectId', 'clientServiceId'] : [];
+      if (changed.some(name => !policy.fields.includes(name) && !inherited.includes(name))) fail('HISTORY');
+    }
+  }
+  const list = [...blocked].sort();
+  return { nodes: ordered, blocked: list, hash: adminRecordVersion({ nodes: ordered, blocked: list }) };
+}
+export async function prepareAdminContextMove(db: PrismaClient, session: AuthSession, raw: unknown) {
+  const input = z.object({ model: z.enum(['Company', 'Project', 'TechnicalPractice']), id: identifier,
+    expectedVersion: z.string().regex(/^[a-f0-9]{64}$/), values: z.record(z.string(), z.string().max(100_000)) }).strict().parse(raw);
+  return withSerializableTransaction(db, async tx => {
+    const policy = adminRecordPolicy(input.model), current = await auth(tx, session, policy);
+    await lock(tx, input.model, input.id);
+    const row = await delegate(tx, input.model).findUnique({ where: { id: input.id } });
+    if (!row || row.deletedAt) fail('DENIED');
+    if (adminRecordVersion(row) !== input.expectedVersion) fail('STALE');
+    const values = parseAdminRecordValues(policy, input.values, false);
+    if (!isContextMove(policy, row, values)) fail('INVALID');
+    await validateContext(tx, policy, row, { ...row, ...values }, current.actor, true);
+    const plan = await contextGraph(tx, current.actor, input.model, row, values);
+    await current.finish();
+    return { hash: plan.hash, blocked: plan.blocked, rows: plan.nodes.map(node => ({
+      model: node.model, id: node.before.id,
+      label: node.model === 'DocumentVersion' ? 'Versione documentale conservata · ' + String(node.before.version)
+        : adminRecordPolicy(node.model).label + ' · ' + label(node.before),
+      changedFields: Object.keys(node.patch).filter(name => adminRecordVersion(node.before[name] ?? null) !== adminRecordVersion(node.patch[name] ?? null))
+        .map(name => adminFieldLabels[name] ?? name),
+    })) };
+  });
+}
+async function applyContextGraph(tx: Tx, current: Awaited<ReturnType<typeof updateActor>>, plan: ContextGraphPlan,
+  command: AdminRecordCommand, requestHash: string) {
+  const changed: Array<{ node: ContextGraphNode; after: Row }> = [];
+  for (const node of plan.nodes) {
+    if (node.model === command.model && node.before.id === command.id) continue;
+    const patch = Object.fromEntries(Object.entries(node.patch).filter(([name, value]) =>
+      adminRecordVersion(node.before[name] ?? null) !== adminRecordVersion(value ?? null)));
+    if (!Object.keys(patch).length) continue;
+    await delegate(tx, node.model).update({ where: { id: node.before.id }, data: patch });
+    const after = await delegate(tx, node.model).findUnique({ where: { id: node.before.id } });
+    if (!after || Object.entries(patch).some(([name, value]) => adminRecordVersion(after[name] ?? null) !== adminRecordVersion(value ?? null))) fail('STALE');
+    changed.push({ node, after });
+  }
+  // Validate only after every member has the new context. No intermediate
+  // mixture is exposed outside this serializable transaction.
+  for (const node of plan.nodes) {
+    if (node.model === 'DocumentVersion') continue;
+    const after = await delegate(tx, node.model).findUnique({ where: { id: node.before.id } });
+    if (!after) fail('STALE');
+    await validateContext(tx, adminRecordPolicy(node.model), node.before, after, current.actor, true);
+  }
+  for (const { node, after } of changed) {
+    const h = createHash('sha256').update('fai.admin.context-child.v1:' + command.commandId + ':' + node.model + ':' + node.before.id).digest('hex');
+    const childId = h.slice(0,8) + '-' + h.slice(8,12) + '-5' + h.slice(13,16) + '-8' + h.slice(17,20) + '-' + h.slice(20,32);
+    const beforeHash = adminRecordVersion(node.before), afterHash = adminRecordVersion(after), now = await current.finish();
+    await tx.adminRecordRevision.create({ data: { commandId: childId, actorId: current.actor.id, sessionId: current.registry.id,
+      model: node.model, recordId: node.before.id, operation: 'UPDATE',
+      requestHash: adminRecordVersion({ parentCommandId: command.commandId, requestHash, model: node.model, id: node.before.id }),
+      beforeHash, afterHash, before: plain(node.before), after: plain(after), reason: command.reason, createdAt: now } });
+    await tx.auditLog.create({ data: { id: 'admin-record:' + childId, actorId: current.actor.id,
+      event: 'admin_record_changed', entityType: node.model, entityId: node.before.id,
+      after: { action: 'UPDATE', commandId: childId, beforeHash, afterHash,
+        parentCommandId: command.commandId, changedPaths: Object.keys(node.patch).sort() } } });
+  }
+}
+
 async function paymentStatuses(tx: Tx, row: Row | null) {
   if (!row) return ['da_incassare'];
   const current = String(row.status);
@@ -380,7 +582,11 @@ async function deliveryDossierId(tx: Tx, model: string, row: Row | null) {
 
 export async function saveAdminRecord(db: PrismaClient, session: AuthSession, raw: unknown, proof: UpdateCredentials) {
   const command = adminRecordCommand.parse(raw), policy = adminRecordPolicy(command.model);
+  if (policy.historyOnly && (command.operation !== 'RECTIFY' || Object.keys(command.values).length > 0)) fail('HISTORY');
   if (command.deliveryRevocation && (policy.model !== 'EngagementDossierDeliveryAuthorization' || command.operation !== 'UPDATE')) fail('INVALID');
+  if (command.noticeLifecycle && (policy.model !== 'PrivacyNoticeVersion' || command.operation !== 'UPDATE')) fail('INVALID');
+  if (command.contextMove && (!contextMoveRoots.includes(policy.model) || command.operation !== 'UPDATE')) fail('INVALID');
+  if (command.catalogPublication && (policy.model !== 'ServiceCatalogRevision' || command.operation !== 'CREATE')) fail('INVALID');
   const requestHash = adminRecordVersion({ command, actor: session.userId, sessionId: session.sessionId });
   if (!proof) fail('DENIED');
   return withSerializableTransaction(db, async tx => {
@@ -407,6 +613,13 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
       if (command.operation === 'CREATE' ? !policy.create || before !== null : !before || Boolean(before.deletedAt)) fail('DENIED');
       const values = parseAdminRecordValues(policy, command.values, command.operation === 'CREATE');
       const changed = Object.keys(values).filter(key => adminRecordVersion(before?.[key] ?? null) !== adminRecordVersion(values[key]));
+      let graph: ContextGraphPlan | null = null;
+      if (command.contextMove) {
+        if (!before || !isContextMove(policy, before, values)) fail('INVALID');
+        graph = await contextGraph(tx, current.actor, policy.model, before, values);
+        if (graph.blocked.length) fail('DEPENDENCIES');
+        if (graph.hash !== command.contextMove.expectedGraphHash) fail('STALE');
+      }
       if (deliveryDossier) {
         if (policy.model !== 'EngagementDossierDeliveryAuthorization' || !command.deliveryRevocation || !before
           || before.revokedAt || !recordUpdatePermission(current.actor, 'dossier.approve')
@@ -414,7 +627,28 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
         values.revokedAt = await current.finish();
       }
       if (before) await assertEditable(tx, policy, before, changed);
-      if (before && policy.model === 'PrivacyNoticeVersion') fail('HISTORY');
+      if (policy.model === 'ClientService') {
+        const now = await current.finish();
+        if (['openedAt', 'purchasedAt'].some(name => changed.includes(name) && (values[name] as Date) > now)) fail('INVALID');
+      }
+      if (before && policy.model === 'ServiceCatalogRevision') {
+        if (values.status !== 'RETIRED' || changed.length !== 1) fail('HISTORY');
+        values.retiredAt = await current.finish();
+      }
+      if (before && policy.model === 'PrivacyNoticeVersion') {
+        const lifecycle = command.noticeLifecycle, now = await current.finish();
+        if (!lifecycle || changed.length || lifecycle.contentHash !== before.contentHash) fail('HISTORY');
+        if (lifecycle.action === 'ACTIVATE') {
+          if (before.status !== 'DRAFT' || before.effectiveFrom || before.retiredAt) fail('HISTORY');
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-notice:' + before.noticeCode + ':' + before.purposeCode},0))::text`;
+          if (await tx.privacyNoticeVersion.count({ where: { noticeCode: String(before.noticeCode),
+            purposeCode: String(before.purposeCode), status: 'ACTIVE' } })) fail('ACTIVE_NOTICE');
+          values.status = 'ACTIVE'; values.effectiveFrom = now;
+        } else {
+          if (before.status !== 'ACTIVE' || !before.effectiveFrom || before.retiredAt) fail('HISTORY');
+          values.status = 'RETIRED'; values.retiredAt = now;
+        }
+      }
       if (command.paymentCorrection && (policy.model !== 'Payment' || !before || !changed.includes('status'))) fail('INVALID');
       if (policy.model === 'Payment' && before && changed.includes('status'))
         await correctPaymentStatus(tx, current.actor, command, before, String(values.status), await current.finish());
@@ -467,9 +701,24 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
         && !recordUpdatePermission(current.actor, 'service.close')) fail('DENIED');
       if (policy.model === 'Task' && typeof values.type === 'string' && /^(percorso|promemoria|reminder):/i.test(values.type)
         && values.type !== before?.type) fail('HISTORY');
-      await validateContext(tx, policy, before, { ...(before ?? { id: command.id }), ...values }, current.actor);
+      await validateContext(tx, policy, before, { ...(before ?? { id: command.id }), ...values }, current.actor, Boolean(graph));
       if (policy.model === 'Task' && values.status) values.completedAt = values.status === 'completata' ? before?.completedAt ?? await current.finish() : null;
       if (command.operation === 'CREATE') {
+        if (policy.model === 'ServiceCatalogRevision') {
+          const binding = await catalogBinding(tx, String(values.serviceCatalogId)), now = await current.finish();
+          if (!command.catalogPublication || command.catalogPublication.expectedCurrentHash !== binding.hash) fail('STALE');
+          if (!binding.master.active || values.status !== 'PUBLISHED' || values.validUntil && (values.validUntil as Date) <= now) fail('INVALID');
+          values.version = (binding.revisions[0]?.version ?? 0) + 1; values.validFrom = now;
+          let definition;
+          try { definition = administrativeCatalogDefinition(binding.master.code, Number(values.version), values as never); }
+          catch { fail('INVALID'); }
+          values.contentHash = catalogV2RevisionHash(definition); values.publishedAt = now;
+          for (const old of binding.revisions.filter(item => item.status === 'PUBLISHED')) {
+            await tx.serviceCatalogRevision.update({ where: { id: old.id }, data: { status: 'RETIRED', retiredAt: now } });
+            await tx.auditLog.create({ data: { actorId: current.actor.id, entityType: 'ServiceCatalogRevision', entityId: old.id,
+              event: 'admin_catalog_revision_superseded', after: { commandId: command.commandId, replacementId: command.id, contentHash: old.contentHash } } });
+          }
+        }
         if (metadata(policy.model).fields.some(field => field.name === 'createdById')) values.createdById = current.actor.id;
         if (policy.model === 'Dossier') values.status = 'bozza_consulente';
         if (policy.model === 'PreAnalysis') values.status = 'raccolta_dati';
@@ -486,6 +735,7 @@ export async function saveAdminRecord(db: PrismaClient, session: AuthSession, ra
         }
         after = await records.create({ data: { id: command.id, ...values } });
       } else after = await records.update({ where: { id: command.id }, data: values });
+      if (graph) await applyContextGraph(tx, current, graph, command, requestHash);
       // Read through a separate SELECT before recording success. The persisted
       // row, not the optimistic mutation result, is the journal's source.
       const persisted = (await records.findMany({ where: { id: command.id }, take: 1 }))[0];
@@ -567,12 +817,17 @@ export async function readAdminRecordReceipt(db: PrismaClient, session: AuthSess
 export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSession, raw: unknown) {
   const input = z.object({ commandId: z.string().uuid(), model: z.string(), id: identifier }).strict().parse(raw);
   const policy = adminRecordPolicy(input.model);
-  return withSerializableTransaction(db, async tx => {
+  // A concurrent successful command can invalidate the settlement snapshot.
+  // Retry only a known rolled-back serialization conflict, with the same ID;
+  // this path can observe a receipt or close an unused command, never replay it.
+  const settle = () => withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy);
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`admin-record:${input.commandId}`},0))::text`;
     const previous = await tx.adminRecordRevision.findUnique({ where: { commandId: input.commandId } });
     if (previous) {
       if (previous.actorId !== current.actor.id || previous.model !== input.model || previous.recordId !== input.id) fail('DENIED');
+      if (previous.before) await assertContextVisible(tx, current.actor, input.model, previous.before as unknown as Row);
+      if (previous.after) await assertContextVisible(tx, current.actor, input.model, previous.after as unknown as Row);
       await current.finish();
       return { ...input, replayed: true, closed: previous.operation === 'CLOSE' };
     }
@@ -587,6 +842,10 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
     await current.finish();
     return { ...input, replayed: false, closed: true };
   });
+  for (let attempt = 0; ; attempt++) {
+    try { return await settle(); }
+    catch (error) { if (!(error instanceof SerializableConflictError) || attempt >= 2) throw error; }
+  }
 }
 
 const referenceModels = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'DocumentVersion', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
@@ -641,8 +900,9 @@ export async function searchAdminRecordReferences(db: PrismaClient, session: Aut
 }
 async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor: Awaited<ReturnType<typeof updateActor>>['actor']) {
   const values: Record<string, string> = {}, result: AdminField[] = [];
-  let editable = [...policy.fields];
+  let editable = policy.historyOnly ? [] : [...policy.fields];
   if (row) {
+    if (policy.model === 'ServiceCatalogRevision') editable = row.status === 'PUBLISHED' ? ['status'] : [];
     if (policy.model === 'PrivacyNoticeVersion') editable = [];
     if (['DocumentExtraction', 'VisuraAnalysis'].includes(policy.model)) editable = editable.filter(name => name !== 'documentId');
     if (row.technicalPrivate === true && privateFields[policy.model]) editable = privateFields[policy.model];
@@ -669,7 +929,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
     const descriptor: AdminField = { name, label: adminFieldLabels[name] ?? name.replace(/([A-Z])/g, ' $1').toLowerCase(),
       required: field.isRequired && !field.hasDefaultValue, readOnly: !editable.includes(name),
       type: field.type === 'DateTime' ? 'date' : field.type === 'Boolean' ? 'boolean' : ['Decimal', 'Int'].includes(field.type) ? 'number'
-        : field.type === 'Json' ? 'json' : /notes|description|summary|content|conditions|rationale|issues|findings|documents|text/i.test(name) ? 'longtext' : 'text' };
+        : field.type === 'Json' ? 'json' : /notes|description|summary|content|body|conditions|rationale|issues|findings|documents|text/i.test(name) ? 'longtext' : 'text' };
     if (related) {
       if (!referenceModels.includes(related.type)) fail('INVALID');
       const found = await referenceRows(tx, actor, related.type);
@@ -695,6 +955,9 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
     } else if (policy.model === 'Payment' && name === 'status') {
       descriptor.type = 'select'; descriptor.options = (await paymentStatuses(tx, row)).map(value => ({ value, label: value.replaceAll('_', ' ') }));
       descriptor.help = 'Il cambio di stato è una dichiarazione amministrativa documentata. Gli incassi si registrano dal percorso dedicato. Il ripristino recupera solo lo stato precedente registrato.';
+    } else if (policy.model === 'ServiceCatalogRevision' && name === 'status') {
+      descriptor.type = 'select'; descriptor.options = (row ? row.status === 'PUBLISHED' ? ['PUBLISHED', 'RETIRED'] : ['RETIRED'] : ['PUBLISHED'])
+        .map(value => ({ value, label: value === 'PUBLISHED' ? 'Pubblicata internamente' : 'Ritirata' }));
     } else if (field.kind === 'enum') {
       descriptor.type = 'select'; descriptor.options = Prisma.dmmf.datamodel.enums.find(item => item.name === field.type)!.values
         .filter(item => (policy.model !== 'Project' || item.name !== 'archiviato')
@@ -726,7 +989,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
     if (model === 'ClientDossier' && row?.practiceReadinessId) await dossierLifecycleContext(tx, session, id);
     const privateTarget = row?.technicalPrivate === true && privateFields[model] ? await admitPrivateItem(tx, current.actor, model, row) : null;
-    const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
+    const history = await tx.adminRecordRevision.findMany({ where: { model, recordId: id, operation: { not: 'CLOSE' }, after: { path: ['operationalLifecycle'], equals: Prisma.AnyNull } }, orderBy: [{ createdAt: 'desc' }, { transactionId: 'desc' }, { commandId: 'desc' }], take: 100,
       select: { commandId: true, operation: true, createdAt: true, reason: true, actor: { select: { name: true, email: true } } } });
     const memberships = model === 'Person' ? await tx.companyPerson.findMany({ where: { personId: id } }) : [];
     const companies = await tx.company.findMany({ where: { id: { in: memberships.map(item => item.companyId) } }, select: { id: true, name: true, clientId: true } });
@@ -735,10 +998,17 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
       return company && admittedRow(current.actor, company) ? [{ label: `${company.name} · ${link.role}`, href: `/companies/${company.id}` }] : [];
     });
     if (memberships.length !== relationships.length) fail('DENIED');
+    if (['ControlledIntake','CommunicationReply'].includes(model) && row) relationships.push({ label: 'Blocco, archivio e ripristino', href: `/admin/lifecycle/${model}/${id}` });
+    if (model === 'ControlledIntake' && row?.leadId) relationships.push({ label: 'Apri il lead: dati correnti, assegnazione e archivio', href: `/leads/${row.leadId}` });
+    if (model === 'PrivacyEvidenceReceipt' && row?.noticeVersionId) relationships.push({ label: 'Apri la versione originale dell’informativa', href: `/admin/records/PrivacyNoticeVersion/${row.noticeVersionId}` });
+    if ((model === 'CommunicationReply' || model === 'CommunicationContextFile') && row) {
+      relationships.push({ label: 'Apri il contesto originale della comunicazione', ...(await communicationSourceContext(tx, current.actor, model, id)) });
+    }
+    if (model === 'CommunicationContextFile' && row) relationships.push({ label: 'Correggi versione, metadati o destinazione · recupera il file revocato', href: `/admin/communication-files/${id}` });
     if (deliveryDossier) relationships.push({ label: 'Apri il dossier e le prove originali della consegna', href: `/client-dossiers/${deliveryDossier}` });
     let draftRow = row;
     if (revisionId) {
-      if (creating || !row || row.deletedAt || removed) fail('DENIED');
+      if (policy.historyOnly || creating || !row || row.deletedAt || removed) fail('DENIED');
       const revision = await tx.adminRecordRevision.findUnique({ where: { commandId: revisionId } });
       if (!revision || revision.model !== model || revision.recordId !== id || !revision.before || !['UPDATE', 'RESTORE'].includes(revision.operation)) fail('DENIED');
       await assertContextVisible(tx, current.actor, model, revision.before as unknown as Row);
@@ -751,13 +1021,17 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     return { model, id, version: adminRecordVersion(row), label: creating ? `Nuovo · ${policy.label}` : label(row!),
       ...form, create: creating, trash: Boolean(policy.trash), deleted: Boolean(row?.deletedAt || removed),
       paymentCorrection: model === 'Payment' && !creating,
+      noticeLifecycle: model === 'PrivacyNoticeVersion' && row && !creating ? {
+        status: String(row.status), action: row.status === 'DRAFT' ? 'ACTIVATE' : row.status === 'ACTIVE' ? 'RETIRE' : null,
+        contentHash: String(row.contentHash), effectiveFrom: row.effectiveFrom ? (row.effectiveFrom as Date).toISOString() : null,
+        retiredAt: row.retiredAt ? (row.retiredAt as Date).toISOString() : null } : undefined,
       revokeDelivery: model === 'EngagementDossierDeliveryAuthorization' && !row?.revokedAt
         && recordUpdatePermission(current.actor, 'dossier.approve')
         && !await tx.engagementDossierDeliveryReceipt.count({ where: { authorizationId: id } }),
       guidance: privateTarget ? 'Elemento tecnico privato: puoi correggere il contenuto, archiviare e ripristinare entro la tua autorità personale. Origine e collegamenti restano conservati. I cambi di stato e lifecycle invalidano i perimetri precedenti: dopo il ripristino verifica e conferma di nuovo gli incarichi necessari.' : policy.guidance ?? null,
       href: privateTarget ? privateTarget.kind === 'Project' ? `/projects/${privateTarget.targetId}/assignments` : `/technical-office/practices/${privateTarget.targetId}/assignments` : policy.href.replace('{id}', id), relationships, restoringRevision: revisionId ?? null,
       history: history.map(item => ({ id: item.commandId, action: item.operation, at: item.createdAt.toISOString(), reason: item.reason,
-        actor: `${item.actor.name} · ${item.actor.email}`, canRestore: policy.fields.length > 0 && !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
+        actor: `${item.actor.name} · ${item.actor.email}`, canRestore: !policy.historyOnly && !['PrivacyNoticeVersion','ServiceCatalogRevision'].includes(model) && policy.fields.length > 0 && !creating && !row?.deletedAt && !removed && ['UPDATE', 'RESTORE'].includes(item.operation) })) };
   });
 }
 export async function listAdminRecords(db: PrismaClient, session: AuthSession, model: string, query = '', page = 1, trash = false) {
@@ -765,8 +1039,9 @@ export async function listAdminRecords(db: PrismaClient, session: AuthSession, m
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000 || query.length > 200) fail('INVALID');
   return withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy);
-    const search = metadata(model).fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'contractNumber', 'code'].includes(field.name));
-    const where = { ...(query ? { OR: [{ id: query }, ...search.map(field => ({ [field.name]: { contains: query, mode: 'insensitive' } }))] } : {}),
+    const search = metadata(model).fields.filter(field => ['title', 'name', 'displayName', 'firstName', 'lastName', 'contractNumber', 'code', 'noticeCode', 'publicName', 'subject', 'sender', 'fileName'].includes(field.name));
+    const uuidId = ['CommercialLeadSlaPolicyVersion','EngagementDossierDeliveryAuthorization','EngagementDossierDeliveryReceipt','PrivacyNoticeVersion','PrivacyEvidenceReceipt','ControlledIntake','ServiceCatalogRevision','CommunicationReply','CommunicationContextFile'].includes(model);
+    const where = { ...(query ? { OR: [...(!uuidId || z.string().uuid().safeParse(query).success ? [{ id: query }] : []), ...search.map(field => ({ [field.name]: { contains: query, mode: 'insensitive' } }))] } : {}),
       ...(policy.trash === 'soft' ? { deletedAt: trash ? { not: null } : null } : {}) };
     let rows: Row[];
     if (trash && policy.trash === 'leaf') {
@@ -785,7 +1060,8 @@ export async function listAdminRecords(db: PrismaClient, session: AuthSession, m
         if (deliveryDossier) await dossierLifecycleContext(tx, session, deliveryDossier);
       }
       catch (error) { if (error instanceof AdminRecordError && ['DENIED', 'CONTEXT'].includes(error.code)) continue; throw error; }
-      visible.push({ id: row.id, label: label(row), deleted: Boolean(row.deletedAt), status: String(row.status ?? ''),
+      visible.push({ id: row.id, label: label(row), deleted: Boolean(row.deletedAt),
+        status: model === 'CommunicationContextFile' ? row.revokedAt ? 'Revocato' : 'Disponibile' : String(row.status ?? ''),
         dueAt: row.dueAt instanceof Date ? row.dueAt.toISOString() : row.dueDate instanceof Date ? row.dueDate.toISOString() : null });
     }
     await current.finish();

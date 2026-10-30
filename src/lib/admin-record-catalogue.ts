@@ -3,10 +3,10 @@ import type { Permission } from './permissions';
 export type AdminRecordPolicy = {
   model: string; label: string; group: string; permission: Permission; fields: string[];
   create: boolean; trash: 'soft' | 'leaf' | null; href: string;
-  guidance?: string;
+  guidance?: string; historyOnly?: boolean;
 };
 const item = (model: string, label: string, group: string, permission: Permission, fields: string,
-  options: Partial<Pick<AdminRecordPolicy, 'create' | 'trash' | 'href' | 'guidance'>> = {}): AdminRecordPolicy => ({
+  options: Partial<Pick<AdminRecordPolicy, 'create' | 'trash' | 'href' | 'guidance' | 'historyOnly'>> = {}): AdminRecordPolicy => ({
   model, label, group, permission, fields: fields.split(/\s+/).filter(Boolean), create: false, trash: null, href: '', ...options,
 });
 
@@ -14,9 +14,21 @@ const item = (model: string, label: string, group: string, permission: Permissio
  * Provenance, signatures, receipts, transport and security controls are absent
  * from every editable allowlist. Creation is enabled only for ordinary records. */
 export const adminRecordCatalogue = [
+  item('CommunicationReply', 'Risposte ricevute · fonte e rettifiche', 'Comunicazioni', 'practice_communications.write',
+    'sender subject body receivedAt externalMessageId inReplyTo contentHash evidenceReference createdAt',
+    { historyOnly: true, href: '/settings/communications', guidance: 'Consulta il messaggio ricevuto originale e annota la rettifica motivata. Mittente, testo, hash, data e collegamento originali restano conservati. Una rettifica non prepara né invia una risposta.' }),
+  item('CommunicationContextFile', 'File delle comunicazioni · fonte e rettifiche', 'Comunicazioni', 'practice_communications.write',
+    'contextKind fileName mimeType classification sizeBytes sha256 createdAt revokedAt',
+    { historyOnly: true, href: '/communications', guidance: 'Metadati e byte della fonte restano conservati. La rettifica annotata non modifica il file e non annulla una revoca; una sostituzione richiede una nuova versione da scegliere esplicitamente nella bozza.' }),
+  item('PrivacyEvidenceReceipt', 'Ricevute privacy · rettifiche delle prove', 'Impostazioni operative', 'settings.manage',
+    'purposeCode legalBasisCode evidenceKind decision catalogVersion sourceSystem formCode formVersion sourceSubmittedAt sourceEvidenceDigest evidenceHash createdAt',
+    { historyOnly: true, href: '/legal-compliance/privacy', guidance: 'Consulta la ricevuta originale e registra una rettifica motivata collegata alla sua identità. La rettifica resta visibile nello storico; non riscrive la decisione, non crea un consenso e non modifica le autorizzazioni di contatto.' }),
+  item('ControlledIntake', 'Acquisizioni · fonte e rettifiche', 'Clienti e anagrafiche', 'lead.write',
+    'leadId channel sourceId sourceOccurredAt acquisitionMode mappingVersion payloadHash subjectType subjectName firstName lastName email phone classificationState effectiveCategory serviceRevisionId digitalProjectType need objective functions indicativeBudget timing declaredMaterials declaredEngagementReference administrativeState administrativeRequest status',
+    { historyOnly: true, href: '/controlled-intakes#intake-{id}', guidance: 'La fonte acquisita resta conservata. Annota qui una correzione della fonte; usa il lead collegato per correggere i dati correnti, assegnare, bloccare o archiviare il lavoro. Una rettifica non attesta pagamenti, completezza dei materiali, firma o avvio.' }),
   item('PrivacyNoticeVersion', 'Informative · nuove versioni e rettifiche', 'Impostazioni operative', 'settings.manage',
     'noticeCode noticeVersion purposeCode legalBasisCode evidenceKind contentHash',
-    { create: true, href: '/legal-compliance/privacy', guidance: 'Registra una nuova versione in bozza con l’hash SHA256 del testo verificato. Identità, finalità, base giuridica e hash restano immutabili anche in bozza: per correggerli crea una nuova versione e annota la rettifica sulla precedente. Questa funzione non valida il testo, non attiva canali e non modifica le ricevute di consenso. Attivazione e ritiro mantengono il processo di validazione dedicato.' }),
+    { create: true, href: '/legal-compliance/privacy', guidance: 'Registra una nuova versione in bozza con l’hash SHA256 del testo verificato. Puoi attivarla dopo aver verificato la versione esatta o ritirare una versione attiva. Le date sono registrate al momento dell’operazione. Identità e testo restano immutabili; una versione ritirata si sostituisce con una nuova bozza. Questa funzione non valida il testo, non attiva canali e non modifica le ricevute di consenso.' }),
   item('AiAgent', 'Agenti CRM · metadati operativi', 'Impostazioni operative', 'ai_agents.write',
     'name description operationalScope requiredDataChecklist expectedOutput toneStyle',
     { href: '/settings/ai-agents', guidance: 'Ogni correzione crea una versione completa dei metadati, conservando quelle precedenti. Identità, prompt, provider, modello, attivazione e schemi restano invariati. Nessuna esecuzione viene avviata.' }),
@@ -85,10 +97,13 @@ export const adminRecordCatalogue = [
     'contractId clientId taxableAmount vatAmount totalAmount method dueDate status notes',
     { create: true, href: '/payments/{id}/collection', guidance: 'Importi e collegamenti si correggono prima dell’incasso. Storni, rimborsi e ripristini richiedono una prova documentale, una data e una dichiarazione amministrativa: conservano l’incasso originario e aggiornano lo stato dei servizi collegati. Nessuna operazione muove denaro. Per un incasso parziale del contratto registra una rata dell’importo effettivo e usa Conferma incasso; non alterare una rata già incassata.' }),
   item('ClientService', 'Servizi acquistati', 'Servizi e amministrazione', 'service.write',
-    'clientId companyId projectId practiceType requestedAmount plannedInvestment operationalNotes dueDate internalNotes',
-    { trash: 'soft', guidance: 'Acquisto, pagamento, avvio, chiusura e assegnazione restano nelle procedure collegate, con i rispettivi gate e prove.' }),
+    'clientId companyId projectId practiceType requestedAmount plannedInvestment openedAt purchasedAt operationalNotes dueDate internalNotes',
+    { trash: 'soft', guidance: 'Puoi correggere le date amministrative di apertura e acquisto conservando i valori precedenti. Questa correzione non attesta una firma, un pagamento o un avvio; i rispettivi eventi e collegamenti restano nelle procedure dedicate.' }),
   item('ServiceCatalog', 'Catalogo servizi', 'Servizi e amministrazione', 'settings.manage',
     'code name description category basePrice active displayOrder', { create: true, href: '/service-catalog' }),
+  item('ServiceCatalogRevision', 'Catalogo servizi · revisioni operative', 'Servizi e amministrazione', 'settings.manage',
+    'serviceCatalogId publicName shortDescription priceMode netPrice termsVersion validUntil operationalConditions checklist status',
+    { create: true, href: '/service-catalog', guidance: 'Una nuova revisione interna entra in vigore al salvataggio e ritira le precedenti revisioni pubblicate dello stesso servizio. Le offerte e gli incarichi già registrati conservano la loro versione. Puoi ritirare una revisione; per correggerla o ripristinarla crea una nuova versione. Nessuna pubblicazione esterna firmata, checkout, consegna o operazione automatica viene attivata.' }),
   item('PracticeCommunication', 'Comunicazioni di pratica · bozze', 'Comunicazioni', 'practice_communications.write',
     'technicalPracticeId title content internalNote type channel', { trash: 'soft', guidance: 'Le note interne in bozza si correggono e ricollegano alla pratica scelta. Le comunicazioni già usate o approvate conservano contenuto e prove: registra una rettifica, oppure spostale nel cestino e ripristinale. Nessuna operazione invia messaggi o registra nuovi invii.' }),
   item('CommercialLeadSlaPolicyVersion', 'Tempi di risposta ai lead · versioni', 'Impostazioni operative', 'settings.manage',
@@ -101,12 +116,18 @@ export function adminRecordPolicy(model: string): AdminRecordPolicy {
   return found;
 }
 export const adminFieldLabels: Record<string, string> = {
+  sender: 'Mittente originale', subject: 'Oggetto originale', body: 'Testo originale', receivedAt: 'Data originale di ricezione',
+  externalMessageId: 'Identificativo originale del messaggio', inReplyTo: 'Riferimento del messaggio precedente', evidenceReference: 'Riferimento della prova originale',
+  contextKind: 'Tipo di contesto', fileName: 'Nome del file originale', mimeType: 'Formato del file', classification: 'Riservatezza del file',
+  sizeBytes: 'Dimensione in byte', sha256: 'SHA256 dei byte originali', revokedAt: 'Data della revoca',
   noticeCode: 'Codice informativa', noticeVersion: 'Versione informativa', purposeCode: 'Codice finalità', legalBasisCode: 'Codice base giuridica',
   evidenceKind: 'Tipo di evidenza', contentHash: 'SHA256 del testo della versione',
   operationalScope: 'Ambito operativo', requiredDataChecklist: 'Dati richiesti · elenco JSON', expectedOutput: 'Risultato atteso', toneStyle: 'Tono e stile',
   leadId: 'Lead', services: 'Servizi proposti', includedActivities: 'Attività incluse', operationalConditions: 'Condizioni operative',
   sentAt: 'Data dichiarata di invio manuale', followUpAt: 'Prossimo seguito commerciale', followUpNote: 'Nota sul seguito', outcomeNote: 'Nota sull’esito',
   responseTargetSeconds: 'Tempo di risposta in secondi',
+  publicName: 'Nome del servizio nella revisione', shortDescription: 'Descrizione del servizio nella revisione',
+  priceMode: 'Modalità del prezzo', netPrice: 'Prezzo imponibile (EUR)', termsVersion: 'Versione delle condizioni',
   clientId: 'Cliente', companyId: 'Azienda', projectId: 'Progetto', clientServiceId: 'Servizio acquistato',
   promoterClientId: 'Cliente promotore', personId: 'Persona', incorporationSubjectId: 'Soggetto da costituire',
   technicalPracticeId: 'Pratica tecnica', contractId: 'Contratto', paymentId: 'Pagamento', documentId: 'Documento',
@@ -125,6 +146,9 @@ export const adminFieldLabels: Record<string, string> = {
   legalForm: 'Forma giuridica', atecoCode: 'Codice ATECO', atecoDescription: 'Descrizione ATECO',
   incorporationDate: 'Data costituzione', activityStartDate: 'Inizio attività', activityStatus: 'Stato attività',
   employees: 'Dipendenti', annualRevenue: 'Fatturato annuo', durcStatus: 'Stato DURC', taxRegime: 'Regime fiscale',
+  openedAt: 'Data amministrativa di apertura', purchasedAt: 'Data amministrativa di acquisto',
+  sourceSubmittedAt: 'Data dichiarata dalla fonte', sourceEvidenceDigest: 'Hash della prova fonte', evidenceHash: 'Hash della ricevuta',
+  decision: 'Decisione originale', createdAt: 'Registrata il', sourceSystem: 'Sistema fonte', formCode: 'Modulo fonte', formVersion: 'Versione del modulo',
   source: 'Fonte', leadSource: 'Canale di origine', interest: 'Interesse', commercialStatus: 'Stato commerciale',
   commercialProposal: 'Proposta commerciale', practiceType: 'Tipo pratica', targetEntity: 'Ente destinatario',
   targetPortal: 'Portale destinatario', submittedAt: 'Presentazione dichiarata', protocolNumber: 'Protocollo',
@@ -163,4 +187,5 @@ export type AdminRecordForm = { model: string; id: string; version: string; labe
   relationships: { label: string; href: string }[]; restoringRevision: string | null;
   paymentCorrection?: boolean;
   revokeDelivery?: boolean;
+  noticeLifecycle?: { status: string; action: 'ACTIVATE' | 'RETIRE' | null; contentHash: string; effectiveFrom: string | null; retiredAt: string | null };
   history: { id: string; action: string; at: string; reason: string; actor: string; canRestore: boolean }[] };

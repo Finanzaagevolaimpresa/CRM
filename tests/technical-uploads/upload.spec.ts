@@ -162,7 +162,7 @@ test('native private acquisition, exact technical version selection, positive by
   expect(await db.document.count()).toBe(documents);
   await a.getByLabel('Password corrente', { exact: true }).fill(password);
   await a.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
-  await expect(a.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await expect(a.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   await a.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
   const confirmation = a.getByLabel('Confermo personalmente l’acquisizione privata e la classificazione di questo file esatto.', { exact: true });
   await expect(confirmation).toBeEnabled(); await confirmation.check();
@@ -275,8 +275,10 @@ test('native Office acquisition stays private; metadata-only, explicit download 
     await expect(t.getByText('Relazione.docx · Anteprima non disponibile per questo formato.', { exact: true })).toBeVisible();
     await expect(t.getByRole('link', { name: 'Visualizza Relazione.docx', exact: true })).toHaveCount(0);
     await expect(t.getByRole('link', { name: 'Scarica versione', exact: true })).toHaveCount(allowDownload ? 1 : 0);
-    expect((await tc.request.get(selectedUrl)).status()).toBe(404);
-    const response = await tc.request.get(selectedUrl + '?download=1'); expect(response.status()).toBe(allowDownload ? 200 : 404);
+    // Retry only a reset transport connection for these read-only requests.
+    // HTTP denials, headers and bytes still have to match the exact assertions.
+    expect((await tc.request.get(selectedUrl, { maxRetries: 2 })).status()).toBe(404);
+    const response = await tc.request.get(selectedUrl + '?download=1', { maxRetries: 2 }); expect(response.status()).toBe(allowDownload ? 200 : 404);
     if (allowDownload) {
       expect(response.headers()['content-type']).toBe('application/octet-stream');
       expect(response.headers()['content-disposition']).toMatch(/^attachment;/);

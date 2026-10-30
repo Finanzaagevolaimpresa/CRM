@@ -122,7 +122,7 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
   }
 }
 
-async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowReviewAssignment = false, allowArchived = false) {
+async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowReviewAssignment = false, allowArchived = false, write = true) {
   const dossier = await tx.clientDossier.findUnique({ where: { id: dossierId } });
   if (!dossier || (!allowArchived && dossier.status === 'archiviata') || !dossier.practiceReadinessId || !dossier.preAnalysisId) throw new EngagementDossierError('DENIED');
   await assertProjectOperational(tx, dossier);
@@ -148,6 +148,7 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
     || (preAnalysis.companyId && project.companyId && preAnalysis.companyId !== project.companyId)
     || !versions.some((version) => version.id === dossier.currentVersionId)
     || (dossier.approvedVersionId && !versions.some((version) => version.id === dossier.approvedVersionId))) throw new EngagementDossierError('DENIED');
+  const lifecycle = await dossierOperationalContext(tx, current, practice, write);
   if (preAnalysis.companyId && !(await tx.company.findFirst({ where: { id: preAnalysis.companyId, clientId: client.id, deletedAt: null } }))) throw new EngagementDossierError('DENIED');
   if (isSelectiveProject(current, project.id)) throw new EngagementDossierError('DENIED');
   const ordinaryAccess = canViewClientContext(current, { clientId: dossier.clientId, client, project: hydratedProject, clientService: hydratedService });
@@ -165,11 +166,23 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
       checkedSnapshots.add(snapshotHash);
     }
   }
-  return { dossier, client, project: hydratedProject, service: hydratedService, versions, practice };
+  return { dossier, client, project: hydratedProject, service: hydratedService, versions, practice, operational: lifecycle };
+}
+
+async function dossierOperationalContext(tx: Prisma.TransactionClient, current: AuthSession,
+  practice: { id: string; controlledIntakeId: string }, write: boolean) {
+  try {
+    const practiceState = await assertOperationalAccess(tx, 'PracticeReadiness', practice.id, current.role, write);
+    const intakeState = await assertOperationalAccess(tx, 'ControlledIntake', practice.controlledIntakeId, current.role, write);
+    return practiceState.state === 'ACTIVE' && intakeState.state === 'ACTIVE';
+  } catch (error) {
+    if (error instanceof AdminOperationalStateError) throw new EngagementDossierError('DENIED');
+    throw error;
+  }
 }
 
 async function readContext(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowArchived = false) {
-  const context = await scope(tx, current, dossierId, true, allowArchived);
+  const context = await scope(tx, current, dossierId, true, allowArchived, false);
   const [reviews, authorizations] = await Promise.all([
     tx.engagementDossierReview.findMany({ where: { dossierId }, orderBy: { decidedAt: 'desc' } }),
     tx.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId }, orderBy: { authorizedAt: 'desc' } }),
@@ -180,7 +193,7 @@ async function readContext(tx: Prisma.TransactionClient, current: AuthSession, d
   const work = await workHistory(tx, context);
   const initialService = await readInitialServiceState(tx, context);
   const serviceChoices = initialService ? await initialServiceChoices(tx, current, context) : null;
-  return { dossier: context.dossier, clientId: context.client.id, client: context.client, project: context.project, clientService: context.service,
+  return { dossier: context.dossier, clientId: context.client.id, client: context.client, project: context.project, clientService: context.service, operational: context.operational,
     engagementHistory: { versions: context.versions, reviews, authorizations: authorizations.map((authorization) => ({ ...authorization, recipients: deliveryRecipients(authorization, context.versions) })), receipts, work, initialService, serviceChoices } };
 }
 
@@ -385,7 +398,7 @@ export async function getEngagementMaterialDownloadAccessTx(tx: Prisma.Transacti
   }, select: { id: true } });
   for (const dossier of dossiers) {
     try {
-      const context = await scope(tx, current, dossier.id, true);
+      const context = await scope(tx, current, dossier.id, true, false, false);
       if (!await hasInitialServiceReviewAssignment(tx, current, context)) continue;
       const currentVersion = context.versions.find(version => version.id === context.dossier.currentVersionId);
       if (!currentVersion) continue;
@@ -444,6 +457,7 @@ export async function createEngagementDossier(db: Db, claimed: AuthSession, raw:
     await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceReadinessId}::uuid FOR UPDATE`;
     const practice = await tx.practiceReadiness.findUnique({ where: { id: input.practiceReadinessId }, include: { materials: { where: { successor: null }, orderBy: { checklistItemId: 'asc' } } } });
     if (!practice?.startedAt || !practice.clientServiceId) throw new EngagementDossierError('NOT_READY');
+    await dossierOperationalContext(tx, current, practice, true);
     await assertProjectOperational(tx, practice);
     const [preAnalysis, client, project, service] = await Promise.all([
       tx.preAnalysis.findUnique({ where: { id: input.preAnalysisId } }),
@@ -555,3 +569,4 @@ export async function recordEngagementDossierDelivery(db: Db, claimed: AuthSessi
   const input = parseInput(z.object({ authorizationId: uuid, outcome: z.enum(['DELIVERED', 'FAILED']), evidence: z.object({ reference: z.string().trim().min(1).max(500), deliveredAt: z.union([z.date(), z.string().datetime({ offset: true }).transform((value) => new Date(value))]), synthetic: z.boolean().default(false), note: z.string().trim().max(2000).optional() }) }), raw);
   return committedDossierReceipt(db, async (tx) => { const current = await actor(tx, claimed, 'dossier.write', runtime.now?.() ?? new Date()); await tx.$queryRaw`SELECT id FROM "EngagementDossierDeliveryAuthorization" WHERE id=${input.authorizationId}::uuid FOR UPDATE`; const authorization = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { id: input.authorizationId } }); if (!authorization || authorization.revokedAt) throw new EngagementDossierError('DENIED'); const context = await scope(tx, current, authorization.dossierId); const { dossier, versions } = context; await serviceGate(tx, current, context, runtime); deliveryRecipients(authorization, versions); if (dossier.approvedVersionId !== authorization.versionId) throw new EngagementDossierError('CONFLICT'); const evidence = { reference: input.evidence.reference, deliveredAt: input.evidence.deliveredAt.toISOString(), synthetic: input.evidence.synthetic, ...(input.evidence.note !== undefined ? { note: input.evidence.note } : {}) }; const evidenceHash = engagementDossierHash(evidence); const idempotencyHash = engagementDossierHash({ authorizationId: authorization.id, outcome: input.outcome, evidenceHash }); const prior = await tx.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }); if (prior) { assertDeliveryReceiptIntegrity(prior); if (prior.idempotencyHash === idempotencyHash) return prior; throw new EngagementDossierError('CONFLICT'); } const receipt = await tx.engagementDossierDeliveryReceipt.create({ data: { authorizationId: authorization.id, outcome: input.outcome, evidence: evidence as Prisma.InputJsonValue, evidenceHash, idempotencyHash, recordedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_record', dossier.id, { receiptId: receipt.id, authorizationId: authorization.id, versionId: authorization.versionId, outcome: input.outcome, evidenceHash }); return receipt; });
 }
+import { assertOperationalAccess, AdminOperationalStateError } from './admin-operational-state';

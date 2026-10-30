@@ -5,6 +5,7 @@ import { playableWebm } from './synthetic-video';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { privilegedStepUpCookieName } from '../../src/lib/privileged-access';
 const db = new PrismaClient(), evidence = process.env.VIDEOS_EVIDENCE!, password = process.env.VIDEOS_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
   synthetic: boolean; adminId: string; readerId: string; otherId: string; readerName: string; otherName: string;
@@ -57,6 +58,92 @@ async function screenshot(page: Page, name: string, width: number) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(evidence, name + '.png'), fullPage: true });
 }
+async function inlineConfirmation(page: Page) {
+  const section = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro' });
+  await section.getByLabel('Password corrente', { exact: true }).fill(password);
+  await section.getByRole('button', { name: 'Conferma identità e conserva le scelte' }).click();
+  await expect(section.getByRole('status')).toContainText('30 minuti');
+}
+
+test('upload and draft survive missing confirmation; renewal resumes the same bytes and closes only the old edit attempt', async ({ browser }) => {
+  const context = await browser.newContext(), page = await context.newPage();
+  await login(page, f.emails.admin);
+  const bytes = await playableWebm(page), before = await db.videoAsset.count();
+  await page.goto('/videos/manage');
+  await page.locator('[data-interactive-ready="true"]').first().waitFor({ state: 'attached' });
+  await page.locator('input[type="file"]').setInputFiles({ name: 'resume-synthetic.webm', mimeType: 'video/webm', buffer: bytes });
+  await page.getByRole('button', { name: 'Carica come bozza privata', exact: true }).click();
+  await expect(page.getByText('File conservato in questa pagina:', { exact: false })).toContainText('resume-synthetic.webm');
+  expect(await db.videoAsset.count()).toBe(before);
+  await inlineConfirmation(page);
+  await page.getByRole('button', { name: 'Riprendi lo stesso caricamento' }).click();
+  const link = page.getByRole('link', { name: 'Apri bozza e scegli i destinatari' });
+  await expect(link).toBeVisible(); const id = (await link.getAttribute('href'))!.split('/').at(-1)!; await link.click();
+  await expect(page.getByTestId('video-editor')).toHaveAttribute('data-interactive-ready', 'true');
+  await page.getByLabel('Titolo', { exact: true }).fill('Bozza conservata dopo scadenza');
+  await page.getByRole('checkbox', { name: 'Commerciali', exact: true }).check();
+  await preview(page);
+  await context.clearCookies({ name: privilegedStepUpCookieName });
+  await page.getByRole('button', { name: 'Conferma', exact: true }).click();
+  await expect(page.getByTestId('video-editor')).toContainText('Tentativo chiuso senza modifica');
+  await expect(page.getByLabel('Titolo', { exact: true })).toHaveValue('Bozza conservata dopo scadenza');
+  await expect(page.getByRole('checkbox', { name: 'Commerciali', exact: true })).toBeChecked();
+  expect(await db.adminRecordRevision.count({ where: { model: 'VideoEntry', recordId: id, operation: 'CLOSE' } })).toBe(1);
+  await inlineConfirmation(page);
+  await preview(page); await page.getByRole('button', { name: 'Conferma', exact: true }).click();
+  await expect(page.getByTestId('video-editor')).toContainText('Operazione registrata');
+  expect(await db.videoAsset.count()).toBe(before + 1);
+  expect(await db.videoCommand.count({ where: { videoId: id } })).toBe(2);
+  await context.close();
+});
+
+test('an unobserved request that never reached the server closes durably and retains the chosen draft', async ({ browser }) => {
+  const context = await browser.newContext(), page = await context.newPage();
+  await login(page, f.emails.admin, true); const row = await upload(page); await preview(page);
+  let intercepted = false;
+  await page.route('**/videos/manage/' + row.id, async route => {
+    if (!intercepted && route.request().method() === 'POST' && route.request().headers()['next-action']) {
+      intercepted = true; await route.abort('failed'); return;
+    }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: 'Conferma', exact: true }).click();
+  await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza modifica');
+  await expect(page.getByLabel('Titolo', { exact: true })).toHaveValue(row.title);
+  expect(await db.adminRecordRevision.count({ where: { model: 'VideoEntry', recordId: row.id, operation: 'CLOSE' } })).toBe(1);
+  expect(await db.videoCommand.count({ where: { videoId: row.id, operation: 'PUBLISH' } })).toBe(0);
+  await preview(page); await confirm(page);
+  expect(await db.videoCommand.count({ where: { videoId: row.id, operation: 'PUBLISH' } })).toBe(1);
+  await context.close();
+});
+
+test('same video can replace its file only through a private draft and a fresh named publication', async ({ browser }) => {
+  const context = await browser.newContext(), rc = await browser.newContext();
+  const page = await context.newPage(), reader = await rc.newPage();
+  await login(page, f.emails.admin, true); await login(reader, f.emails.reader);
+  const row = await upload(page); await preview(page); await confirm(page);
+  const next = await upload(page);
+  await page.goto('/videos/manage/' + row.id);
+  await expect(page.getByTestId('video-editor')).toHaveAttribute('data-interactive-ready', 'true');
+  await page.getByLabel('Cerca un file già caricato').fill(next.id);
+  await page.getByRole('button', { name: 'Cerca file', exact: true }).click();
+  await expect(page.getByLabel('File del video').locator('option[value="' + next.id + '"]')).toHaveCount(1);
+  await page.getByLabel('File del video').selectOption(next.id);
+  await expect(page.getByRole('button', { name: 'Prepara pubblicazione', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Prepara bozza', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Confermo questa operazione e le persone indicate.' }).check(); await confirm(page);
+  expect((await reader.request.get('/videos/' + row.id + '/content')).status()).toBe(404);
+  await page.goto('/videos/manage/' + row.id);
+  await expect(page.getByTestId('video-editor')).toHaveAttribute('data-interactive-ready', 'true');
+  await expect(page.getByLabel('File del video')).toHaveValue(next.id);
+  await preview(page); await expect(page.getByLabel('Riepilogo video')).toContainText(f.emails.reader); await confirm(page);
+  await reader.goto('/videos/' + row.id); await play(reader);
+  const current = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
+  expect(current.fileId).toBe(next.id); expect(current.version).toBe(4);
+  expect(await db.videoAsset.count({ where: { id: row.id } })).toBe(1);
+  await context.close(); await rc.close();
+});
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); });
 test.afterAll(async () => db.$disconnect());
 
@@ -147,7 +234,7 @@ for (const reason of ['inactive', 'deleted', 'read-permission-revoked'] as const
         await login(admin, f.emails.admin, true); await login(reader, f.emails.reader); await login(other, f.emails.other);
         const row = await upload(admin), content = '/videos/' + row.id + '/content';
         await admin.getByRole('checkbox', { name: 'Commerciali', exact: true }).uncheck();
-        await admin.getByRole('checkbox', { name: f.readerName + ' (commerciale)', exact: true }).check();
+        await admin.getByRole('checkbox', { name: f.readerName + ' · ' + f.emails.reader + ' (commerciale)', exact: true }).check();
         await preview(admin); await confirm(admin);
         await reader.goto('/videos/' + row.id); await play(reader);
         if (reason === 'inactive') await db.user.update({ where: { id: f.readerId }, data: { active: false } });
@@ -170,11 +257,11 @@ for (const reason of ['inactive', 'deleted', 'read-permission-revoked'] as const
           expect(draft.publishedById).toBeNull(); expect(draft.publisherEpoch).toBeNull();
         }
         await openEditor();
-        await expect(admin.getByRole('checkbox', { name: f.readerName + ' (commerciale)', exact: true })).toHaveCount(0);
+        await expect(admin.getByRole('checkbox', { name: f.readerName + ' · ' + f.emails.reader + ' (commerciale)', exact: true })).toHaveCount(0);
         const unavailable = admin.getByLabel('Destinatari non disponibili', { exact: true });
         await expect(unavailable).toContainText('Destinatari selezionati non più disponibili: 1.');
         await expect(unavailable).not.toContainText(f.readerName);
-        const otherChoice = admin.getByRole('checkbox', { name: f.otherName + ' (backoffice)', exact: true });
+        const otherChoice = admin.getByRole('checkbox', { name: f.otherName + ' · ' + f.emails.other + ' (backoffice)', exact: true });
         await otherChoice.check();
         const before = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
         expect(before.selection).toEqual({ people: [f.readerId], areas: [] });

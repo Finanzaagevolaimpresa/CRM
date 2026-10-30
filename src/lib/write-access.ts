@@ -150,36 +150,36 @@ export async function requireClientContextWriteAccess(
   return { client, company, project, clientService };
 }
 
-export async function requireProjectEditAccess(session: AuthSession, projectId: string) {
-  const project = await loadProjectContext(projectId);
+export async function requireProjectEditAccess(session: AuthSession, projectId: string, db: ContextDb = prisma) {
+  const project = await loadProjectContext(projectId, db);
   if (!canEditProject(session, project)) denyWriteAccess();
   return project;
 }
 
-export async function requireServiceEditAccess(session: AuthSession, serviceId: string) {
-  const service = await loadServiceContext(serviceId);
+export async function requireServiceEditAccess(session: AuthSession, serviceId: string, db: ContextDb = prisma) {
+  const service = await loadServiceContext(serviceId, db);
   if (!canEditService(session, service)) denyWriteAccess();
   return service;
 }
 
-export async function requireServiceAssignAccess(session: AuthSession, serviceId: string) {
-  const service = await loadServiceContext(serviceId);
+export async function requireServiceAssignAccess(session: AuthSession, serviceId: string, db: ContextDb = prisma) {
+  const service = await loadServiceContext(serviceId, db);
   if (!canAssignService(session, service)) denyWriteAccess();
   return service;
 }
 
-async function loadDocumentContext(documentId: string) {
-  const document = await prisma.document.findFirst({ where: { id: documentId, deletedAt: null } });
+async function loadDocumentContext(documentId: string, db: Prisma.TransactionClient = prisma) {
+  const document = await db.document.findFirst({ where: { id: documentId, deletedAt: null } });
   if (!document) denyWriteAccess();
   const [client, company, project, clientService] = await Promise.all([
     document.clientId
-      ? prisma.client.findFirst({ where: { id: document.clientId, deletedAt: null }, select: clientSelect })
+      ? db.client.findFirst({ where: { id: document.clientId, deletedAt: null }, select: clientSelect })
       : null,
     document.companyId && document.clientId
-      ? prisma.company.findFirst({ where: { id: document.companyId, clientId: document.clientId, deletedAt: null }, select: { id: true } })
+      ? db.company.findFirst({ where: { id: document.companyId, clientId: document.clientId, deletedAt: null }, select: { id: true } })
       : null,
-    document.projectId ? loadProjectContext(document.projectId) : null,
-    document.clientServiceId ? loadServiceContext(document.clientServiceId) : null,
+    document.projectId ? loadProjectContext(document.projectId, db) : null,
+    document.clientServiceId ? loadServiceContext(document.clientServiceId, db) : null,
   ]);
   if (document.clientId && !client) denyWriteAccess();
   if (document.companyId && !company) denyWriteAccess();
@@ -191,9 +191,9 @@ async function loadDocumentContext(documentId: string) {
   return { ...document, client, project, clientService };
 }
 
-export async function requireDocumentEditAccess(session: AuthSession, documentId: string) {
-  const document = await loadDocumentContext(documentId);
-  if (!await canAccessFinancialDocument(prisma, session, document) || !canEditDocument(session, document, hasPermission(session, 'document.sensitive.read'))) denyWriteAccess();
+export async function requireDocumentEditAccess(session: AuthSession, documentId: string, db: Prisma.TransactionClient = prisma) {
+  const document = await loadDocumentContext(documentId, db);
+  if (!await canAccessFinancialDocument(db, session, document) || !canEditDocument(session, document, hasPermission(session, 'document.sensitive.read'))) denyWriteAccess();
   return document;
 }
 

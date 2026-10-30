@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
+import { assertOperationalAccess } from './admin-operational-state';
 import { loadOrdinaryReplyCandidateContext } from './approved-communications';
 import { canReadOrdinaryAttachments, loadAdmittedOrdinaryMime } from './ordinary-email-inbound-reader';
 import { decodeStoredOrdinaryAttachment } from './ordinary-email-inbound-mime';
@@ -24,6 +25,7 @@ export async function readStoredOrdinaryAttachment(db: Pick<PrismaClient, '$tran
       if (!reply?.messageId) throw new OrdinaryAttachmentUnavailable();
       const parent = await loadOrdinaryReplyCandidateContext(tx, claimed, reply.messageId, runtime);
       if (!canReadOrdinaryAttachments(parent.current)) throw new OrdinaryAttachmentUnavailable();
+      await assertOperationalAccess(tx, 'CommunicationReply', reply.id, parent.current.role, false);
       const { payload, payloadHash } = await loadAdmittedOrdinaryMime(tx, reply);
       if (payloadHash !== request.payloadHash) throw new OrdinaryAttachmentUnavailable();
       const decoded = await decodeStoredOrdinaryAttachment(payload, request.ordinal, request.attachmentHash);

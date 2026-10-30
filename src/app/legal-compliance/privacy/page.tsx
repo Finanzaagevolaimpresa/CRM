@@ -22,8 +22,9 @@ export default async function Page() {
   ]);
 
   return <div className="crm-space-y-6">
-    <PageHeader title="Privacy e consensi" description="Registro interno minimizzato e in sola lettura. Le versioni devono essere validate prima dell’attivazione dei canali di acquisizione." />
+    <PageHeader title="Privacy e consensi" description="Registro delle versioni e delle ricevute. L’Admin gestisce le informative e annota rettifiche conservando le prove originali." />
     <AdminRecordShortcut session={session} model="PrivacyNoticeVersion"/>
+    <AdminRecordShortcut session={session} model="PrivacyEvidenceReceipt"/>
     <Card title="Versioni informative">
       {notices.length === 0 ? <EmptyState title="Nessuna informativa registrata">La fondazione resta fail-closed finché una versione validata non viene registrata con finalità, base giuridica e hash espliciti.</EmptyState> : <Table
         headers={['Codice / versione', 'Finalità', 'Base giuridica', 'Tipo', 'Hash contenuto', 'Stato', 'Decorrenza']}
@@ -40,7 +41,7 @@ export default async function Page() {
     </Card>
     <Card title="Evidenze minimizzate">
       {evidence.length === 0 ? <EmptyState title="Nessuna evidenza acquisita">Non risultano ricevute privacy o marketing. La vista non mostra contatti, IP, testo libero o dati del lead.</EmptyState> : <Table
-        headers={['Data', 'Finalità', 'Decisione', 'Informativa', 'Origine form', 'Catalogo']}
+        headers={['Data', 'Finalità', 'Decisione', 'Informativa', 'Origine form', 'Catalogo', 'Rettifiche']}
         rows={evidence.map((receipt) => [
           formatDateTime(receipt.createdAt),
           <span key={receipt.id}>{receipt.purposeCode}<br /><span className="text-xs text-slate-500">{receipt.legalBasisCode}</span></span>,
@@ -48,6 +49,7 @@ export default async function Page() {
           `${receipt.noticeVersion.noticeCode} · ${receipt.noticeVersion.noticeVersion}`,
           `${receipt.sourceSystem} · ${receipt.formCode}/${receipt.formVersion}`,
           receipt.catalogVersion,
+          <AdminRecordShortcut key="rectify" session={session} model="PrivacyEvidenceReceipt" id={receipt.id}/>,
         ])}
       />}
     </Card>

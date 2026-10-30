@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
-import { uploadVideo, previewVideo, confirmVideo, readVideoReceipt, readVideoSetup, readVideo, readVideoBytes, listVideos, readVideoPreview } from '../src/lib/video-library';
+import { uploadVideo, previewVideo, confirmVideo, settleVideoAttempt, readVideoReceipt, readVideoSetup, readVideo, readVideoBytes, listVideos, readVideoPreview } from '../src/lib/video-library';
 import { type VideoCommand, type VideoDetails } from '../src/lib/video-input';
 import { localPathFromStoragePath } from '../src/lib/storage';
 import { videoStoragePath } from '../src/lib/video-storage';
@@ -48,7 +48,7 @@ async function confirm(f: Awaited<ReturnType<typeof fixture>>, proposed?: VideoC
 
 test('schema71 prefix, restrictive relations and no implicit publication', options, async () => {
   const [r] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(r.count, 72);
+  assert.equal(r.count, 73);
   assert.equal(await db.videoEntry.count(), 0);
   const f = await fixture();
   assert.equal((await readVideoSetup(db, admin.session, f.id)).state, 'DRAFT');
@@ -171,6 +171,59 @@ test('double confirmation and concurrent edits record one atomic revision and au
   assert.equal(await db.videoCommand.count({ where: { id: input.commandId } }), 1);
   assert.equal(await db.videoRevision.count({ where: { videoId: f.id } }), 2);
   assert.equal(await db.auditLog.count({ where: { entityId: f.id, event: 'VIDEO_LIBRARY_MUTATION' } }), 2);
+});
+
+test('replacement first removes access, preserves the previous file and requires fresh publication', options, async () => {
+  const f = await fixture(); await confirm(f);
+  const replacement = randomUUID(); await uploadVideo(db, admin.session, replacement, file(257, 'replacement.mp4'), proof());
+  const proposed = await command(f); assert.ok('details' in proposed);
+  const details = { ...proposed.details, fileId: replacement };
+  await assert.rejects(previewVideo(db, admin.session, { ...proposed, details }));
+  const draft: VideoCommand = { ...proposed, operation: 'SAVE_DRAFT', details };
+  await confirm(f, draft);
+  const reopened = await readVideoSetup(db, admin.session, f.id);
+  assert.equal(reopened.state, 'DRAFT'); assert.equal(reopened.details.fileId, replacement);
+  assert.ok(reopened.files.some(value => value.id === replacement));
+  await assert.rejects(readVideoBytes(db, f.viewer.session, f.id));
+  const old = await db.videoRevision.findFirstOrThrow({ where: { videoId: f.id, version: 2 } });
+  assert.equal((old.snapshot as { fileId: string }).fileId, f.id);
+  assert.equal((await db.videoAsset.findUniqueOrThrow({ where: { id: f.id } })).sizeBytes, 256);
+  await confirm(f);
+  assert.equal((await readVideoBytes(db, f.viewer.session, f.id)).bytes.length, 257);
+  await assert.rejects(readVideoBytes(db, f.other.session, f.id));
+});
+
+test('a reconciled closed attempt is durable and a delayed confirmation cannot publish', options, async () => {
+  const f = await fixture(), input = await command(f), preview = await previewVideo(db, admin.session, input);
+  assert.deepEqual(await settleVideoAttempt(db, admin.session, input, preview.digest), { confirmed: false, closed: true });
+  assert.deepEqual(await settleVideoAttempt(db, admin.session, input, preview.digest), { confirmed: false, closed: true });
+  await assert.rejects(confirmVideo(db, admin.session, input, preview.digest, proof()), /VIDEO_CLOSED/);
+  assert.equal((await readVideoSetup(db, admin.session, f.id)).version, 1);
+  assert.equal(await db.videoCommand.count({ where: { id: input.commandId } }), 0);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId, operation: 'CLOSE' } }), 1);
+  await assert.rejects(db.adminRecordRevision.delete({ where: { commandId: input.commandId } }));
+  await assert.rejects(db.auditLog.delete({ where: { id: 'admin-record:' + input.commandId } }));
+  await confirm(f); assert.equal((await readVideoSetup(db, admin.session, f.id)).state, 'PUBLISHED');
+});
+
+test('a lost successful response resolves to its existing command without another revision', options, async () => {
+  const f = await fixture(), input = await command(f), preview = await previewVideo(db, admin.session, input);
+  await confirmVideo(db, admin.session, input, preview.digest, proof());
+  assert.deepEqual(await settleVideoAttempt(db, admin.session, input, preview.digest), { confirmed: true, closed: false });
+  assert.equal(await db.videoRevision.count({ where: { videoId: f.id } }), 2);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+  await assert.rejects(settleVideoAttempt(db, f.other.session, input, preview.digest));
+});
+
+test('confirmation racing settlement produces one terminal result with no later write', options, async () => {
+  const f = await fixture(), input = await command(f), preview = await previewVideo(db, admin.session, input);
+  await Promise.allSettled([confirmVideo(db, admin.session, input, preview.digest, proof()), settleVideoAttempt(db, admin.session, input, preview.digest)]);
+  const final = await settleVideoAttempt(db, admin.session, input, preview.digest);
+  const applied = await db.videoCommand.count({ where: { id: input.commandId } });
+  const closed = await db.adminRecordRevision.count({ where: { commandId: input.commandId } });
+  assert.equal(applied + closed, 1); assert.equal(final.confirmed, applied === 1); assert.equal(final.closed, closed === 1);
+  await assert.rejects(confirmVideo(db, admin.session, input, preview.digest, proof()));
+  assert.equal(await db.videoRevision.count({ where: { videoId: f.id } }), 1 + applied);
 });
 
 test('audit failure rolls back publication, command and revision; direct unlogged edits are rejected', options, async () => {

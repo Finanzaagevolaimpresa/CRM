@@ -6,7 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { assertOrdinaryEmailRequestOrigin } from './ordinary-email-request-contract';
-import { storeCommunicationFile, revokeCommunicationFile } from './communication-files';
+import { storeCommunicationFile, revokeCommunicationFile, reconcileCommunicationFileCommand } from './communication-files';
 
 async function admission() {
   const session = await requireSession(), h = await headers();
@@ -30,5 +30,13 @@ export async function revokeCommunicationFileAction(raw: unknown): Promise<'RECO
     await revokeCommunicationFile(prisma, await admission(), raw);
     revalidatePath('/communications');
     return 'RECORDED';
+  } catch (error) { unstable_rethrow(error); return 'CHECK_CURRENT'; }
+}
+
+export async function reconcileCommunicationFileAction(raw: unknown): Promise<'RECORDED' | 'CLOSED' | 'UNKNOWN' | 'CHECK_CURRENT'> {
+  try {
+    const result = await reconcileCommunicationFileCommand(prisma, await admission(), raw);
+    revalidatePath('/communications');
+    return result.status;
   } catch (error) { unstable_rethrow(error); return 'CHECK_CURRENT'; }
 }

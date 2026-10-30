@@ -75,7 +75,7 @@ test('native exact preview and lost-response recovery reopen one practice withou
   await expect(page.getByLabel('Tipologia pratica',{exact:true})).toHaveValue('Preparazione sintetica');
   await page.getByLabel('Password corrente',{exact:true}).fill(password);
   await page.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();
-  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.',{exact:true})).toBeVisible();
+  await expect(page.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.',{exact:true})).toBeVisible();
   let captured:{url:string;headers:Record<string,string>;body:Buffer}|undefined;
   await page.route(`**/projects/${row.project.id}/technical-handoff*`,async route=>{
     const request=route.request();

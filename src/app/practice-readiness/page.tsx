@@ -1,3 +1,4 @@
+import { AdminOperationalShortcut } from '@/components/admin-operational-shortcut';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = "force-dynamic";
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
@@ -13,6 +14,7 @@ import { Card, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { PrimaryButton } from "@/components/actions";
 import Link from "next/link";
 import { listAccessiblePracticeReadiness } from "@/lib/practice-readiness";
+import { selectableStoredCatalogRevision } from '@/lib/service-catalog-v2-persistence';
 import { canViewPracticeReadinessWork } from '@/lib/practice-readiness-access';
 import { engagementFeatureEnabled } from "@/lib/internal-engagement-mode";
 import {
@@ -72,7 +74,7 @@ export default async function Page({
     practices,
     intakes,
     offerRows,
-    revisions,
+    catalogRevisionRows,
     projectRows,
     contractRows,
     documentRows,
@@ -82,7 +84,7 @@ export default async function Page({
   ] = await Promise.all([
     listAccessiblePracticeReadiness(prisma, session),
     prisma.controlledIntake.findMany({
-      where: { leadId: { in: activeLeadIds } },
+      where: { leadId: { in: activeLeadIds }, OR: [{ operationalState: null }, { operationalState: { state: 'ACTIVE' } }] },
     }),
     prisma.commercialOffer.findMany({
       where: {
@@ -115,6 +117,7 @@ export default async function Page({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
   ]);
+  const revisions = catalogRevisionRows.filter(row => selectableStoredCatalogRevision(row, new Date()));
   const clientById = new Map(clientRows.map((client) => [client.id, client]));
   const projectById = new Map(
     projectRows.map((project) => [
@@ -355,6 +358,8 @@ export default async function Page({
                   <strong>Pratica {p.id}</strong>
                   <StatusBadge status={p.startedAt ? "avviata" : "in_attesa"} />
                 </div>
+                <AdminOperationalShortcut session={session} model="PracticeReadiness" id={p.id} state={p.lifecycleState}/>
+                {!p.operational&&<p>Pratica o acquisizione sospesa amministrativamente. Le prove restano consultabili.</p>}
                 <p>Residui: {missing.join(", ") || "nessuno"}</p>
                 {canViewPayments ? <p>
                   Accrediti confermati: € {paid} / €{" "}
@@ -372,7 +377,7 @@ export default async function Page({
                     </p>
                   ))}
                 </div> : null}
-                {writable && (
+                {writable && p.operational && (
                   <div className="grid gap-3 md:grid-cols-2">
                     {canViewContracts ? <form action={formalizePracticeAction}>
                       <input type="hidden" name="practiceId" value={p.id} />

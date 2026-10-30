@@ -95,7 +95,10 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   const reconciliation = admin.locator('form').filter({ has: admin.locator('input[name="intent"][value="evidence"]') });
   await reconciliation.getByLabel('Esito', { exact: false }).selectOption('SENT');
   await reconciliation.getByLabel('Riferimento della ricevuta esterna').fill('SYNTHETIC_MANUAL_SEND_ATTESTATION');
-  await reconciliation.getByRole('button', { name: 'Registra dichiarazione' }).click();
+  // The workflow opens the persisted result with a full navigation. Database
+  // commit precedes that navigation, so await it before opening another page.
+  await Promise.all([admin.waitForNavigation({waitUntil:'load'}),
+    reconciliation.getByRole('button', { name: 'Registra dichiarazione' }).click()]);
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('SENT');
   await admin.goto('/settings/communications');
   const incoming = admin.locator('form').filter({ has: admin.locator('input[name="intent"][value="reply"]') });

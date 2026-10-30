@@ -1,4 +1,5 @@
 import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
+import { assertOperationalAccess, AdminOperationalStateError } from './admin-operational-state';
 import { assertLeadOperational as lockOperationalLead, LeadLifecycleError } from './lead-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
@@ -23,12 +24,9 @@ import { lockAuthoritativeInternalSession } from "./internal-session-registry";
 import { engagementFeatureEnabled } from "./internal-engagement-mode";
 import {
   assertSyntheticCatalogDatabase,
-  catalogRevisionIsSelectable,
+  selectableStoredCatalogRevision,
 } from "./service-catalog-v2-persistence";
-import {
-  FAI_SERVICE_CATALOG_V2,
-  validateCatalogSelection,
-} from "./service-catalog-v2";
+import { validateStoredCatalogSelection } from './admin-catalog-revision';
 
 export class PracticeReadinessError extends Error {
   constructor(readonly code: "DISABLED" | "DENIED" | "CONFLICT" | "NOT_READY") {
@@ -164,9 +162,14 @@ async function practiceScope(
   a: Awaited<ReturnType<typeof actor>>,
   id: string,
   write = true,
+  administrativeHistory = false,
 ) {
   const practice = await tx.practiceReadiness.findUnique({ where: { id } });
   if (!practice) throw new PracticeReadinessError("DENIED");
+  try {
+    await assertOperationalAccess(tx, 'PracticeReadiness', practice.id, a.role, write, administrativeHistory);
+    await assertOperationalAccess(tx, 'ControlledIntake', practice.controlledIntakeId, a.role, write, administrativeHistory);
+  } catch (error) { if (error instanceof AdminOperationalStateError) throw new PracticeReadinessError('DENIED'); throw error; }
   await assertProjectOperational(tx, practice);
   const [client, project, intake] = await Promise.all([
     tx.client.findUnique({ where: { id: practice.clientId } }),
@@ -195,6 +198,15 @@ async function practiceScope(
   const context = await loadTechnicalPracticeAccessContext(tx, practice);
   if (!canViewPracticeReadinessWork(a, { ...practice, ...context, lead })) throw new PracticeReadinessError('DENIED');
   return { practice, client, project, intake, lead };
+}
+
+/** The lifecycle editor admits the same current client/project/lead context,
+ * while allowing an Admin to inspect an administratively held source. */
+export async function adminPracticeReadinessSource(tx: Prisma.TransactionClient, claimed: AuthSession, id: string) {
+  const current = await actor(tx, claimed, 'service.read');
+  if (current.role !== 'admin') throw new PracticeReadinessError('DENIED');
+  const source = await practiceScope(tx, current, id, false, true);
+  return { source: source.practice, label: source.client.displayName, href: '/practice-readiness#practice-' + id };
 }
 
 async function canUseDocument(
@@ -374,9 +386,7 @@ export async function proposePracticeOfferRevision(
       const lead = intake
         ? await assertLeadOperational(tx, intake.leadId)
         : null;
-      const definition = FAI_SERVICE_CATALOG_V2.find(
-        (item) => item.code === catalogRevision?.serviceCatalog.code,
-      );
+      const definition = catalogRevision ? selectableStoredCatalogRevision(catalogRevision, new Date()) : null;
       if (
         !intake ||
         !lead ||
@@ -396,13 +406,12 @@ export async function proposePracticeOfferRevision(
         offer.validUntil <= new Date() ||
         !catalogRevision ||
         !definition ||
-        !catalogRevisionIsSelectable(definition, catalogRevision, new Date()) ||
         (input.projectId &&
           (!project || project.deletedAt || project.clientId !== client.id))
       )
         throw new PracticeReadinessError("DENIED");
-      validateCatalogSelection(
-        definition.code,
+      validateStoredCatalogSelection(
+        definition,
         input.digitalProjectType ?? undefined,
       );
       const taxable = offer.taxableAmount,
@@ -518,9 +527,7 @@ export async function createPracticeReadiness(
       const lead = intake
         ? await assertLeadOperational(tx, intake.leadId)
         : null;
-      const definition = FAI_SERVICE_CATALOG_V2.find(
-        (item) => item.code === catalogRevision?.serviceCatalog.code,
-      );
+      const definition = catalogRevision ? selectableStoredCatalogRevision(catalogRevision, new Date()) : null;
       if (
         !client ||
         client.deletedAt ||
@@ -531,8 +538,7 @@ export async function createPracticeReadiness(
         (revision.projectId &&
           (!project || project.deletedAt || project.clientId !== client.id)) ||
         !catalogRevision ||
-        !definition ||
-        !catalogRevisionIsSelectable(definition, catalogRevision, new Date())
+        !definition
       )
         throw new PracticeReadinessError("DENIED");
       const acceptedAt = new Date();
@@ -1511,11 +1517,14 @@ export async function listAccessiblePracticeReadiness(
       for (const row of rows) {
         try {
           const { client, project } = await practiceScope(tx, a, row.id, false);
+          const lifecycle = await assertOperationalAccess(tx, 'PracticeReadiness', row.id, a.role, false);
+          const intakeLifecycle = await assertOperationalAccess(tx, 'ControlledIntake', row.controlledIntakeId, a.role, false);
+          const operational = (!lifecycle || lifecycle.state === 'ACTIVE') && (!intakeLifecycle || intakeLifecycle.state === 'ACTIVE');
           const prerequisites = await resolvePrerequisites(tx, row.id, a);
           // Resolve link eligibility against the complete authoritative context,
           // before concealing contract identifiers from operational readers.
           const linkableServices: { id: string; label: string }[] = [];
-          if (!row.startedAt && row.currentFormalizationId && hasPermission(a, 'service.write') && canEditClient(a, client)) {
+          if (operational && !row.startedAt && row.currentFormalizationId && hasPermission(a, 'service.write') && canEditClient(a, client)) {
             const revision = await tx.serviceCatalogRevision.findUnique({ where: { id: row.serviceRevisionId } });
             if (revision) {
               const candidates = await tx.clientService.findMany({ where: {
@@ -1561,7 +1570,7 @@ export async function listAccessiblePracticeReadiness(
               formalizations.push(formalization);
           }
           visible.push({
-            ...row,
+            ...row, lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, operational,
             contractId: canReadContracts ? row.contractId : null,
             currentFormalizationId: canReadContracts ? row.currentFormalizationId : null,
             signedDocumentId: canReadContracts ? row.signedDocumentId : null,
@@ -1575,7 +1584,7 @@ export async function listAccessiblePracticeReadiness(
             linkableServices,
             formalizations: canReadContracts ? formalizations : [],
             prerequisites: {
-              missing: [...new Set(prerequisites.missing.map(code =>
+              missing: [...(!operational ? ['BLOCCO_AMMINISTRATIVO'] : []), ...new Set(prerequisites.missing.map(code =>
                 (code === 'accredito_iniziale' && !canReadPayments) || (code === 'incarico_formalizzato' && !canReadContracts)
                   ? 'VERIFICA_AMMINISTRATIVA' : code))],
               availableFunding: canReadPayments ? prerequisites.paid.toFixed(2) : null,

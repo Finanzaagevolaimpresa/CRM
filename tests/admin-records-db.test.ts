@@ -1,3 +1,9 @@
+import { writeFile } from 'node:fs/promises';
+import { readAdminCommunicationFile, replaceAdminCommunicationFile, searchAdminCommunicationFileContexts, type AdminCommunicationFileCommand } from '../src/lib/admin-communication-files';
+import { storeCommunicationFile, readCommunicationFile, revokeCommunicationFile, reconcileCommunicationFileCommand } from '../src/lib/communication-files';
+import { previewInternalCommunication, confirmInternalCommunication } from '../src/lib/internal-communications';
+import { localPathFromStoragePath } from '../src/lib/storage';
+import { storedNoticeMessage, linkedOrdinaryNoticeReply } from './record-updates/communication-fixtures';
 import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
 import test, { before, after } from 'node:test';
@@ -13,11 +19,21 @@ import { adminUserVersion } from '../src/lib/admin-user-command-contract';
 import { technicalFixture, technicalTarget } from './technical-assignments/fixtures';
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../src/lib/technical-private-item-service';
 import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-item-contract';
+import { adminHistoryFixture } from './admin-records/history-fixture';
 import { paymentCorrectionFixture } from './admin-records/payment-fixture';
 import { adminDossierFixture } from './admin-records/dossier-fixture';
-import { adminContextFixture, adminContextSnapshot } from './admin-records/context-fixture';
+import { adminContextFixture, adminContextSnapshot, adminGraphFixture } from './admin-records/context-fixture';
 import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
+import { withProjectResources } from '../src/lib/project-resource-guard';
+import { createProjectExpenseRecord } from '../src/lib/project-expenses';
+import { updateClientServiceStatusRecord, updateClientServicePipelineRecord, assignClientServiceRecord, linkDocumentToServiceRecord } from '../src/lib/client-service-operations';
+import { adminCatalogVersion } from '../src/lib/admin-catalog-revision';
+import { catalogV2Storage } from '../src/lib/service-catalog-v2';
+import { selectableStoredCatalogRevision } from '../src/lib/service-catalog-v2-persistence';
+import { createControlledIntake } from '../src/lib/controlled-intake';
+import { proposePracticeOfferRevision } from '../src/lib/practice-readiness';
+import { prepareAdminContextMove, prepareAdminCatalogPublication } from '../src/lib/admin-records';
 import { canReviewAiOutput, canApproveAiOutput } from '../src/lib/access-control';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences,
   type AdminRecordCommand } from '../src/lib/admin-records';
@@ -38,12 +54,62 @@ async function fixture() {
   const project = await db.project.create({ data: { clientId: client.id, title: 'Progetto sintetico', priority: 'media' } });
   return { client, project };
 }
-async function command(model: string, id: string, patch: Record<string, string> = {}, operation: AdminRecordCommand['operation'] = 'UPDATE', actor = admin) {
+async function command(model: string, id: string, patch: Record<string, string> = {}, operation: AdminRecordCommand['operation'] = 'UPDATE', actor = admin): Promise<AdminRecordCommand> {
   const form = await loadAdminRecord(db, actor.session, model, id, operation === 'CREATE');
   return { commandId: randomUUID(), model, id, expectedVersion: form.version, operation, reason: 'Rettifica sintetica isolata',
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+
+test('Admin catalogue revisions are selected by intake and offers, preserve old purchases and require a bound replacement decision', options, async () => {
+  const code = 'synthetic_admin_' + randomUUID().replaceAll('-', ''), id = randomUUID(), sourceMode = process.env.CONTROLLED_INTAKE_MODE;
+  const master = await db.serviceCatalog.create({ data: { code, name: 'Servizio sintetico', category: 'sintetico' } });
+  const detail = { inclusions: ['Attività sintetica'], exclusions: ['Invii reali'], phaseDocuments: ['Documento sintetico'],
+    timing: 'Da concordare', deliverables: ['Rapporto sintetico'], subsequentEngagements: ['Nuovo incarico separato'] };
+  const storage = catalogV2Storage({ sourceCatalogVersion: adminCatalogVersion, detail } as never);
+  const values = { serviceCatalogId: master.id, publicName: 'Revisione sintetica', shortDescription: 'Contenuti sintetici verificati',
+    priceMode: 'FIXED', netPrice: '125.50', termsVersion: 'SYNTHETIC-v1', validUntil: '',
+    operationalConditions: JSON.stringify(storage.operationalConditions), checklist: JSON.stringify(storage.checklist), status: 'PUBLISHED' };
+  const input: AdminRecordCommand = await command('ServiceCatalogRevision', id, values, 'CREATE');
+  await assert.rejects(save(input), /STALE/);
+  const binding = await prepareAdminCatalogPublication(db, admin.session, master.id);
+  input.catalogPublication = { expectedCurrentHash: binding.hash, confirmed: true };
+  await save(input); assert.equal((await save(input)).replayed, true);
+  const first = await db.serviceCatalogRevision.findUniqueOrThrow({ where: { id }, include: { serviceCatalog: true } });
+  assert.equal(first.version, 1); assert.equal(selectableStoredCatalogRevision(first, new Date())?.netPriceCents, 12550);
+  assert.equal(first.checkoutEnabled || first.autoClientDeliveryAllowed || first.autoExternalActionAllowed, false);
+  assert.equal(selectableStoredCatalogRevision({ ...first, contentHash: 'f'.repeat(64) }, new Date()), null);
+  assert.equal(selectableStoredCatalogRevision({ ...first, validUntil: new Date(0) }, new Date()), null);
+  await assert.rejects(save(await command('ServiceCatalogRevision', id, { netPrice: '1' })), /HISTORY/);
+  await assert.rejects(save(await command('ServiceCatalog', master.id, { code: 'changed_synthetic' })), /HISTORY/);
+  process.env.CONTROLLED_INTAKE_MODE = 'synthetic';
+  try {
+    const intake = await createControlledIntake(db, admin.session, { channel: 'EMAIL', sourceId: randomUUID(), sourceOccurredAt: new Date().toISOString(),
+      subjectType: 'IMPRESA', firstName: 'Solo', lastName: 'Sintetico', email: randomUUID() + '@synthetic.invalid',
+      serviceCode: code, effectiveCategory: 'sintetico', need: 'Prova isolata senza invii', indicativeBudget: null });
+    assert.equal((await db.controlledIntake.findUniqueOrThrow({ where: { id: intake.id } })).serviceRevisionId, id);
+    const client = await db.client.create({ data: { displayName: 'Cliente catalogo sintetico', type: 'societa' } });
+    await db.lead.update({ where: { id: intake.leadId }, data: { clientId: client.id } });
+    const offer = await db.commercialOffer.create({ data: { leadId: intake.leadId, clientId: client.id, title: 'Offerta sintetica',
+      taxableAmount: '125.50', vatAmount: '27.61', totalAmount: '153.11', validUntil: new Date(Date.now()+86_400_000) } });
+    const offerRevision = await proposePracticeOfferRevision(db, admin.session, { controlledIntakeId: intake.id, commercialOfferId: offer.id,
+      serviceRevisionId: id, clientId: client.id, scope: 'Solo prova', startupConditions: 'Nessun avvio',
+      requiredInitialAmount: '0', expectedOfferUpdatedAt: offer.updatedAt });
+    assert.equal(offerRevision.serviceRevisionId, id);
+    const next: AdminRecordCommand = await command('ServiceCatalogRevision', randomUUID(), { ...values, netPrice: '199.90' }, 'CREATE');
+    next.catalogPublication = { expectedCurrentHash: binding.hash, confirmed: true };
+    await assert.rejects(save(next), /STALE/);
+    next.catalogPublication.expectedCurrentHash = (await prepareAdminCatalogPublication(db, admin.session, master.id)).hash;
+    await save(next);
+    const previous = await db.serviceCatalogRevision.findUniqueOrThrow({ where: { id } });
+    assert.equal(previous.status, 'RETIRED'); assert.equal(previous.contentHash, first.contentHash);
+    assert.equal((await db.practiceOfferRevision.findUniqueOrThrow({ where: { id: offerRevision.id } })).serviceRevisionId, id);
+    assert.equal(selectableStoredCatalogRevision({ ...previous, serviceCatalog: master }, new Date()), null);
+    await save(await command('ServiceCatalogRevision', next.id, { status: 'RETIRED' }));
+    await assert.rejects(save(await command('ServiceCatalogRevision', next.id, { status: 'PUBLISHED' })), /HISTORY/);
+    assert((await listAdminRecords(db, admin.session, 'ServiceCatalogRevision', 'Revisione sintetica')).rows.some(row => row.id === id));
+  } finally { if (sourceMode === undefined) delete process.env.CONTROLLED_INTAKE_MODE; else process.env.CONTROLLED_INTAKE_MODE = sourceMode; }
+});
 
 test('privacy notice drafts and rectifications preserve immutable identity and never activate a notice', options, async () => {
   const id = randomUUID(), noticeCode = 'SYNTHETIC-' + randomUUID().replaceAll('-', '').toUpperCase();
@@ -62,6 +128,32 @@ test('privacy notice drafts and rectifications preserve immutable identity and n
   const reopened = await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', id);
   assert(reopened.fields.every(field => field.readOnly)); assert.equal(reopened.history[0].action, 'RECTIFY');
   assert.equal((await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id: secondId } })).status, 'DRAFT');
+});
+
+test('Admin notice activation and retirement are exact, replayable and monotonic without changing historical text', options, async () => {
+  const id = randomUUID(), second = randomUUID(), noticeCode = 'SYNTHETIC_' + randomUUID().replaceAll('-', '').toUpperCase();
+  const values = { noticeCode, noticeVersion: 'v1', purposeCode: 'SYNTHETIC_TEST', legalBasisCode: 'SYNTHETIC_TEST',
+    evidenceKind: 'NOTICE_ACKNOWLEDGEMENT', contentHash: 'c'.repeat(64) };
+  await save(await command('PrivacyNoticeVersion', id, values, 'CREATE'));
+  await save(await command('PrivacyNoticeVersion', second, { ...values, noticeVersion: 'v2' }, 'CREATE'));
+  const activation: AdminRecordCommand = { ...await command('PrivacyNoticeVersion', id),
+    noticeLifecycle: { action: 'ACTIVATE', contentHash: values.contentHash, reviewed: true } };
+  await assert.rejects(save({ ...activation, noticeLifecycle: { ...activation.noticeLifecycle!, contentHash: 'd'.repeat(64) } }), /HISTORY/);
+  await save(activation); assert.equal((await save(activation)).replayed, true);
+  const active = await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id } });
+  assert.equal(active.status, 'ACTIVE'); assert(active.effectiveFrom); assert.equal(active.retiredAt, null);
+  const secondActivation: AdminRecordCommand = { ...await command('PrivacyNoticeVersion', second),
+    noticeLifecycle: { action: 'ACTIVATE', contentHash: values.contentHash, reviewed: true } };
+  await assert.rejects(save(secondActivation), /ACTIVE_NOTICE/);
+  await save({ ...await command('PrivacyNoticeVersion', id), noticeLifecycle: { action: 'RETIRE', contentHash: values.contentHash, reviewed: true } });
+  const retired = await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id } });
+  assert.equal(retired.status, 'RETIRED'); assert.deepEqual(retired.effectiveFrom, active.effectiveFrom);
+  assert(retired.retiredAt! >= retired.effectiveFrom!); assert.equal(retired.contentHash, values.contentHash);
+  await assert.rejects(save({ ...activation, ...await command('PrivacyNoticeVersion', id) }), /HISTORY/);
+  await save(secondActivation);
+  assert.equal((await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', id)).noticeLifecycle?.action, null);
+  assert.equal((await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', second)).noticeLifecycle?.action, 'RETIRE');
+  assert.equal(await db.privacyEvidenceReceipt.count({ where: { noticeVersionId: { in: [id, second] } } }), 0);
 });
 
 test('single delivery revocation is durable and receipt corrections never rewrite delivery evidence', options, async () => {
@@ -806,4 +898,655 @@ test('document corrections and recoverable deletion preserve the exact original 
   const manual = await command('Client', randomUUID(), { displayName: 'Anagrafica manuale sintetica', type: 'societa', status: 'attivo' }, 'CREATE');
   await save(manual); const client = await db.client.findUniqueOrThrow({ where: { id: manual.id } });
   assert.equal(client.leadId, null); assert.equal(client.salesOwnerId, null); assert.equal(client.consultantId, null);
+});
+
+test('privacy receipt rectification preserves the original refusal, receipt binding and one durable audit', options, async () => {
+  const f = await adminHistoryFixture(db, admin.user.id);
+  const form = await loadAdminRecord(db, admin.session, 'PrivacyEvidenceReceipt', f.receipt.id);
+  assert(form.fields.every(field => field.readOnly)); assert.equal(form.values.decision, 'DENIED');
+  assert(form.relationships.some(link => link.href.endsWith(f.receipt.noticeVersionId)));
+  const input = await command('PrivacyEvidenceReceipt', f.receipt.id, {}, 'RECTIFY');
+  input.reason = 'Rettifica sintetica della fonte: il rifiuto originale resta conservato.';
+  await save(input); assert.equal((await save(input)).replayed, true);
+  assert.deepEqual(await db.privacyEvidenceReceipt.findUniqueOrThrow({ where: { id: f.receipt.id } }), f.receipt);
+  assert.equal(await db.privacyEvidenceReceipt.count({ where: { websiteLeadReceiptId: f.receipt.websiteLeadReceiptId } }), 2);
+  const reopened = await loadAdminRecord(db, admin.session, 'PrivacyEvidenceReceipt', f.receipt.id);
+  assert.equal(reopened.history[0].reason, input.reason); assert.equal(reopened.history[0].canRestore, false);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { id: 'admin-record:' + input.commandId } }), 1);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), operation: 'UPDATE', values: { decision: 'GRANTED' } }), /HISTORY/);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), operation: 'TRASH' }), /HISTORY/);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), values: { decision: 'GRANTED' } }), /HISTORY/);
+  const limited = await syntheticPerson(db, 'Admin senza lettura privacy');
+  await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'privacy.evidence.read', allowed: false } });
+  await assert.rejects(loadAdminRecord(db, limited.session, 'PrivacyEvidenceReceipt', f.receipt.id), /DENIED/);
+  await assert.rejects(save({ ...input, commandId: randomUUID() }, limited), /DENIED/);
+});
+
+test('controlled source annotation is separate from current lead edits and respects the parent read perimeter', options, async () => {
+  const f = await adminHistoryFixture(db, admin.user.id);
+  const originalLead = await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } });
+  const form = await loadAdminRecord(db, admin.session, 'ControlledIntake', f.intake.id);
+  assert(form.fields.every(field => field.readOnly)); assert(form.relationships.some(link => link.href === '/leads/' + f.lead.id));
+  const input = await command('ControlledIntake', f.intake.id, {}, 'RECTIFY');
+  input.reason = 'Rettifica sintetica: bisogno chiarito, senza attestare pagamento o avvio.';
+  await save(input); assert.equal((await save(input)).replayed, true);
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: f.intake.id } }), f.intake);
+  assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } }), originalLead);
+  await save(await command('Lead', f.lead.id, { notes: 'Esigenza corrente corretta separatamente' }));
+  assert.equal((await db.controlledIntake.findUniqueOrThrow({ where: { id: f.intake.id } })).need, f.intake.need);
+  assert.equal((await loadAdminRecord(db, admin.session, 'ControlledIntake', f.intake.id)).history[0].reason, input.reason);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), operation: 'UPDATE', values: { started: 'true' } }), /HISTORY/);
+  const limited = await syntheticPerson(db, 'Admin senza lettura lead');
+  await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'lead.read', allowed: false } });
+  await assert.rejects(loadAdminRecord(db, limited.session, 'ControlledIntake', f.intake.id), /DENIED/);
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_HISTORY_AUDIT'); } } } }) as unknown as PrismaClient;
+  const failed = { ...input, commandId: randomUUID() };
+  await assert.rejects(saveAdminRecord(failing, admin.session, failed, proof()), /SYNTHETIC_HISTORY_AUDIT/);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: failed.commandId } }), 0);
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: f.intake.id } }), f.intake);
+});
+
+test('service administrative dates can be corrected and restored without changing contract or operational facts', options, async () => {
+  const f = await adminContextFixture(db);
+  const dates = { openedAt: new Date(Date.now() - 10 * 86_400_000).toISOString(), purchasedAt: new Date(Date.now() - 9 * 86_400_000).toISOString() };
+  const input = await command('ClientService', f.service.id, dates);
+  await save(input); assert.equal((await save(input)).replayed, true);
+  const current = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } });
+  assert.equal(current.openedAt.toISOString(), dates.openedAt); assert.equal(current.purchasedAt.toISOString(), dates.purchasedAt);
+  for (const key of ['contractId', 'serviceCatalogId', 'paymentId', 'paymentStatus', 'operationalStatus', 'status', 'completedAt', 'assignedToId'] as const)
+    assert.deepEqual(current[key], f.service[key]);
+  assert.deepEqual(await db.contract.findUniqueOrThrow({ where: { id: f.contract.id } }), f.contract);
+  await assert.rejects(save(await command('ClientService', f.service.id, { purchasedAt: new Date(Date.now()+86_400_000).toISOString() })), /INVALID/);
+  const restore = await loadAdminRecord(db, admin.session, 'ClientService', f.service.id, false, input.commandId);
+  await save({ ...await command('ClientService', f.service.id), values: restore.values });
+  const restored = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } });
+  assert.equal(restored.purchasedAt.toISOString(), f.service.purchasedAt.toISOString());
+  assert.equal(restored.openedAt.toISOString(), f.service.openedAt.toISOString());
+});
+
+test('an explicit company context summary moves the ordinary graph atomically and preserves identities, versions and receipts', options, async () => {
+  const f = await adminGraphFixture(db, admin.user.id);
+  const input: AdminRecordCommand = await command('Company', f.company.id, { clientId: f.clients[1].id });
+  const prepared = await prepareAdminContextMove(db, admin.session, inputForGraph(input));
+  assert.deepEqual(prepared.blocked, []); assert.equal(prepared.rows.length, 7);
+  assert(prepared.rows.some(row => row.id === f.version.id && row.changedFields.length === 0));
+  await assert.rejects(save(input), /DEPENDENCIES/);
+  input.contextMove = { expectedGraphHash: prepared.hash, confirmed: true };
+  await save(input); assert.equal((await save(input)).replayed, true);
+  for (const [model, id] of [['Company', f.company.id], ['Project', f.project.id], ['Task', f.task.id], ['Document', f.document.id]]) {
+    assert.equal((await loadAdminRecord(db, admin.session, model, id)).values.clientId, f.clients[1].id);
+    assert.equal(await db.adminRecordRevision.count({ where: { model, recordId: id, operation: 'UPDATE' } }), 1);
+  }
+  assert.deepEqual(await db.documentVersion.findUniqueOrThrow({ where: { id: f.version.id } }), f.version);
+  assert.deepEqual(await db.projectExpense.findUniqueOrThrow({ where: { id: f.expense.id } }), f.expense);
+  assert.deepEqual(await db.deadline.findUniqueOrThrow({ where: { id: f.deadline.id } }), f.deadline);
+  assert.equal((await readAdminRecordReceipt(db, admin.session, input.commandId))?.id, f.company.id);
+  const restore = await command('Company', f.company.id, { clientId: f.clients[0].id });
+  restore.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(restore))).hash, confirmed: true };
+  await save(restore);
+  assert.equal((await loadAdminRecord(db, admin.session, 'Task', f.task.id)).values.clientId, f.clients[0].id);
+  assert.equal(await db.adminRecordRevision.count({ where: { model: 'Task', recordId: f.task.id } }), 2);
+});
+const inputForGraph = (input: AdminRecordCommand) => ({ model: input.model, id: input.id, expectedVersion: input.expectedVersion, values: input.values });
+
+test('a named task cannot inherit a moved client through an unchanged project link', options, async () => {
+  const f = await fixture(), assigned = await syntheticPerson(db, 'Responsabile sintetico ereditato', 'consulente');
+  const destination = await db.client.create({ data: { displayName: 'Nuovo contesto sintetico', type: 'societa' } });
+  const task = await db.task.create({ data: { projectId: f.project.id, clientId: null,
+    title: 'Attività con solo collegamento progetto', type: 'manuale', assignedToId: assigned.user.id } });
+  const input = await command('Project', f.project.id, { clientId: destination.id });
+  const plan = await prepareAdminContextMove(db, admin.session, inputForGraph(input));
+  assert(plan.blocked.some(message => /incarichi nominativi/.test(message)));
+  input.contextMove = { expectedGraphHash: plan.hash, confirmed: true };
+  await assert.rejects(save(input), /DEPENDENCIES/);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, f.client.id);
+  assert.deepEqual(await db.task.findUniqueOrThrow({ where: { id: task.id } }), task);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+});
+
+test('ordinary project expense creation loses its old-client authority when a graph moves after its initial access check', options, async () => {
+  const writer = await syntheticPerson(db, 'Consulente sintetico precedente', 'consulente'), f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: writer.user.id } });
+  const destination = await db.client.create({ data: { displayName: 'Destinazione riservata sintetica', type: 'societa' } });
+  const input = await command('Project', f.project.id, { clientId: destination.id });
+  input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+  let signal!: () => void, release!: () => void, paused = false;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { project: { async findFirst({ args, query }) {
+    const row = await query(args);
+    if (!paused) { paused = true; signal(); await gate; }
+    return row;
+  } } } }) as unknown as PrismaClient;
+  const raw = { projectId: f.project.id, category: 'software', description: 'Spesa sintetica concorrente', amount: '42.50' };
+  const writing = createProjectExpenseRecord(delayed, writer.session, raw);
+  const observed = assert.rejects(writing, /PROJECT_NOT_OPERATIONAL|non accessibile/);
+  await reached;
+  try { await save(input); } finally { release(); }
+  await observed;
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 0);
+  assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, event: 'project_expense_create' } }), 0);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, destination.id);
+  await db.client.update({ where: { id: destination.id }, data: { consultantId: writer.user.id } });
+  const saved = await createProjectExpenseRecord(db, writer.session, raw);
+  assert.equal(saved.amount.toString(), '42.5');
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 1);
+});
+
+test('ordinary expense creation rechecks a revoked permission after page-time admission and before any effect', options, async () => {
+  const writer = await syntheticPerson(db, 'Consulente sintetico revocato', 'consulente'), f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: writer.user.id } });
+  let signal!: () => void, release!: () => void, paused = false;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { project: { async findFirst({ args, query }) {
+    const row = await query(args);
+    if (!paused) { paused = true; signal(); await gate; }
+    return row;
+  } } } }) as unknown as PrismaClient;
+  const writing = createProjectExpenseRecord(delayed, writer.session,
+    { projectId: f.project.id, category: 'software', description: 'Spesa sintetica senza permesso', amount: '12.00' });
+  const observed = assert.rejects(writing);
+  await reached;
+  try { await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'project.write', allowed: false } }); }
+  finally { release(); }
+  await observed;
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 0);
+  assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, event: 'project_expense_create' } }), 0);
+});
+
+async function serviceCase(actor: Person) {
+  const f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: actor.user.id } });
+  const catalog = await db.serviceCatalog.create({ data: { code: 'synthetic_' + randomUUID(), name: 'Servizio isolato', category: 'sintetico' } });
+  const service = await db.clientService.create({ data: { clientId: f.client.id, projectId: f.project.id, serviceCatalogId: catalog.id } });
+  return { ...f, service };
+}
+function pauseBeforeTransaction() {
+  let signal!: () => void, release!: () => void;
+  const reached = new Promise<void>(resolve => { signal = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = new Proxy(db, { get(target, property) {
+    if (property === '$transaction') return async (...args: unknown[]) => {
+      signal(); await gate; return Reflect.apply(target.$transaction, target, args);
+    };
+    const value = Reflect.get(target, property, target);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  return { delayed, reached, release };
+}
+const serviceWriters = {
+  status: (client: PrismaClient, actor: Person, id: string) => updateClientServiceStatusRecord(client, actor.session, id, 'sospeso'),
+  pipeline: (client: PrismaClient, actor: Person, id: string) => updateClientServicePipelineRecord(client, actor.session,
+    { id, operationalStatus: 'nuova', operationalNotes: 'Nota sintetica corrente' }, false),
+};
+for (const [operation, write] of Object.entries(serviceWriters)) {
+  test(`ordinary service ${operation} rejects an admitted old-client write after an Admin graph move, then accepts fresh destination authority`, options, async () => {
+    const writer = await syntheticPerson(db, 'Consulente servizio sintetico', 'consulente'), f = await serviceCase(writer);
+    const first = await write(db, writer, f.service.id);
+    assert.equal(first.id, f.service.id);
+    const auditWhere = { actorId: writer.user.id, entityType: 'ClientService', entityId: f.service.id };
+    const priorAudits = await db.auditLog.count({ where: auditWhere });
+    assert.equal(priorAudits, 1);
+    const destination = await db.client.create({ data: { displayName: 'Destinazione servizio sintetica', type: 'societa' } });
+    const input = await command('Project', f.project.id, { clientId: destination.id });
+    input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+    const gate = pauseBeforeTransaction(), writing = write(gate.delayed, writer, f.service.id);
+    const rejected = assert.rejects(writing, /PROJECT_NOT_OPERATIONAL|non accessibile/);
+    await gate.reached;
+    let moved!: typeof f.service;
+    try { await save(input); moved = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }); }
+    finally { gate.release(); }
+    await rejected;
+    assert.equal(moved.clientId, destination.id);
+    assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }), moved);
+    assert.equal(await db.auditLog.count({ where: auditWhere }), priorAudits);
+    assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 1);
+    await db.client.update({ where: { id: destination.id }, data: { consultantId: writer.user.id } });
+    assert.equal((await write(db, writer, f.service.id)).clientId, destination.id);
+    assert.equal(await db.auditLog.count({ where: auditWhere }), priorAudits + 1);
+  });
+  test(`ordinary service ${operation} rejects revoked permission, client responsibility and registry session after admission with zero effects`, options, async () => {
+    for (const revocation of ['permission', 'responsibility', 'session']) {
+      const writer = await syntheticPerson(db, 'Consulente servizio revocato', 'consulente'), f = await serviceCase(writer);
+      const gate = pauseBeforeTransaction(), writing = write(gate.delayed, writer, f.service.id), rejected = assert.rejects(writing);
+      await gate.reached;
+      try {
+        if (revocation === 'permission') await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'service.write', allowed: false } });
+        if (revocation === 'responsibility') await db.client.update({ where: { id: f.client.id }, data: { consultantId: null } });
+        if (revocation === 'session') await db.internalSession.update({ where: { id: writer.session.sessionId! }, data: { revokedAt: new Date() } });
+      } finally { gate.release(); }
+      await rejected;
+      assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }), f.service, revocation);
+      assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: f.service.id } }), 0, revocation);
+    }
+  });
+}
+
+test('ordinary service commands preserve current closure, financial and personal assignment restrictions', options, async () => {
+  const writer = await syntheticPerson(db, 'Consulente servizio vincolato', 'consulente'), f = await serviceCase(writer);
+  const target = await syntheticPerson(db, 'Altro tecnico sintetico', 'consulente');
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: writer.user.id, permission: 'service.close', allowed: false },
+    { userId: writer.user.id, permission: 'payment.read', allowed: false },
+  ] });
+  await assert.rejects(updateClientServiceStatusRecord(db, writer.session, f.service.id, 'chiuso'));
+  await assert.rejects(updateClientServiceStatusRecord(db, writer.session, f.service.id, 'pagato'));
+  await assert.rejects(updateClientServicePipelineRecord(db, writer.session, { id: f.service.id, operationalStatus: 'chiusa' }, false));
+  await assert.rejects(updateClientServicePipelineRecord(db, writer.session,
+    { id: f.service.id, operationalStatus: 'nuova', assignedToId: target.user.id }, true));
+  assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } }), f.service);
+  assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: f.service.id } }), 0);
+});
+
+test('pipeline omission retains a concurrently assigned service owner from the locked current record', options, async () => {
+  const writer = await syntheticPerson(db, 'Admin pipeline sintetico', 'admin'), f = await serviceCase(writer);
+  const target = await syntheticPerson(db, 'Nuovo responsabile sintetico', 'consulente');
+  const gate = pauseBeforeTransaction(), writing = serviceWriters.pipeline(gate.delayed, writer, f.service.id);
+  await gate.reached;
+  try { await assignClientServiceRecord(db, admin.session, f.service.id, target.user.id); } finally { gate.release(); }
+  assert.equal((await writing).assignedToId, target.user.id);
+  assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId, target.user.id);
+});
+
+test('manual service assignment binds its old context and rechecks the current service.assign permission', options, async () => {
+  for (const change of ['context', 'permission']) {
+    const writer = await syntheticPerson(db, 'Admin incarico sintetico', 'admin'), f = await serviceCase(writer);
+    // Client responsibility is irrelevant to this Admin and is not transferred.
+    await db.client.update({ where: { id: f.client.id }, data: { consultantId: null } });
+    const target = await syntheticPerson(db, 'Tecnico incarico sintetico', 'consulente');
+    const gate = pauseBeforeTransaction();
+    const writing = assignClientServiceRecord(gate.delayed, writer.session, f.service.id, target.user.id), rejected = assert.rejects(writing);
+    await gate.reached;
+    try {
+      if (change === 'context') {
+        const destination = await db.client.create({ data: { displayName: 'Destinazione incarico sintetica', type: 'societa' } });
+        const input = await command('Project', f.project.id, { clientId: destination.id });
+        input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+        await save(input);
+      } else await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'service.assign', allowed: false } });
+    } finally { gate.release(); }
+    await rejected;
+    assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId, null);
+    assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: f.service.id } }), 0);
+  }
+});
+
+
+for (const change of ['context', 'permission']) {
+  test(`document service linking rejects a target ${change} change after admission without cross-client links or audit`, options, async () => {
+    const writer = await syntheticPerson(db, 'Consulente allegato sintetico', 'consulente'), f = await serviceCase(writer);
+    const doc = await db.document.create({ data: { clientId: f.client.id, title: 'Documento sintetico indipendente',
+      fileName: 'indipendente.txt', type: 'text/plain', mimeType: 'text/plain', sizeBytes: 4,
+      storagePath: 'synthetic/' + randomUUID(), uploadedById: writer.user.id, documentCategory: 'altro', serviceArea: 'progetto_investimento' } });
+    const raw = { documentId: doc.id, clientServiceId: f.service.id, serviceArea: 'progetto_investimento', documentCategory: 'altro' };
+    assert.equal((await linkDocumentToServiceRecord(db, writer.session, raw)).clientServiceId, f.service.id);
+    const unchanged = await linkDocumentToServiceRecord(db, writer.session, { ...raw, clientServiceId: undefined });
+    const gate = pauseBeforeTransaction();
+    const writing = linkDocumentToServiceRecord(gate.delayed, writer.session, raw), rejected = assert.rejects(writing);
+    await gate.reached;
+    try {
+      if (change === 'context') {
+        const destination = await db.client.create({ data: { displayName: 'Destinazione allegato sintetica', type: 'societa' } });
+        const input = await command('Project', f.project.id, { clientId: destination.id });
+        input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+        await save(input);
+        // Even authority over both clients must not make this old link consistent.
+        await db.client.update({ where: { id: destination.id }, data: { consultantId: writer.user.id } });
+      } else await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'service.write', allowed: false } });
+    } finally { gate.release(); }
+    await rejected;
+    assert.deepEqual(await db.document.findUniqueOrThrow({ where: { id: doc.id } }), unchanged);
+    assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, entityId: doc.id, event: 'document_service_link' } }), 2);
+    await assert.rejects(linkDocumentToServiceRecord(db, writer.session, raw));
+    assert.equal((await db.document.findUniqueOrThrow({ where: { id: doc.id } })).clientServiceId, null);
+  });
+}
+
+test('a new child after graph preview and an audit failure both preserve the entire original context', options, async () => {
+  const f = await adminGraphFixture(db, admin.user.id);
+  const input = await command('Company', f.company.id, { clientId: f.clients[1].id });
+  input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+  await db.task.create({ data: { clientId: f.clients[0].id, companyId: f.company.id, projectId: f.project.id, title: 'Nuovo figlio dopo anteprima', type: 'manuale' } });
+  await assert.rejects(save(input), /STALE/);
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: f.company.id } })).clientId, f.clients[0].id);
+  input.contextMove.expectedGraphHash = (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash;
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_GRAPH_AUDIT'); } } } }) as unknown as PrismaClient;
+  await assert.rejects(saveAdminRecord(failing, admin.session, input, proof()), /SYNTHETIC_GRAPH_AUDIT/);
+  for (const [model, id] of [['Company', f.company.id], ['Project', f.project.id], ['Task', f.task.id], ['Document', f.document.id]]) {
+    assert.equal((await loadAdminRecord(db, admin.session, model, id)).values.clientId, f.clients[0].id);
+    assert.equal(await db.adminRecordRevision.count({ where: { model, recordId: id } }), 0);
+  }
+  await assert.rejects(save(input, admin, 1801));
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: f.company.id } })).clientId, f.clients[0].id);
+});
+
+test('graph moves expose active selective grants as blockers and never transfer access or named assignments', options, async () => {
+  const f = await fixture(), reader = await syntheticPerson(db, 'Destinatario selettivo del grafo');
+  const destination = await db.client.create({ data: { displayName: 'Destinazione sintetica', type: 'societa' } });
+  const preview = await previewSelectiveAccess(db, admin.session, { projectId: f.project.id, recipientId: reader.user.id,
+    revision: 0, fields: ['title'], documents: [], expiresAt: null });
+  await confirmSelectiveAccess(db, admin.session, preview.token, true);
+  const grant = await db.selectiveProjectGrant.findFirstOrThrow({ where: { projectId: f.project.id } });
+  const input = await command('Project', f.project.id, { clientId: destination.id });
+  const plan = await prepareAdminContextMove(db, admin.session, inputForGraph(input));
+  assert(plan.blocked.some(message => /concessioni selettive del progetto/.test(message)));
+  input.contextMove = { expectedGraphHash: plan.hash, confirmed: true };
+  await assert.rejects(save(input), /DEPENDENCIES/);
+  assert.deepEqual(await db.selectiveProjectGrant.findUniqueOrThrow({ where: { id: grant.id } }), grant);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, f.client.id);
+  const g = await adminGraphFixture(db, admin.user.id);
+  await db.task.update({ where: { id: g.task.id }, data: { assignedToId: reader.user.id } });
+  const assigned = await command('Company', g.company.id, { clientId: g.clients[1].id });
+  const named = await prepareAdminContextMove(db, admin.session, inputForGraph(assigned));
+  assert(named.blocked.some(message => /incarichi nominativi/.test(message)));
+});
+
+test('practice recontextualization updates an internal draft together and rejects incompatible parent destinations', options, async () => {
+  const a = await fixture(), b = await fixture();
+  const practice = await db.technicalPractice.create({ data: { clientId: a.client.id, projectId: a.project.id,
+    title: 'Pratica sintetica da ricollegare', practiceType: 'sintetica', targetEntity: 'nessuno', createdById: admin.user.id } });
+  const draft = await db.practiceCommunication.create({ data: { technicalPracticeId: practice.id, clientId: a.client.id, projectId: a.project.id,
+    title: 'Nota sintetica interna', content: 'Nessun invio', type: 'interna', channel: 'nota_interna', status: 'bozza', createdById: admin.user.id } });
+  const invalid = await command('TechnicalPractice', practice.id, { projectId: b.project.id });
+  await assert.rejects(prepareAdminContextMove(db, admin.session, inputForGraph(invalid)), /CONTEXT/);
+  const input = await command('TechnicalPractice', practice.id, { clientId: b.client.id, projectId: b.project.id });
+  const plan = await prepareAdminContextMove(db, admin.session, inputForGraph(input)); assert.deepEqual(plan.blocked, []);
+  input.contextMove = { expectedGraphHash: plan.hash, confirmed: true }; await save(input);
+  const moved = await db.practiceCommunication.findUniqueOrThrow({ where: { id: draft.id } });
+  assert.equal(moved.clientId, b.client.id); assert.equal(moved.projectId, b.project.id); assert.equal(moved.content, draft.content);
+  assert.equal(moved.createdById, draft.createdById); assert.equal(moved.usedAt, null); assert.equal(moved.reviewedById, null);
+});
+
+test('a concurrent ordinary writer cannot save a stale child context after an administrative graph move', options, async () => {
+  const f = await adminGraphFixture(db, admin.user.id), writer = await syntheticPerson(db, 'Scrittore concorrente sintetico');
+  const input = await command('Company', f.company.id, { clientId: f.clients[1].id });
+  input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+  let signal!: () => void, release!: () => void;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { company: { async update({ args, query }) { signal(); await gate; return query(args); } } } }) as unknown as PrismaClient;
+  const saving = saveAdminRecord(delayed, admin.session, input, proof());
+  await reached;
+  const id = randomUUID(), writing = withProjectResources(db, writer.user.id, [{ clientId: f.clients[0].id, companyId: f.company.id, projectId: f.project.id }], tx =>
+    tx.task.create({ data: { id, clientId: f.clients[0].id, companyId: f.company.id, projectId: f.project.id, title: 'Scrittura obsoleta', type: 'manuale' } }));
+  const observed = Promise.allSettled([saving, writing]); release();
+  const results = await observed;
+  assert.equal(results[0].status, 'fulfilled'); assert.equal(results[1].status, 'rejected');
+  assert.equal(await db.task.findUnique({ where: { id } }), null);
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: f.company.id } })).clientId, f.clients[1].id);
+});
+
+async function communicationFileCase(actor = admin, providedContext?: { kind: 'LEAD' | 'INTERNAL'; id: string }) {
+  const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'comunicazioni@finanzaagevolaimpresa.it' } });
+  await db.$executeRaw`INSERT INTO "OrdinaryEmailAuthority" ("id","userId","mailboxId","enabled")
+    VALUES ('ordinary-email',${actor.user.id},${box.id}::uuid,true)
+    ON CONFLICT ("id") DO UPDATE SET "userId"=EXCLUDED."userId","mailboxId"=EXCLUDED."mailboxId","enabled"=true,"revision"="OrdinaryEmailAuthority"."revision"+1`;
+  const lead = await db.lead.create({ data: { firstName: 'Fonte', lastName: 'Sintetica', email: randomUUID() + '@synthetic.invalid' } });
+  const context = providedContext ?? { kind: 'LEAD' as const, id: lead.id };
+  const bytes = Buffer.from('SYNTHETIC PRIVATE FILE ' + randomUUID()), id = randomUUID();
+  await storeCommunicationFile(db, actor.session, { id, context, classification: 'ORDINARY' },
+    new File([bytes], 'originale.txt', { type: 'text/plain' }));
+  const source = await db.communicationContextFile.findUniqueOrThrow({ where: { id } });
+  return { actor, lead, context, bytes, source, box };
+}
+async function fileChange(f: Awaited<ReturnType<typeof communicationFileCase>>, patch: Partial<AdminCommunicationFileCommand> = {}) {
+  const current = await readAdminCommunicationFile(db, f.actor.session, f.source.id);
+  return { commandId: randomUUID(), id: randomUUID(), sourceId: f.source.id, expectedVersion: current.expectedVersion,
+    context: f.context, action: 'REPLACE', fileName: 'corretta.txt', classification: 'ORDINARY',
+    reason: 'Correzione sintetica isolata', confirmed: true, ...patch } satisfies AdminCommunicationFileCommand;
+}
+const fileSave = (f: Awaited<ReturnType<typeof communicationFileCase>>, input: AdminCommunicationFileCommand, file: File | null = null,
+  database = db) => replaceAdminCommunicationFile(database, f.actor.session, input, file, proof(f.actor));
+
+test('communication sources expose immutable original fields and append only attributed administrative rectifications', options, async () => {
+  const f = await communicationFileCase(), notice = await storedNoticeMessage(db, { leadId: f.lead.id, authorId: admin.user.id });
+  const incoming = await linkedOrdinaryNoticeReply(db, notice.message.id, notice.mailbox.id, admin.user.id);
+  for (const [model, id] of [['CommunicationReply', incoming.reply.id], ['CommunicationContextFile', f.source.id]]) {
+    const form = await loadAdminRecord(db, admin.session, model, id);
+    assert(form.fields.every(field => field.readOnly));
+    assert(form.relationships.some(link => link.href.startsWith('/communications?')));
+    await assert.rejects(save(await command(model, id, {})), /HISTORY/);
+    const correction = await command(model, id, {}, 'RECTIFY');
+    await save(correction);
+    assert.equal((await readAdminRecordReceipt(db, admin.session, correction.commandId))?.id, id);
+    const history = await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: correction.commandId } });
+    assert.deepEqual(history.before, history.after);
+    assert((await loadAdminRecord(db, admin.session, model, id)).history.some(row => row.id === correction.commandId && !row.canRestore));
+  }
+  assert.deepEqual(await db.communicationReply.findUniqueOrThrow({ where: { id: incoming.reply.id } }), incoming.reply);
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), f.source);
+  const reader = await syntheticPerson(db, 'Lettore sintetico non Admin', 'consulente');
+  await assert.rejects(loadAdminRecord(db, reader.session, 'CommunicationReply', incoming.reply.id));
+});
+
+test('a conflicted inbound source stays excluded from Admin editors, lists and receipts by native admission', options, async () => {
+  const f = await communicationFileCase(), notice = await storedNoticeMessage(db, { leadId: f.lead.id, authorId: admin.user.id });
+  const incoming = await linkedOrdinaryNoticeReply(db, notice.message.id, notice.mailbox.id, admin.user.id);
+  const correction = await command('CommunicationReply', incoming.reply.id, {}, 'RECTIFY');
+  await save(correction); await incoming.conflict();
+  await assert.rejects(loadAdminRecord(db, admin.session, 'CommunicationReply', incoming.reply.id));
+  assert.equal((await listAdminRecords(db, admin.session, 'CommunicationReply', incoming.reply.id)).rows.length, 0);
+  await assert.rejects(readAdminRecordReceipt(db, admin.session, correction.commandId));
+  await assert.rejects(save({ ...correction, commandId: randomUUID() }));
+});
+
+test('file metadata replacement preserves original bytes, revokes the source and replays a single persisted result', options, async () => {
+  const f = await communicationFileCase(), input = await fileChange(f);
+  const priorMessages = await db.approvedCommunication.count();
+  const saved = await fileSave(f, input); assert.equal(saved.replayed, false);
+  assert.equal((await fileSave(f, input)).replayed, true);
+  const original = await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } });
+  assert(original.revokedAt); assert.deepEqual({ ...original, revokedAt: null }, f.source);
+  const current = await db.communicationContextFile.findUniqueOrThrow({ where: { id: input.id } });
+  assert.equal(current.fileName, input.fileName); assert.equal(current.sha256, f.source.sha256); assert.equal(current.revokedAt, null);
+  assert((await readCommunicationFile(db, admin.session, { id: current.id, context: f.context, sha256: current.sha256 })).bytes.equals(f.bytes));
+  await assert.rejects(readCommunicationFile(db, admin.session, { id: original.id, context: f.context, sha256: original.sha256 }));
+  assert.equal((await readAdminCommunicationFile(db, admin.session, current.id)).sourceId, original.id);
+  assert((await readAdminCommunicationFile(db, admin.session, original.id)).children.some(child => child.id === current.id));
+  assert.equal(await db.adminRecordRevision.count({ where: { recordId: current.id, operation: 'CREATE' } }), 1);
+  assert.equal(await db.adminRecordRevision.count({ where: { recordId: original.id, operation: 'UPDATE' } }), 1);
+  assert.equal((await readAdminRecordReceipt(db, admin.session, input.commandId))?.id, current.id);
+  assert.equal(await db.approvedCommunication.count(), priorMessages);
+});
+
+test('recovering a revoked file creates a distinct selectable version without undoing the original revocation', options, async () => {
+  const f = await communicationFileCase();
+  await revokeCommunicationFile(db, admin.session, { id: f.source.id, context: f.context, sha256: f.source.sha256 });
+  const revoked = await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } });
+  const input = await fileChange(f, { action: 'RESTORE', fileName: 'recuperata.txt' });
+  await fileSave(f, input);
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), revoked);
+  const current = await db.communicationContextFile.findUniqueOrThrow({ where: { id: input.id } });
+  assert.notEqual(current.id, revoked.id); assert.equal(current.sha256, revoked.sha256); assert.equal(current.revokedAt, null);
+  assert((await readCommunicationFile(db, admin.session, { id: current.id, context: f.context, sha256: current.sha256 })).bytes.equals(f.bytes));
+  await assert.rejects(fileSave(f, { ...input, commandId: randomUUID(), id: randomUUID() }, new File(['changed'], 'changed.txt')));
+});
+
+test('replacement bytes and a new context are explicit, independently admitted and never expand real grants', options, async () => {
+  const f = await communicationFileCase(), target = await db.client.create({ data: { type: 'societa', displayName: 'Destinazione sintetica file' } });
+  const input = await fileChange(f, { context: { kind: 'CLIENT', id: target.id }, classification: 'SENSITIVE', fileName: 'nuovi-dati.txt' });
+  const counts = [await db.selectiveClientGrant.count(), await db.selectiveProjectGrant.count(), await db.selectivePracticeGrant.count()];
+  const content = new File(['NEW SYNTHETIC BYTES'], 'nuovi-dati.txt', { type: 'text/plain' });
+  await fileSave(f, input, content);
+  const row = await db.communicationContextFile.findUniqueOrThrow({ where: { id: input.id } });
+  assert.equal(row.clientId, target.id); assert.equal(row.leadId, null); assert.notEqual(row.sha256, f.source.sha256);
+  assert.equal((await readCommunicationFile(db, admin.session, { id: row.id, context: input.context, sha256: row.sha256 })).bytes.toString(), 'NEW SYNTHETIC BYTES');
+  await assert.rejects(readCommunicationFile(db, admin.session, { id: row.id, context: f.context, sha256: row.sha256 }));
+  assert.deepEqual([await db.selectiveClientGrant.count(), await db.selectiveProjectGrant.count(), await db.selectivePracticeGrant.count()], counts);
+  const choices = await searchAdminCommunicationFileContexts(db, admin.session, { kind: 'CLIENT', query: 'Destinazione sintetica file' });
+  assert(choices.choices.some(choice => choice.context.id === target.id));
+});
+
+test('file commands reject changed replay payloads, stale sources and a settled closed attempt', options, async () => {
+  const f = await communicationFileCase(), input = await fileChange(f);
+  await fileSave(f, input);
+  await assert.rejects(fileSave(f, { ...input, reason: 'Changed synthetic intent' }), /STALE/);
+  await assert.rejects(fileSave(f, { ...input, commandId: randomUUID(), id: randomUUID() }), /STALE/);
+  const next = await fileChange(f, { action: 'RESTORE' });
+  const closed = await closeAdminRecordAttempt(db, admin.session, { commandId: next.commandId, model: 'CommunicationContextFile', id: next.id });
+  assert(closed.closed); await assert.rejects(fileSave(f, next), /CLOSED/);
+  assert.equal(await db.communicationContextFile.findUnique({ where: { id: next.id } }), null);
+});
+
+test('file version writes require current Admin proof, session, permission and native communication authority', options, async () => {
+  const editor = await syntheticPerson(db, 'Admin file sintetico', 'admin'), f = await communicationFileCase(editor), input = await fileChange(f);
+  await assert.rejects(replaceAdminCommunicationFile(db, editor.session, input, null, proof(editor, 1801)));
+  const old = { ...editor, ...await syntheticSession(db, editor.user) };
+  await db.internalSession.update({ where: { id: old.session.sessionId! }, data: { revokedAt: new Date() } });
+  await assert.rejects(replaceAdminCommunicationFile(db, old.session, input, null, proof(old)));
+  const other = await syntheticPerson(db, 'Altro Admin senza autorità file', 'admin');
+  await assert.rejects(replaceAdminCommunicationFile(db, other.session, input, null, proof(other)));
+  await db.userPermissionOverride.create({ data: { userId: editor.user.id, permission: 'practice_communications.write', allowed: false } });
+  await assert.rejects(fileSave(f, input));
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), f.source);
+  assert.equal(await db.communicationContextFile.findUnique({ where: { id: input.id } }), null);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+});
+
+test('an atomic file journal failure rolls back both rows and retry reuses only the exact previously staged bytes', options, async () => {
+  const f = await communicationFileCase(), input = await fileChange(f);
+  const failing = db.$extends({ query: { auditLog: { async create({ args, query }) {
+    if (args.data.id === 'admin-record:' + input.commandId) throw new Error('SYNTHETIC_FILE_JOURNAL_FAILURE');
+    return query(args);
+  } } } }) as unknown as PrismaClient;
+  await assert.rejects(fileSave(f, input, null, failing), /SYNTHETIC_FILE_JOURNAL_FAILURE/);
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), f.source);
+  assert.equal(await db.communicationContextFile.findUnique({ where: { id: input.id } }), null);
+  assert.equal(await db.adminRecordRevision.count({ where: { recordId: { in: [f.source.id, input.id] } } }), 1);
+  await fileSave(f, input);
+  assert.equal(await db.adminRecordRevision.count({ where: { recordId: { in: [f.source.id, input.id] } } }), 3);
+});
+
+test('closing an in-flight file replacement observes its committed receipt instead of creating a competing retry', options, async () => {
+  const f = await communicationFileCase(), input = await fileChange(f);
+  let signal!: () => void, release!: () => void;
+  const reached = new Promise<void>(r => { signal = r; }), gate = new Promise<void>(r => { release = r; });
+  const delayed = db.$extends({ query: { communicationContextFile: { async create({ args, query }) {
+    signal(); await gate; return query(args);
+  } } } }) as unknown as PrismaClient;
+  const saving = fileSave(f, input, null, delayed);
+  await reached;
+  const closing = closeAdminRecordAttempt(db, admin.session, { commandId: input.commandId, model: 'CommunicationContextFile', id: input.id });
+  const both = Promise.all([saving, closing]); release();
+  const [written, settled] = await both; assert.equal(written.id, settled.id); assert.equal(settled.closed, false);
+  assert.equal(await db.communicationContextFile.count({ where: { id: input.id } }), 1);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 1);
+});
+
+test('private internal file sources stay isolated from an Admin who is not a participant', options, async () => {
+  const owner = await syntheticPerson(db, 'Proprietario interno sintetico', 'admin'), member = await syntheticPerson(db, 'Partecipante interno sintetico', 'consulente');
+  await communicationFileCase(owner); // Bind the native synthetic communication authority before creating the private context.
+  const thread = { id: randomUUID(), expectedVersion: 0, title: 'Conversazione privata sintetica', selection: { userIds: [member.user.id], groups: [] } };
+  const preview = await previewInternalCommunication(db, owner.session, thread, proof(owner));
+  await confirmInternalCommunication(db, owner.session, thread, preview.evidenceHash, proof(owner));
+  const f = await communicationFileCase(owner, { kind: 'INTERNAL', id: thread.id });
+  assert.equal((await readAdminCommunicationFile(db, owner.session, f.source.id)).id, f.source.id);
+  await assert.rejects(readAdminCommunicationFile(db, admin.session, f.source.id));
+  await assert.rejects(loadAdminRecord(db, admin.session, 'CommunicationContextFile', f.source.id));
+  assert.equal((await listAdminRecords(db, admin.session, 'CommunicationContextFile', f.source.id)).rows.length, 0);
+});
+
+test('corrupt stored bytes never become a recovered file and leave the original revocation intact', options, async () => {
+  const f = await communicationFileCase();
+  await revokeCommunicationFile(db, admin.session, { id: f.source.id, context: f.context, sha256: f.source.sha256 });
+  const revoked = await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), input = await fileChange(f, { action: 'RESTORE' });
+  const path = localPathFromStoragePath(f.source.storagePath);
+  await writeFile(path, Buffer.from('CORRUPT SYNTHETIC BYTES'));
+  try { await assert.rejects(fileSave(f, input), /STALE/); } finally { await writeFile(path, f.bytes); }
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), revoked);
+  assert.equal(await db.communicationContextFile.findUnique({ where: { id: input.id } }), null);
+});
+
+test('revoked file versions still count against the native context quota during recovery', options, async () => {
+  const f = await communicationFileCase();
+  await revokeCommunicationFile(db, admin.session, { id: f.source.id, context: f.context, sha256: f.source.sha256 });
+  await db.communicationContextFile.createMany({ data: Array.from({ length: 99 }, () => {
+    const id = randomUUID(); return { id, contextKind: 'LEAD', leadId: f.lead.id, uploadedById: admin.user.id,
+      fileName: 'quota-sintetica.txt', mimeType: 'text/plain', sizeBytes: 1, sha256: 'a'.repeat(64),
+      storagePath: 'synthetic/quota/' + id, classification: 'ORDINARY', revokedAt: new Date() };
+  }) });
+  const input = await fileChange(f, { action: 'RESTORE' });
+  await assert.rejects(fileSave(f, input), /QUOTA/);
+  assert.equal(await db.communicationContextFile.findUnique({ where: { id: input.id } }), null);
+});
+
+test('native file upload replays exactly one row and receipt and rejects a different file under the same command', options, async () => {
+  const f = await communicationFileCase(), input = { id: f.source.id, context: f.context, classification: 'ORDINARY' };
+  assert.equal((await storeCommunicationFile(db, admin.session, input, new File([f.bytes], 'originale.txt', { type: 'text/plain' }))).replayed, true);
+  await assert.rejects(storeCommunicationFile(db, admin.session, input, new File(['different'], 'originale.txt', { type: 'text/plain' })), /CONFLICT/);
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session,
+    { id: f.source.id, commandId: f.source.id, context: f.context, operation: 'UPLOAD', close: false })).status, 'RECORDED');
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: f.source.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.source.id, event: 'communication_file_uploaded' } }), 1);
+});
+
+test('closing an absent native upload blocks late arrival but permits a new explicit file identity', options, async () => {
+  const f = await communicationFileCase(), id = randomUUID();
+  const attempt = { id, commandId: id, context: f.context, operation: 'UPLOAD', close: false };
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session, attempt)).status, 'UNKNOWN');
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session, { ...attempt, close: true })).status, 'CLOSED');
+  await assert.rejects(storeCommunicationFile(db, admin.session, { id, context: f.context, classification: 'ORDINARY' }, new File(['late'], 'late.txt')), /CONFLICT/);
+  assert.equal(await db.communicationContextFile.findUnique({ where: { id } }), null);
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session, attempt)).status, 'CLOSED');
+  const fresh = randomUUID();
+  await storeCommunicationFile(db, admin.session, { id: fresh, context: f.context, classification: 'ORDINARY' }, new File(['fresh'], 'fresh.txt'));
+  assert.equal(await db.communicationContextFile.count({ where: { id: fresh } }), 1);
+});
+
+test('native revocation has one immutable effect and a receipt observable after the file leaves active lists', options, async () => {
+  const f = await communicationFileCase(), commandId = randomUUID();
+  const raw = { id: f.source.id, context: f.context, sha256: f.source.sha256, commandId };
+  assert.equal((await revokeCommunicationFile(db, admin.session, raw)).replayed, false);
+  const revoked = await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } });
+  assert.equal((await revokeCommunicationFile(db, admin.session, raw)).replayed, true);
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), revoked);
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session,
+    { id: f.source.id, commandId, context: f.context, operation: 'REVOKE', close: true })).status, 'RECORDED');
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.source.id, event: 'communication_file_revoked' } }), 1);
+});
+
+test('closing an unused revocation protects the active file from the late command and a fresh decision remains possible', options, async () => {
+  const f = await communicationFileCase(), commandId = randomUUID();
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session,
+    { id: f.source.id, commandId, context: f.context, operation: 'REVOKE', close: true })).status, 'CLOSED');
+  await assert.rejects(revokeCommunicationFile(db, admin.session, { id: f.source.id, context: f.context, sha256: f.source.sha256, commandId }), /CONFLICT/);
+  assert.deepEqual(await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } }), f.source);
+  await revokeCommunicationFile(db, admin.session, { id: f.source.id, context: f.context, sha256: f.source.sha256, commandId: randomUUID() });
+  assert((await db.communicationContextFile.findUniqueOrThrow({ where: { id: f.source.id } })).revokedAt);
+});
+
+test('an in-flight native upload is reconciled under the same command lock with one persisted effect', options, async () => {
+  const f = await communicationFileCase(), id = randomUUID();
+  let signal!: () => void, release!: () => void;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { communicationContextFile: { async create({ args, query }) {
+    if (args.data.id === id) { signal(); await gate; } return query(args);
+  } } } }) as unknown as PrismaClient;
+  const writing = storeCommunicationFile(delayed, admin.session, { id, context: f.context, classification: 'ORDINARY' }, new File(['pending'], 'pending.txt'));
+  await reached;
+  const closing = reconcileCommunicationFileCommand(db, admin.session, { id, commandId: id, context: f.context, operation: 'UPLOAD', close: true });
+  const both = Promise.all([writing, closing]); release();
+  assert.equal((await both)[1].status, 'RECORDED');
+  assert.equal(await db.communicationContextFile.count({ where: { id } }), 1);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: id } }), 1);
+});
+
+test('file receipt settlement revalidates the current native context after its original admission is lost', options, async () => {
+  const f = await communicationFileCase();
+  const attempt = { commandId: f.source.id, model: 'CommunicationContextFile', id: f.source.id };
+  assert.equal((await closeAdminRecordAttempt(db, admin.session, attempt)).closed, false);
+  await db.lead.update({ where: { id: f.lead.id }, data: { deletedAt: new Date() } });
+  await assert.rejects(readAdminRecordReceipt(db, admin.session, f.source.id));
+  await assert.rejects(closeAdminRecordAttempt(db, admin.session, attempt));
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: f.source.id } }), 1);
+  assert.equal((await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: f.source.id } })).operation, 'CREATE');
+});
+
+test('native file command reconciliation rejects another actor and a substituted context without exposing a receipt', options, async () => {
+  const f = await communicationFileCase(), other = await syntheticPerson(db, 'Admin ricevute altrui sintetico', 'admin');
+  const attempt = { id: f.source.id, commandId: f.source.id, context: f.context, operation: 'UPLOAD', close: false };
+  await assert.rejects(reconcileCommunicationFileCommand(db, other.session, attempt));
+  const otherLead = await db.lead.create({ data: { firstName: 'Altro', lastName: 'Contesto sintetico' } });
+  await assert.rejects(reconcileCommunicationFileCommand(db, admin.session, { ...attempt, context: { kind: 'LEAD', id: otherLead.id } }));
+  assert.equal((await reconcileCommunicationFileCommand(db, admin.session, attempt)).status, 'RECORDED');
 });

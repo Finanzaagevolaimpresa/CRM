@@ -65,15 +65,15 @@ jobs:
           echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/videos-documents" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 72
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 73
       - name: PostgreSQL private library, quota, audit and current permissions
         if: matrix.target == 'postgresql'
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/video-library-db.test.ts | tee "$VIDEOS_EVIDENCE/postgresql.tap"
-          grep -q '^# tests 17$' "$VIDEOS_EVIDENCE/postgresql.tap"
-          grep -q '^# pass 17$' "$VIDEOS_EVIDENCE/postgresql.tap"
+          grep -q '^# tests 21$' "$VIDEOS_EVIDENCE/postgresql.tap"
+          grep -q '^# pass 21$' "$VIDEOS_EVIDENCE/postgresql.tap"
           grep -q '^# skipped 0$' "$VIDEOS_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic UI case
         if: matrix.target == 'browser'
@@ -96,7 +96,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$VIDEOS_EVIDENCE/playwright.json" npx playwright test --config tests/private-videos/playwright.config.ts --reporter=line,json | tee "$VIDEOS_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.VIDEOS_EVIDENCE+"/playwright.json"); if(r.stats.expected!==9 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+          node -e 'const r=require(process.env.VIDEOS_EVIDENCE+"/playwright.json"); if(r.stats.expected!==12 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
       - name: Bind result to candidate and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$VIDEOS_EVIDENCE/source.txt"
