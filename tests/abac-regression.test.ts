@@ -100,6 +100,8 @@ test('la pratica tecnica del consulente resta limitata al titolare tecnico', () 
 const actionsPath = resolve(process.cwd(), 'src/lib/actions.ts');
 const actionsSourceText = readFileSync(actionsPath, 'utf8');
 const actionsSource = ts.createSourceFile(actionsPath, actionsSourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+const servicePath = resolve(process.cwd(), 'src/lib/client-service-operations.ts');
+const serviceSource = ts.createSourceFile(servicePath, readFileSync(servicePath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
 function functionDeclaration(name: string, source = actionsSource) {
   let declaration: ts.FunctionDeclaration | undefined;
@@ -166,16 +168,12 @@ test('documenti e checklist invocano le guardie ABAC prima delle scritture', () 
     assertGuardsBeforeMutation('storeUploadedDocument', ['lockAuthoritativeInternalSession', 'hasPermission', 'requireClientContextWriteAccess', 'canAccessFinancialDocumentMetadata', 'assertLive'], mutation, uploadSource);
   }
   assert.match(functionBody('storeUploadedDocument', uploadSource), /requireClientContextWriteAccess\(actor, data, tx\)/);
-  assertGuardsBeforeMutation(
-    'linkDocumentToService',
-    ['requireDocumentEditAccess', 'requireServiceEditAccess'],
-    'tx.document.update',
-  );
-  assert.match(
-    functionBody('linkDocumentToService'),
-    /currentDocument\.clientServiceId[\s\S]*requireServiceEditAccess\(s, currentDocument\.clientServiceId\)/,
-    'linkDocumentToService: manca la guardia sul servizio sorgente',
-  );
+  assertGuardsBeforeMutation('linkDocumentToService', ['requirePermission'], 'linkDocumentToServiceRecord');
+  assertGuardsBeforeMutation('linkDocumentToServiceRecord',
+    ['requireDocumentEditAccess', 'requireServiceEditAccess', 'lockLeadWriteActor'], 'tx.document.update', serviceSource);
+  assert.match(functionBody('linkDocumentToServiceRecord', serviceSource),
+    /\[admitted\.clientServiceId, data\.clientServiceId\]/, 'Il servizio sorgente e quello destinazione devono essere entrambi ammessi');
+  assert.match(functionBody('linkDocumentToServiceRecord', serviceSource), /requireServiceEditAccess\(current, prior\.id, tx\)/);
   assertGuardsBeforeMutation('updateDocumentSection', ['requireDocumentEditAccess'], 'tx.document.update');
   assertGuardsBeforeMutation('createDocumentChecklistItem', ['assertChecklistContext'], 'tx.documentChecklistItem.create');
   assertGuardsBeforeMutation('createStandardDocumentChecklist', ['assertChecklistContext'], 'withProjectResources');
@@ -202,9 +200,16 @@ test('task e servizi invocano le guardie ABAC prima delle scritture', () => {
   assert.match(functionBody('assertTaskContext'), /requireClientContextWriteAccess/);
 
   assertGuardsBeforeMutation('createClientService', ['requireClientContextWriteAccess', 'withAssignmentGuard'], 'tx.clientService.create');
-  assertGuardsBeforeMutation('updateClientServiceStatus', ['requireServiceEditAccess'], 'tx.clientService.update');
-  assertGuardsBeforeMutation('assignClientService', ['requireServiceAssignAccess', 'withAssignmentGuard'], 'tx.clientService.update');
-  assertGuardsBeforeMutation('updateClientServicePipeline', ['requireServiceEditAccess'], 'tx.clientService.update');
+  for (const action of ['updateClientServiceStatus', 'assignClientService', 'updateClientServicePipeline']) {
+    assertGuardsBeforeMutation(action, ['requirePermission'], action + 'Record');
+    assertGuardsBeforeMutation(action + 'Record', ['withServiceMutation'], 'tx.clientService.update', serviceSource);
+  }
+  assertGuardsBeforeMutation('assignClientServiceRecord', ['authorizeManualAssignment', 'requireUnboundServiceAssignment'],
+    'tx.clientService.update', serviceSource);
+  assertGuardsBeforeMutation('withServiceMutation', ['lockLeadWriteActor', 'admit'], 'work', serviceSource);
+  assert.match(functionBody('withServiceMutation', serviceSource), /requireServiceAssignAccess : requireServiceEditAccess/);
+  assert.match(functionBody('withServiceMutation', serviceSource), /await admit\(current, id, tx\)/);
+
 });
 
 test('la verifica ABAC rileva guardie mancanti o successive alla mutazione', () => {
@@ -222,8 +227,6 @@ test('la verifica ABAC rileva guardie mancanti o successive alla mutazione', () 
 test('gli stati finali dei servizi richiedono service.close prima della mutazione', () => {
   for (const [action, mutation] of [
     ['createClientService', 'tx.clientService.create'],
-    ['updateClientServiceStatus', 'tx.clientService.update'],
-    ['updateClientServicePipeline', 'tx.clientService.update'],
   ] as const) {
     const declaration = functionDeclaration(action);
     let permissionIndex = -1;
@@ -240,6 +243,9 @@ test('gli stati finali dei servizi richiedono service.close prima della mutazion
     assert.notEqual(permissionIndex, -1, `${action}: controllo service.close assente`);
     assert.ok(permissionIndex < mutationIndex, `${action}: service.close verificato dopo la mutazione`);
   }
+  for (const action of ['updateClientServiceStatusRecord', 'updateClientServicePipelineRecord'])
+    assertGuardsBeforeMutation(action, ['requireClose'], 'tx.clientService.update', serviceSource);
+  assert.match(functionBody('requireClose', serviceSource), /hasPermission\(actor, 'service.close'\)/);
 });
 
 test('pratiche tecniche invocano le guardie ABAC prima delle scritture', () => {
