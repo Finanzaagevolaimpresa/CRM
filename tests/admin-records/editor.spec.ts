@@ -592,6 +592,7 @@ test('received-source annotation and revoked-file recovery keep immutable histor
 test('native upload and revocation recover their outcomes after lost responses without duplicate file effects', async ({ page }) => {
   const source = await browserCommunicationFile();
   await login(page); await page.goto('/communications?kind=LEAD&practice=' + source.lead.id);
+  await page.getByText('Allegati del contesto', { exact: true }).click();
   const upload = page.locator('form').filter({ has: page.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }) });
   const id = await upload.locator('input[name="id"]').inputValue();
   await upload.getByLabel('Allegato da caricare', { exact: true }).setInputFiles({ name: 'esito-nativo.txt', mimeType: 'text/plain', buffer: Buffer.from('SYNTHETIC_NATIVE_OUTCOME') });
@@ -623,6 +624,7 @@ test('native upload and revocation recover their outcomes after lost responses w
 test('an interrupted native upload can be closed before a fresh choice and its late command cannot create the file', async ({ page }) => {
   const source = await browserCommunicationFile();
   await login(page);await page.goto('/communications?kind=LEAD&practice=' + source.lead.id);
+  await page.getByText('Allegati del contesto', { exact: true }).click();
   const upload = page.locator('form').filter({ has: page.getByRole('button', { name: 'Carica allegato nel contesto', exact: true }) });
   const id = await upload.locator('input[name="id"]').inputValue();
   await upload.getByLabel('Allegato da caricare', { exact: true }).setInputFiles({ name: 'tentativo-chiuso.txt', mimeType: 'text/plain', buffer: Buffer.from('SYNTHETIC_CLOSED_UPLOAD') });

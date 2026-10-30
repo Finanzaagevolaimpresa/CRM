@@ -137,7 +137,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     <p className="text-sm">Per l’invio manuale, scarica il messaggio approvato e usa il tuo client email. Quando l’invio dal CRM è disponibile, scegli «Approva e invia» sulla versione esatta. Le due modalità conservano ricevute distinte.</p>
     {data.isAdmin ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     {query.result && feedback[query.result] ? <p role="status" className="rounded-xl bg-slate-100 p-3">{feedback[query.result]}</p> : null}
-    <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Allegati del contesto</summary>
+    <details open={Boolean(pendingFile?.success)} className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Allegati del contesto</summary>
       <CommunicationFiles key={`${data.context.kind}-${data.context.id}`}
         context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} isAdmin={data.isAdmin} pendingAttempt={pendingFile?.success ? pendingFile.data : undefined} requestId={randomUUID()} />
     </details>

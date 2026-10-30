@@ -78,7 +78,7 @@ export function AdminCommunicationFileEditor({ data, commandId, versionId, recov
     </section>
     {data.canWrite ? <form onSubmit={event=>{event.preventDefault();void submit();}} className="space-y-4">
       <fieldset disabled={frozen} className="space-y-4">
-        <label className="block">Operazione<select className={inputClass} value={action} onChange={event=>{setAction(event.target.value as typeof action);setConfirmed(false);}}>
+        <label className="block">Operazione<select aria-label="Operazione" className={inputClass} value={action} onChange={event=>{setAction(event.target.value as typeof action);setConfirmed(false);}}>
           <option value="REPLACE">Crea una versione corretta e revoca la precedente se disponibile</option>
           {data.revokedAt && <option value="RESTORE">Recupera i byte conservati come nuova versione</option>}
         </select></label>
@@ -87,11 +87,11 @@ export function AdminCommunicationFileEditor({ data, commandId, versionId, recov
           onChange={event=>{fileRef.current=event.target.files?.[0]??null;setSelectedFile(fileRef.current?.name??'');setConfirmed(false);}}/>
           <span className="text-sm">{selectedFile ? 'Selezionato: '+selectedFile : 'Senza nuovo file vengono riutilizzati i byte originali verificati.'}</span></label>}
         <label className="block">Nome della nuova versione<input className={inputClass} value={fileName} required maxLength={200} onChange={event=>{setFileName(event.target.value);setConfirmed(false);}}/></label>
-        <label className="block">Riservatezza<select className={inputClass} value={classification} onChange={event=>{setClassification(event.target.value as typeof classification);setConfirmed(false);}}>
+        <label className="block">Riservatezza<select aria-label="Riservatezza" className={inputClass} value={classification} onChange={event=>{setClassification(event.target.value as typeof classification);setConfirmed(false);}}>
           <option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option><option value="COMPLAINT">Reclamo · solo Admin</option></select></label>
         <section className="space-y-3 rounded-xl border p-4"><h2 className="font-bold">Destinazione della nuova versione</h2>
           <p aria-label="Destinazione scelta">{kinds[target.context.kind]}: {target.label}</p>
-          <label>Tipo di contesto<select className={inputClass} value={kind} onChange={event=>{setKind(event.target.value as typeof kind);setChoices([]);setMore(false);}}>
+          <label>Tipo di contesto<select aria-label="Tipo di contesto" className={inputClass} value={kind} onChange={event=>{setKind(event.target.value as typeof kind);setChoices([]);setMore(false);}}>
             {Object.entries(kinds).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
           <label>Cerca per nome<input className={inputClass} value={query} maxLength={120} onChange={event=>setQuery(event.target.value)}/></label>
           <button type="button" className="underline" onClick={()=>void search(1)}>Cerca destinazione</button>
