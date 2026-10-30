@@ -201,7 +201,7 @@ test('payment adjustment selects an exact evidence version and reopens the prese
   await proof.getByRole('button', { name: 'Cerca collegamenti', exact: true }).click();
   const version = proof.getByLabel('Documento e versione a prova della rettifica', { exact: true });
   await expect(version.locator(`option[value="${payment.version.id}"]`)).toHaveCount(1); await version.selectOption(payment.version.id);
-  await proof.getByLabel('Data effettiva della rettifica documentata · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(payment.effectiveAt)));
+  await proof.getByLabel('Data effettiva della rettifica documentata · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(payment.effectiveAt)).replace(/:00$/, ''));
   await proof.getByRole('checkbox').check(); await reason(page); await save(page);
   await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
   await expect(page.getByLabel('Stato', { exact: true })).toHaveValue('stornato');
@@ -531,7 +531,9 @@ test('file replacement keeps selected bytes, destination and choices through exp
   await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
   await expect(inline).toContainText('Identità confermata.');
   await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
+  const versionId = new URL(page.url()).searchParams.get('version')!;
   await page.getByRole('link', { name: 'Apri la nuova versione registrata', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp('/admin/communication-files/' + versionId));
   await expect(page.getByLabel('Nome della nuova versione', { exact: true })).toHaveValue('corretta-browser.txt');
   const id = new URL(page.url()).pathname.split('/').pop()!;
   const saved = await db.communicationContextFile.findUniqueOrThrow({ where: { id } });
@@ -581,7 +583,9 @@ test('received-source annotation and revoked-file recovery keep immutable histor
   await page.getByLabel('Motivo della correzione o del recupero', { exact: true }).fill('Recupero sintetico della versione conservata');
   await page.getByRole('checkbox', { name: /Confermo la nuova versione e la destinazione indicate/ }).check();
   await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
+  const versionId = new URL(page.url()).searchParams.get('version')!;
   await page.getByRole('link', { name: 'Apri la nuova versione registrata', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp('/admin/communication-files/' + versionId));
   const id = new URL(page.url()).pathname.split('/').pop()!;
   expect(id).not.toBe(revoked.id);
   expect((await db.communicationContextFile.findUniqueOrThrow({ where: { id } })).sha256).toBe(revoked.sha256);
