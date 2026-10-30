@@ -55,7 +55,7 @@ async function readClientDocumentOptions(tx: Tx, manager: Recipient, clientId: s
   for (const d of rows.slice(0, limits.documents)) {
     if (d.visibilityLevel === 'interno') provenanceAllowed.push(d);
     else {
-      try { if (await selectedTechnicalAcquisition(tx, manager.id, d)) provenanceAllowed.push(d); }
+      try { const saved=await selectedTechnicalAcquisition(tx, manager.id, d);if(saved)provenanceAllowed.push(saved.effectiveDocument); }
       catch (error) {
         // Preserve the existing sharing catalogue. A complete technical read
         // may omit a denied private version, never a storage/serialization error.
@@ -122,9 +122,10 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
     const identity = identities.find(row => row.id === choice.versionId);
     if (!identity) return unavailable();
     const version = await tx.documentVersion.findUnique({ where: { id: choice.versionId } });
-    const document = await tx.document.findUnique({ where: { id: identity.documentId } });
-    const acquired = document?.visibilityLevel === technicalDocumentPrivateVisibility
-      ? await selectedTechnicalAcquisition(tx, authorityId, document) : null;
+    const originalDocument = await tx.document.findUnique({ where: { id: identity.documentId } });
+    const acquired = originalDocument?.visibilityLevel === technicalDocumentPrivateVisibility
+      ? await selectedTechnicalAcquisition(tx, authorityId, originalDocument) : null;
+    const document=acquired?.effectiveDocument??originalDocument;
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (!clock || !version || version.documentId !== identity.documentId || !document || document.deletedAt
       || document.clientId !== clientId || (document.visibilityLevel !== 'interno' && !acquired)
@@ -134,6 +135,7 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
       || (document.validUntil && document.validUntil <= clock.now)
       || (isSensitiveDocument(document) && !hasPermission(target, 'document.sensitive.read'))
       || (choice.download && !hasPermission(target, 'document.download'))
+      || (originalDocument && !await canAccessFinancialDocument(tx, target, originalDocument))
       || !await canAccessFinancialDocument(tx, target, document)
       || scope.selectiveDocumentIds?.includes(document.id)
       || (document.projectId && scope.selectiveProjectIds?.includes(document.projectId))

@@ -14,6 +14,7 @@ import { canAccessFinancialDocument } from './financial-document-access';
 import { readTechnicalUploadPrivateFile } from './technical-upload-storage';
 import { documentPreviewMime } from './document-preview';
 import { assertOperationalActive, readOperationalState } from './admin-operational-state';
+import { readPrivateDocumentMetadata,effectivePrivateDocument } from './private-document-metadata';
 
 type Tx = Prisma.TransactionClient;
 const deny = (): never => { throw new TechnicalAssignmentError('DENIED'); };
@@ -36,13 +37,17 @@ async function technicalAcquisitionBasis(tx: Tx, authorityId: string, document: 
   if (!saved || saved.record.receipt.documentId !== document.id || saved.record.receipt.actorId !== authorityId
     || !admitsTechnicalAssignmentManager(author, saved.record.receipt.reference.kind)
     || saved.record.admission.authorityRevision !== authority.revision) return deny();
+  const metadata=await readPrivateDocumentMetadata(tx,document,saved.record.command.classification);
+  const effectiveDocument=effectivePrivateDocument(document,metadata.current.values);
+  if(effectiveDocument.containsSensitiveData&&author.permissionOverrides.some(p=>p.permission==='document.sensitive.read'&&!p.allowed)
+    ||!await canAccessFinancialDocument(tx,author,document)||!await canAccessFinancialDocument(tx,author,effectiveDocument))return deny();
   const reference = saved.record.receipt.reference;
   const context = await lockTechnicalAssignmentContext(tx, { kind: reference.kind, targetId: reference.targetId });
   const now = await technicalAssignmentClock(tx);
   if (!context?.operational || context.clientId !== document.clientId || context.projectId !== document.projectId
-    || context.clientServiceId !== document.clientServiceId || (!administrativeHistory && document.validUntil && document.validUntil <= now)) return deny();
+    || context.clientServiceId !== document.clientServiceId || (!administrativeHistory && effectiveDocument.validUntil && effectiveDocument.validUntil <= now)) return deny();
   if (!administrativeHistory) await assertOperationalActive(tx, 'Document', document.id);
-  return { ...saved, contextSha256: context.contextSha256 };
+  return { ...saved, metadata,effectiveDocument,contextSha256: context.contextSha256 };
 }
 
 export async function selectedTechnicalAcquisition(tx: Tx, authorityId: string, document: Document) {
@@ -75,8 +80,9 @@ export async function listPersonalAcquiredDocuments(db: PrismaClient, claimed: A
           || !await canAccessFinancialDocument(tx, state.current, document)
           || (document.containsSensitiveData && !hasPermission(state.current, 'document.sensitive.read'))) continue;
         const lifecycle = await readOperationalState(tx, 'Document', document.id);
-        result.push({ lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, available: (!lifecycle || lifecycle.state === 'ACTIVE') && (!document.validUntil || document.validUntil > await technicalAssignmentClock(tx)), id: document.id, title: document.title, fileName: document.fileName, mimeType: document.mimeType, versionId: saved.version.id,
-          classification: saved.record.command.classification, acquiredAt: saved.record.receipt.recordedAt });
+        const effective=saved.effectiveDocument;
+        result.push({ lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, available: (!lifecycle || lifecycle.state === 'ACTIVE') && (!effective.validUntil || effective.validUntil > await technicalAssignmentClock(tx)), id: document.id, title: effective.title, fileName: document.fileName, mimeType: document.mimeType, versionId: saved.version.id,
+          classification: saved.metadata.current.values.classification,metadataRevision:saved.metadata.current.revision,acquiredAt: saved.record.receipt.recordedAt });
       } catch { /* A stale private record does not become an ordinary document. */ }
     }
     return result;

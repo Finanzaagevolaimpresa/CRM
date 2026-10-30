@@ -20,6 +20,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     {documents.map(d => <Card key={d.id} title={d.title}><div className="min-w-0 space-y-3">
       <p className="break-words">{d.fileName} · versione 1</p><p>Acquisito il {new Date(d.acquiredAt).toLocaleString('it-IT')} · visibilità amministrata personalmente</p>
       <AdminOperationalShortcut session={session} model="Document" id={d.id} state={d.lifecycleState}/>
+      {session.role==='admin'&&<SecondaryLink href={'/admin/private-documents/'+encodeURIComponent(d.id)}>Correggi metadati e consulta le revisioni</SecondaryLink>}
       {d.available?<div className="flex flex-wrap gap-4">{canPreviewSelectedDocument(d) ? <a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}`} target="_blank" rel="noopener noreferrer">Visualizza documento acquisito</a> : <span>Anteprima non disponibile per questo formato.</span>}
         <a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}?download=1`}>Scarica documento acquisito</a></div>:<p>Contenuto sospeso o scaduto. Le informazioni e le prove di acquisizione restano conservate.</p>}
     </div></Card>)}

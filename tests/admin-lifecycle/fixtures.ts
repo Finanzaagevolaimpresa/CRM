@@ -17,7 +17,7 @@ export async function lifecycleReadinessFixture(db:PrismaClient,admin:AuthSessio
   return syntheticCase(db,'dossier_preanalisi',{admin,operator,human1:await syntheticUser(db,'revisore','Revisore sintetico 1'),
     human2:await syntheticUser(db,'revisore','Revisore sintetico 2')});
 }
-export async function lifecyclePrivateDocumentFixture(db:PrismaClient,admin:Person){
+export async function lifecyclePrivateDocumentFixture(db:PrismaClient,admin:Person,classification:'TECHNICAL_DOCUMENT'|'CONTRACT'|'PAYMENT'|'OTHER_CONFIDENTIAL'='TECHNICAL_DOCUMENT'){
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled)
     VALUES('technical-assignment',${admin.user.id},1,true) ON CONFLICT(id) DO UPDATE SET "userId"=EXCLUDED."userId",enabled=true,revision="TechnicalAssignmentAuthority".revision+1`;
@@ -39,7 +39,7 @@ export async function lifecyclePrivateDocumentFixture(db:PrismaClient,admin:Pers
   await confirmTechnicalUploadReview(db,admin.session,leadProof(admin),ref,review.command,review.token,true);
   const reviewed=(await readTechnicalUploadReviewQueue(db,admin.session,ref)).deposits[0];
   const command={commandId:randomUUID(),submissionCommandId:deposit.commandId,sourceSha256:deposit.sourceSha256,
-    reviewCommandId:reviewed.review!.commandId,reviewSha256:reviewed.review!.sha256,classification:'TECHNICAL_DOCUMENT',title:'Documento privato lifecycle',
+    reviewCommandId:reviewed.review!.commandId,reviewSha256:reviewed.review!.sha256,classification,title:'Documento privato lifecycle',
     expiresAt:null,visibility:'ADMIN_PRIVATE'};
   const acquisition=await previewTechnicalDocumentAcquisition(db,admin.session,ref,command);
   const receipt=await confirmTechnicalDocumentAcquisition(db,admin.session,leadProof(admin),ref,acquisition.command,acquisition.token,true);

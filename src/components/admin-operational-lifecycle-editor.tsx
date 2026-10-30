@@ -36,6 +36,7 @@ export function AdminOperationalLifecycleEditor({data,commandId,recovering}:{dat
   }
   return <div className="space-y-5" data-interactive-ready={ready}>
     <nav className="flex flex-wrap gap-4"><Link className="underline" href={data.href}>Apri la scheda nel suo contesto</Link>
+      {data.model==='Document'&&<Link className="underline" href={'/admin/private-documents/'+encodeURIComponent(data.id)}>Correggi i metadati del documento acquisito</Link>}
       <Link className="underline" href={'/admin/lifecycle?model='+data.model}>Tutte le schede di questa area</Link></nav>
     <section className="space-y-2 rounded-xl border p-4"><h2 className="font-bold">{data.kindLabel}: {data.label}</h2>
       <p>Stato corrente: <strong>{adminOperationalLabels[data.state]}</strong> · revisione {data.version}</p>
