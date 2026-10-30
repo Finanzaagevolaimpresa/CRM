@@ -6,7 +6,8 @@ import { revalidatePath } from 'next/cache';
 import { requirePermission, requireSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
-import { requireEnforcedPrivilegedMutation } from './privileged-access';
+import { PrivilegedAdmissionRequired, requireEnforcedPrivilegedMutation } from './privileged-access';
+import type { WorkflowFormState } from '@/components/preserved-workflow-form';
 import { ApprovedCommunicationError, communicationContextSchema } from './approved-communication-contract';
 import { saveApprovedMessageDraft, submitApprovedMessage, approveExactMessage, recordManualMessageEvidence,
   configureCommunicationMailbox, qualifyCommunicationMailbox, acquireManualReply, linkAmbiguousReply } from './approved-communications';
@@ -18,14 +19,16 @@ async function origin() {
   if (!isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new ApprovedCommunicationError('DENIED');
 }
-export async function mutateApprovedMessageAction(form: FormData) {
+export async function mutateApprovedMessageAction(form: FormData): Promise<WorkflowFormState> {
   const session = await requireSession();
   await origin();
   const context = communicationContextSchema.parse({ kind: value(form, 'contextKind'), id: value(form, 'contextId') });
   const target = `/communications?kind=${context.kind}&practice=${encodeURIComponent(context.id)}`;
   const intent = value(form, 'intent');
-  if (intent === 'approve' || (intent === 'evidence' && value(form, 'reconciliation') === 'true'))
-    await requireEnforcedPrivilegedMutation(session, 'M4_MESSAGE_APPROVAL');
+  if (intent === 'approve' || (intent === 'evidence' && value(form, 'reconciliation') === 'true')) {
+    try { await requireEnforcedPrivilegedMutation(session, 'M4_MESSAGE_APPROVAL', { inline: true }); }
+    catch (error) { if (error instanceof PrivilegedAdmissionRequired) return error.formState; throw error; }
+  }
   let errorCode: string | null = null;
   try {
     if (intent === 'draft') await saveApprovedMessageDraft(prisma, session, {
@@ -49,11 +52,14 @@ export async function mutateApprovedMessageAction(form: FormData) {
     });
     else throw new ApprovedCommunicationError('INVALID');
   } catch (error) {
-    if (!(error instanceof ApprovedCommunicationError)) throw error;
+    if (!(error instanceof ApprovedCommunicationError)) return { ok: false, uncertain: true, message: 'Esito non confermato. Verifica il messaggio e la timeline prima di proseguire.' };
     errorCode = error.code;
   }
+  if (errorCode) return { ok: false, message: errorCode === 'CONFLICT' ? 'La versione è cambiata o l’operazione risulta già conclusa. Conserva questa bozza e confronta il messaggio registrato.'
+    : errorCode === 'DENIED' ? 'Accesso o contesto non più valido. La bozza è conservata; verifica i permessi prima di proseguire.'
+    : errorCode === 'SENDER_NOT_READY' ? 'Il mittente non è qualificato per questa operazione. La bozza è conservata.' : 'Controlla campi, contesto, destinatari e permessi. La bozza è conservata.' };
   revalidatePath('/communications');
-  redirect(`${target}&result=${errorCode ?? 'RECORDED'}`);
+  return { ok: true, message: 'Operazione registrata.', href: `${target}&result=RECORDED&focus=${encodeURIComponent(value(form, 'messageId'))}` };
 }
 
 export async function mutateCommunicationAdministrationAction(form: FormData) {

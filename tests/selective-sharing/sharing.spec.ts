@@ -34,7 +34,7 @@ test('personal confirmation, exact preview, recipient routes and revocation with
   expect((await oc.request.get(manage)).status()).toBe(404);
   expect((await rc.request.get(manage)).status()).toBe(404);
   await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   await admin.goto(manage);
   await admin.getByLabel('Persona esistente').selectOption(fixture.recipientId);
   await admin.getByLabel('Titolo', { exact: true }).check(); await admin.getByLabel('Investimento', { exact: true }).check();
@@ -130,7 +130,7 @@ test('P1-01 actual server actions from pre-grant forms deny admin and assigned t
     await login(page, f.reader.user.email);
     if (role === 'admin') {
       await page.goto('/settings/security'); await page.getByLabel('Password corrente').fill(password);
-      await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(page).toHaveURL(/status=active/);
+      await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(page).toHaveURL(/status=active/);
     }
     const url = `/technical-office/practices/${f.technicalPractice.id}`;
     await page.goto(url);

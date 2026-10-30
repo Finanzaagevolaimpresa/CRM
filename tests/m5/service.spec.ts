@@ -35,7 +35,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
   const evidence = [];
   for (const item of f.cases as Array<{ code: InitialServiceCode; clientId: string; serviceId: string; dossierId: string; documentVersionId: string }>) {
     await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-    await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+    await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
     const target = '/client-dossiers/' + item.dossierId;
     await operator.goto(target); await operator.getByText('Compila il template del servizio', { exact: true }).click();
     const template = form(operator, 'template');

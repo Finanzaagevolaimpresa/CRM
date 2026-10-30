@@ -21,7 +21,7 @@ async function login(page: Page, email: string, stepUp = false) {
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) {
     await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
 }
@@ -366,7 +366,7 @@ test('native search continuation uses admitted rows after bulk revocation and ex
   await tc.close(); await other.close();
 });
 
-test('expired native assignment preview is rejected before writing and reload prepares a new explicit decision', async ({ browser }) => {
+test('expired native preview preserves the choices and requires a new explicit preview without reloading', async ({ browser }) => {
   const row = f.rows[5], ac = await browser.newContext(), admin = await ac.newPage();
   await login(admin, f.adminEmail, true); await prepareAssignment(admin, row, row.techA, true);
   const form = admin.getByRole('region', { name: 'Riepilogo incarico', exact: true }).locator('form');
@@ -389,16 +389,20 @@ test('expired native assignment preview is rejected before writing and reload pr
   await form.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
   await expect(admin.getByText('Riepilogo scaduto o non più valido. Nessun incarico modificato da questo tentativo. Ricarica e prepara un nuovo riepilogo.', { exact: true })).toBeVisible();
   expect(substituted).toBe(1); await admin.unroute(pattern);
-  await expect(form.getByRole('button', { name: 'Conferma incarico tecnico', exact: true })).toBeDisabled();
+  await expect(form).toHaveCount(0);
   await expect(admin.getByRole('button', { name: 'Verifica esito della decisione', exact: true })).toHaveCount(0);
   await expect(admin).toHaveURL(url => !url.searchParams.has('assignmentDecision'));
   expect(await assignments(row)).toBe(0); expect(await db.auditLog.count()).toBe(auditBefore);
   const decisions = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalAssignmentDecision" WHERE id=${payload.input.commandId}::uuid`;
   expect(decisions[0].n).toBe(0n);
   await screenshot(admin, 'assignment-expired-preview');
-  await admin.getByRole('link', { name: 'Ricarica per preparare una nuova decisione', exact: true }).click();
   await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toBeEnabled();
-  await assign(admin, row, row.techA, true);
+  await expect(admin.getByRole('textbox', { name: 'Motivo dell’incarico', exact: true })).toHaveValue('Incarico sintetico qualificazione browser');
+  await expect(admin.getByLabel('Descrizione tecnica', { exact: true })).toBeChecked();
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
   expect(await assignments(row)).toBe(1);
   await ac.close();
 });
@@ -426,5 +430,50 @@ test('unobserved transport result keeps the original decision and blocks another
   expect(new URL(admin.url()).searchParams.get('assignmentDecision')).toBe(decision);
   expect(await assignments(row)).toBe(0);
   await screenshot(admin, 'assignment-unobserved-transport');
+  await admin.getByLabel('Verifica eventuali operazioni ancora in corso e chiudi questo tentativo se non risulta registrato.').check();
+  await admin.getByRole('button', { name: 'Riconcilia e chiudi il tentativo', exact: true }).click();
+  await expect(admin.getByText('Tentativo riconciliato e chiuso senza incarico registrato.', { exact: true })).toBeVisible();
+  expect(await assignments(row)).toBe(0);
+  await admin.reload();
+  await admin.getByRole('button', { name: 'Verifica esito della decisione', exact: true }).click();
+  await expect(admin.getByText('Tentativo chiuso senza incarico registrato. Puoi preparare una nuova decisione.', { exact: true })).toBeVisible();
+  await admin.getByRole('link', { name: 'Riapri le scelte della persona', exact: true }).click();
+  await expect(admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
+  await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toBeEnabled();
+  await ac.close();
+});
+
+test('expired Admin confirmation preserves the full draft, renews inline and commits once after a fresh preview', async ({ browser }) => {
+  const row = f.rows[8], ac = await browser.newContext(), admin = await ac.newPage();
+  await login(admin, f.adminEmail, true); await prepareAssignment(admin, row, row.techA, true);
+  const originalUrl = new URL(admin.url());
+  const priorCommand = JSON.parse(await admin.getByRole('region', { name: 'Riepilogo incarico', exact: true }).locator('input[name="command"]').inputValue()).commandId;
+  await ac.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  expect(new URL(admin.url()).pathname).toBe(originalUrl.pathname);
+  await expect(admin.getByRole('textbox', { name: 'Motivo dell’incarico', exact: true })).toHaveValue('Incarico sintetico qualificazione browser');
+  await expect(admin.getByLabel('Descrizione tecnica', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel(new RegExp(row.documents[0].title + ' ·'))).toBeChecked();
+  expect(await assignments(row)).toBe(0);
+  expect(await db.auditLog.count({ where: { id: `technical-attempt:${priorCommand}` } })).toBe(1);
+  const confirmation = admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await confirmation.getByLabel('Password corrente', { exact: true }).fill(password);
+  await confirmation.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(confirmation).toContainText('Identità confermata.');
+  const cookie = (await ac.cookies()).find(value => value.name === 'fai_crm_privileged_step_up')!;
+  const payload = JSON.parse(Buffer.from(cookie.value.split('.')[1], 'base64url').toString('utf8'));
+  expect(payload.r).toBe('admin'); expect(payload.e - payload.i).toBe(1800);
+  expect(cookie.expires - Date.now() / 1000).toBeGreaterThan(1750);
+  expect(await assignments(row)).toBe(0);
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  const nextCommand = JSON.parse(await admin.getByRole('region', { name: 'Riepilogo incarico', exact: true }).locator('input[name="command"]').inputValue()).commandId;
+  expect(nextCommand).not.toBe(priorCommand);
+  await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+  expect(await assignments(row)).toBe(1);
+  await admin.reload(); expect(await assignments(row)).toBe(1);
+  await screenshot(admin, 'admin-inline-confirmation-reopened');
   await ac.close();
 });

@@ -25,7 +25,7 @@ export default async function Page({ params, searchParams }: {
     {commandId && <p role="status" className="rounded-xl border bg-slate-50 p-4">{receipt
       ? `Operazione registrata: ${receipt.operation === 'GRANT' ? 'selezione' : 'revoca'}, revisione ${receipt.revision}. Lo stato corrente è riportato sotto.`
       : 'Ricevuta non disponibile. Verifica lo stato corrente prima di una nuova operazione.'}</p>}
-    <Card title="Scegli cosa condividere"><SelectiveLeadSharing key={randomUUID()} leadId={id} recipients={data.recipients}
+    <Card title="Scegli cosa condividere"><SelectiveLeadSharing key={id} leadId={id} recipients={data.recipients}
       grants={data.grants.map(grant => ({ ...grant, commandId: randomUUID() }))} initialCommandId={randomUUID()} /></Card>
   </div>;
 }

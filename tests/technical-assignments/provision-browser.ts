@@ -17,7 +17,7 @@ async function main() {
   assert.deepEqual(await db.$queryRaw`SELECT id FROM "TechnicalAssignmentAuthority"`, []);
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash), rows = [];
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
-  for (let index = 0; index < 8; index++) {
+  for (let index = 0; index < 9; index++) {
     const f = await technicalFixture(db, admin, hash, index >= 3 ? 'consulente' : 'backoffice');
     for (const doc of f.documents) {
       const dest = localPathFromStoragePath(doc.doc.storagePath);

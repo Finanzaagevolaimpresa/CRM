@@ -64,11 +64,16 @@ test('department does not grant access; actual admin decisions and personal acce
     await capture(admin, path); await form.getByRole('button', { name: 'Registra decisione', exact: true }).click();
     return captured(admin);
   }
-  const initial = await assign(''); await expect(admin).toHaveURL(/\/settings\/security/);
+  const initial = await assign('');
   expect(await decisions()).toHaveLength(0); await replay(tech, initial); expect(await decisions()).toHaveLength(0);
-  if (mode === 'disabled') { await ac.close(); await tc.close(); await oc.close(); return; }
-  await admin.getByLabel('Password corrente').fill(password); await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
-  await assign(''); await expect.poll(async () => (await decisions()).length).toBe(1);
+  if (mode === 'disabled') { await expect(form.getByRole('status')).toContainText('non disponibile'); await ac.close(); await tc.close(); await oc.close(); return; }
+  await expect(admin.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  await expect(form.getByLabel('Motivazione', { exact: true })).toHaveValue('Explicit decision for the synthetic assigned work');
+  await admin.getByLabel('Password corrente', { exact: true }).fill(password);
+  await admin.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(admin.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  expect(await decisions()).toHaveLength(0); await form.getByRole('button', { name: 'Registra decisione', exact: true }).click();
+  await expect.poll(async () => (await decisions()).length).toBe(1);
   await expect(admin.getByText('Referente individuale mancante: presa in carico tecnica non avvenuta.', { exact: true })).toBeVisible();
   await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
   expect(await acceptances()).toHaveLength(0);

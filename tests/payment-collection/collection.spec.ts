@@ -20,7 +20,7 @@ async function login(page: Page, email = f.admin.email, proof = true) {
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (proof) {
     await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click(); await expect(page).toHaveURL(/status=active/);
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click(); await expect(page).toHaveURL(/status=active/);
   }
 }
 async function prepare(page: Page) {
@@ -93,6 +93,14 @@ test('mobile service registration, actual collection, explicit linking and techn
   await form.getByLabel('Scadenza delle attività', { exact: true }).fill('2027-01-15');
   await form.getByLabel('Attività incluse, una per riga', { exact: true }).fill(f.input.activities.join('\n'));
   await form.getByLabel('Motivazione', { exact: true }).fill(f.input.reason); await form.getByRole('checkbox').check();
+  await page.context().clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  expect(await db.technicalPractice.count({ where: { clientId: f.client.id } })).toBe(0);
+  await expect(form.getByLabel('Attività incluse, una per riga', { exact: true })).toHaveValue(f.input.activities.join('\n'));
+  await page.getByLabel('Password corrente', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
   await expect.poll(async () => Boolean(await getHandoffReceipt(db, service.id))).toBe(true);
   await page.goto(`/services/${service.id}/handoff`);
@@ -136,10 +144,20 @@ test('new proof version after preview is rejected with no financial update', asy
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('La prova non è disponibile'); await unpaid();
 });
-test('missing personal step-up redirects without recording collection', async ({ page }) => {
+test('missing personal step-up preserves the exact collection preview and resumes once after confirmation', async ({ page }) => {
   await login(page, f.admin.email, false); await prepare(page);
+  const date = await page.getByLabel('Data e ora effettive dell’incasso', { exact: true }).inputValue();
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
-  await expect(page).toHaveURL(/\/settings\/security/); await unpaid();
+  await expect(page.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible(); await unpaid();
+  await expect(page.getByLabel('Data e ora effettive dell’incasso', { exact: true })).toHaveValue(date);
+  await expect(page.getByLabel('Prova dell’incasso', { exact: true })).toHaveValue(f.command.documentVersionId);
+  await expect(page.getByRole('checkbox')).toBeChecked();
+  await page.getByLabel('Password corrente', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible(); await unpaid();
+  await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Incasso registrato', exact: true })).toBeVisible();
+  expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(1);
 });
 test('unavailable session storage prevents an unrecoverable submission', async ({ page }) => {
   await login(page); await prepare(page);

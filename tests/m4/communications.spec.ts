@@ -28,7 +28,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   const admin = await ac.newPage(), operator = await oc.newPage(), target = `/communications?kind=TECHNICAL&practice=${f.practiceId}`;
   await login(admin, 'admin'); await login(operator, 'operator');
   await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/settings/communications');
   const box = admin.locator('form').filter({ has: admin.locator(`input[name="mailboxId"][value="${f.mailboxId}"]`) });
   const configure = box.filter({ has: admin.locator('input[name="intent"][value="configure"]') });
@@ -65,6 +65,15 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await expect(messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })).toBeVisible();
   await captureManual(admin, 'S07-versione-esatta', 'admin', 'Messaggio sintetico in approvazione con destinatari, testo e allegato della versione esatta.', messageHeading, [messageBody, messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })]);
   await admin.getByLabel('Approvo questo messaggio esatto', { exact: false }).check();
+  await ac.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
+  const inlineApproval = admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inlineApproval).toBeVisible();
+  expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('PENDING');
+  await expect(admin.getByLabel('Approvo questo messaggio esatto', { exact: false })).toBeChecked();
+  await inlineApproval.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inlineApproval.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inlineApproval).toContainText('Identità confermata.');
   await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('APPROVED');
   await operator.reload();
@@ -142,12 +151,12 @@ test('M4 readiness direct URLs and draft submissions follow the current originat
   await ap.goto(`/communications?kind=TECHNICAL&practice=${own.id}`); await fill(draft(ap));
   for (const [name, value] of Object.entries({ contextKind: 'READINESS', contextId: r.practice.id, messageId: message.id, expectedRevision: '1' }))
     await draft(ap).locator(`input[name="${name}"]`).evaluate((node: HTMLInputElement, next: string) => { node.value = next; }, value);
-  await submit(ap, draft(ap).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(ap).toHaveURL(/result=DENIED/);
+  await submit(ap, draft(ap).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(ap.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await footprint()).toEqual(before);
   // B's already rendered form loses authority as soon as the lead changes hands.
-  await fill(draft(bp));
+  await bp.goto(target); await fill(draft(bp));
   await db.lead.update({ where: { id: r.lead.id }, data: { assignedToId: a.id } });
-  await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(bp).toHaveURL(/result=DENIED/);
+  await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(bp.getByRole('status')).toContainText('Accesso o contesto non più valido');
   expect(await footprint()).toEqual(before);
   const revoked = await bp.goto(target), revokedHtml = await revoked!.text();
   for (const marker of [subject, body, recipient, message.id]) expect(revokedHtml).not.toContain(marker);

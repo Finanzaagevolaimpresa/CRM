@@ -4,6 +4,7 @@ import { useState, useSyncExternalStore } from 'react';
 import type { readProjectHandoff, previewProjectHandoff } from '@/lib/project-handoff';
 import type { ProjectHandoffInput } from '@/lib/project-handoff-contract';
 import { previewProjectHandoffAction, confirmProjectHandoffAction, verifyProjectHandoffAction } from '@/lib/project-handoff-actions';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 type Setup = Awaited<ReturnType<typeof readProjectHandoff>>;
 type Preview = Awaited<ReturnType<typeof previewProjectHandoff>>;
 const subscribe = () => () => {};
@@ -22,6 +23,7 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
   const [busy, setBusy] = useState(false), [consent, setConsent] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(resumeCommandId));
   const [practiceId, setPracticeId] = useState(''), [message, setMessage] = useState('');
+  const [needsStepUp, setNeedsStepUp] = useState(false);
   const locked = busy || Boolean(preview) || uncertain || Boolean(practiceId);
   function remember(id: string) {
     const url = new URL(location.href); if (id) url.searchParams.set('command', id); else url.searchParams.delete('command');
@@ -33,7 +35,7 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
       title, practiceType, targetEntity: entity, commercialOwnerId: commercial || null, technicalOwnerId: technical || null };
     try {
       const result = await previewProjectHandoffAction(input);
-      if (result.ok) { setCommand(input); setCommandId(input.commandId); setPreview(result.preview); }
+      if (result.ok) { setCommand(input); setCommandId(input.commandId); setPreview(result.preview); setNeedsStepUp(false); }
       else setMessage(result.message);
     } catch { setMessage('Riepilogo non disponibile. Nessun salvataggio richiesto.'); }
     finally { setBusy(false); }
@@ -44,10 +46,12 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
     try {
       const { digest, expiresAt, proof } = preview;
       const result = await confirmProjectHandoffAction(command, { digest, expiresAt, proof });
-      if (result.ok) { setPracticeId(result.result.practiceId); setMessage('Pratica preparata. La presa in carico e l’avvio del servizio restano da verificare.'); }
+      if (result.ok) { setPracticeId(result.result.practiceId); setNeedsStepUp(false); setMessage('Pratica preparata. La presa in carico e l’avvio del servizio restano da verificare.'); }
       else {
         setMessage(result.message); setUncertain(!result.definite);
-        if (result.definite) { setPreview(null); setCommand(null); remember(''); }
+        setNeedsStepUp(result.stepUpRequired);
+        if (result.stepUpRequired) remember('');
+        if (result.definite && !result.stepUpRequired) { setPreview(null); setCommand(null); remember(''); }
       }
     } catch { setUncertain(true); setMessage('Risposta non ricevuta. Verifica l’esito prima di qualsiasi altra creazione.'); }
     finally { setBusy(false); }
@@ -83,6 +87,7 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
         <button type="button" className="rounded-xl border px-4 py-2" disabled={busy || uncertain} onClick={() => { setPreview(null); setConsent(false); }}>Modifica riepilogo</button></div>
     </section>}
     {message && <p role="status" className="rounded-xl bg-slate-100 p-3">{message}</p>}
+    {needsStepUp && <InlinePrivilegedConfirmation />}
     {uncertain && <button type="button" className={button} disabled={busy} onClick={verify}>Verifica esito</button>}
     {practiceId && <Link className="inline-block font-bold underline" href={`/technical-office/practices/${practiceId}`}>Apri pratica preparata</Link>}
   </div>;

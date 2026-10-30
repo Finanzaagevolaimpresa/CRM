@@ -6,13 +6,14 @@ import { ZodError } from 'zod';
 import { requirePermission } from './auth';
 import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { requireEnforcedPrivilegedMutation, privilegedStepUpCookieName } from './privileged-access';
+import { PrivilegedAdmissionRequired, requireEnforcedPrivilegedMutation, privilegedStepUpCookieName } from './privileged-access';
 import { confirmPracticeSharing, previewPracticeSharing, revokePracticeSharing, readPracticeSharingReceipt, PracticeSharingError } from './selective-practice-access';
 
-export type PracticeSharingState = { ok: boolean; message: string; uncertain?: boolean;
+export type PracticeSharingState = { ok: boolean; message: string; stepUpRequired?: boolean; uncertain?: boolean;
   preview?: Awaited<ReturnType<typeof previewPracticeSharing>>;
   receipt?: NonNullable<Awaited<ReturnType<typeof readPracticeSharingReceipt>>> };
 function failure(error: unknown): PracticeSharingState {
+  if (error instanceof PrivilegedAdmissionRequired) return error.formState;
   if (error instanceof ZodError) return { ok: false, message: 'Selezione non valida. Prepara una nuova anteprima.' };
   if (error instanceof PracticeSharingError) return { ok: false, message: error.code === 'STALE'
     ? 'Dati, destinatario o permessi cambiati. Ricarica la scheda e prepara una nuova anteprima.'
@@ -37,8 +38,8 @@ export async function preparePracticeSharing(_previous: PracticeSharingState, fo
 }
 export async function confirmPracticeSharingAction(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
   const session = await requirePermission('technical.write');
-  await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PRACTICE_ACCESS_CONFIRM');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PRACTICE_ACCESS_CONFIRM', { inline: true });
     if (form.get('confirmed') !== 'on') throw new PracticeSharingError('DENIED');
     const receipt = await confirmPracticeSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')),
       String(form.get('token') ?? ''), await credentials());
@@ -48,8 +49,8 @@ export async function confirmPracticeSharingAction(_previous: PracticeSharingSta
 }
 export async function revokePracticeSharingAction(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
   const session = await requirePermission('technical.write');
-  await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PRACTICE_ACCESS_REVOKE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PRACTICE_ACCESS_REVOKE', { inline: true });
     if (form.get('confirmed') !== 'on') throw new PracticeSharingError('DENIED');
     const receipt = await revokePracticeSharing(prisma, session, { grantId: String(form.get('grantId') ?? ''),
       revision: Number(form.get('revision')), commandId: String(form.get('commandId') ?? '') }, await credentials());

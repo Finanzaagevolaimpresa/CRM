@@ -9,13 +9,14 @@ import { requirePermission } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { requireEnforcedPrivilegedMutation, privilegedStepUpCookieName } from './privileged-access';
+import { PrivilegedAdmissionRequired, requireEnforcedPrivilegedMutation, privilegedStepUpCookieName } from './privileged-access';
 import { LeadEditError } from './selective-lead-edit-transaction';
 import { previewLeadEdit, confirmLeadEdit, readLeadEditOutcomeByReference } from './selective-lead-edit-service';
 import { previewLeadEditingSelection, confirmLeadEditingSelection, revokeLeadEditing,
   readLeadEditingDecision } from './selective-lead-edit-management';
 
 function failure(error: unknown) {
+  if (error instanceof PrivilegedAdmissionRequired) return error.formState;
   if (error instanceof ZodError || error instanceof SyntaxError) {
     return { ok: false, message: 'Dati non validi. Ricarica la pagina e prepara una nuova anteprima.' };
   }
@@ -86,8 +87,8 @@ export async function prepareLeadEditingAccess(_state: LeadEditManagementState, 
 }
 export async function confirmLeadEditingAccess(_state: LeadEditManagementState, form: FormData): Promise<LeadEditManagementState> {
   const session = await requirePermission('lead.write');
-  await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_EDIT_CONFIRM');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_EDIT_CONFIRM', { inline: true });
     if (form.get('confirmed') !== 'on') throw new LeadEditError('DENIED');
     const receipt = await confirmLeadEditingSelection(prisma, session, input(form, 'selection'),
       String(form.get('token') ?? ''), await credentials());
@@ -97,8 +98,8 @@ export async function confirmLeadEditingAccess(_state: LeadEditManagementState, 
 }
 export async function revokeLeadEditingAccess(_state: LeadEditManagementState, form: FormData): Promise<LeadEditManagementState> {
   const session = await requirePermission('lead.write');
-  await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_EDIT_REVOKE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_EDIT_REVOKE', { inline: true });
     if (form.get('confirmed') !== 'on') throw new LeadEditError('DENIED');
     const receipt = await revokeLeadEditing(prisma, session, { grantId: String(form.get('grantId') ?? ''),
       revision: Number(form.get('revision')), commandId: String(form.get('commandId') ?? '') }, await credentials());

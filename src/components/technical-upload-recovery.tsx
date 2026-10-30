@@ -9,7 +9,7 @@ export const uploadControl = 'block w-full min-w-0 rounded-xl border border-slat
 const subscribe = () => () => {}, client = () => true, server = () => false;
 export function useUploadReady() { return useSyncExternalStore(subscribe, client, server); }
 export function rememberUpload(name: 'uploadDecision' | 'reviewDecision' | 'acquisitionDecision', commandId: string) {
-  const url = new URL(window.location.href); url.searchParams.set(name, commandId); window.history.replaceState(window.history.state, '', url);
+  const url = new URL(window.location.href); if (commandId) url.searchParams.set(name, commandId); else url.searchParams.delete(name); window.history.replaceState(window.history.state, '', url);
 }
 export function TechnicalUploadRecovery({ target, reference, commandId, action, returnPath }: { target?: TechnicalTargetReference;
   reference?: TechnicalAssignmentReference; commandId: string; action: TechnicalUploadAction; returnPath: string }) {

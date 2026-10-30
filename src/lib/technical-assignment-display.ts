@@ -7,6 +7,7 @@ export const technicalFieldLabels = {
   priority: 'Priorità', dueDate: 'Scadenza', targetEntity: 'Ente destinatario', targetPortal: 'Portale',
   protocolNumber: 'Protocollo', submittedAt: 'Data di presentazione', nextClientUpdateAt: 'Prossimo aggiornamento',
   clientVisibleStatus: 'Avanzamento comunicabile al cliente', integrationRequestNote: 'Integrazione tecnica richiesta',
+  technicalOwnerName: 'Responsabile tecnico · nome', commercialOwnerName: 'Referente commerciale · nome',
 } as const;
 export const technicalActionLabels = {
   update_fields: 'Modificare i campi scelti', update_status: 'Aggiornare lo stato', manage_checklist: 'Gestire la checklist',

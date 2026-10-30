@@ -7,7 +7,7 @@ import { PrismaClient, type Prisma } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from './db/ai-orchestrator-db-test-guard';
 import { contextFixture, contextPerson, contextDraft, contextThread } from './admin-email/fixture';
 import { saveApprovedMessageDraft, readPracticeCommunications, submitApprovedMessage, approveExactMessage, prepareManualMessage } from '../src/lib/approved-communications';
-import { previewInternalCommunication, confirmInternalCommunication, listInternalCommunications } from '../src/lib/internal-communications';
+import { previewInternalCommunication, confirmInternalCommunication, archiveInternalCommunication, listArchivedInternalCommunications, listInternalCommunications } from '../src/lib/internal-communications';
 import { previewStoredOrdinaryEmail, reserveStoredOrdinaryEmail, loadStoredOrdinaryEmailMaterial } from '../src/lib/ordinary-email-store-candidate';
 import { storeCommunicationFile, readCommunicationFile, revokeCommunicationFile } from '../src/lib/communication-files';
 import { updateAccountProfile } from '../src/lib/user-account-service';
@@ -30,6 +30,27 @@ test.before(async()=>{
   await db.$executeRawUnsafe('CREATE TRIGGER context_test_audit_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION context_test_audit_fault()');
 });
 test.after(async()=>db.$disconnect());
+
+test('internal archive retains messages, blocks open participants and restores only a new exact selection',options,async()=>{
+  const f=await contextFixture(db),thread=await contextThread(db,f),context={kind:'INTERNAL' as const,id:thread.id};
+  const saved=await saveApprovedMessageDraft(db,f.owner.actor,contextDraft(f,context));
+  const input={id:thread.id,expectedVersion:1,confirmed:true,reason:'Archiviazione sintetica verificata'};
+  await assert.rejects(archiveInternalCommunication(db,f.outsider.actor,input,{...f.credentials,sessionToken:f.outsider.cookie}),denied);
+  await archiveInternalCommunication(db,f.owner.actor,input,f.credentials);
+  await assert.rejects(readPracticeCommunications(db,f.member.actor,context),denied);
+  assert.equal(await db.approvedCommunication.count({where:{id:saved.id}}),1);
+  assert.equal(await db.internalCommunicationParticipant.count({where:{threadId:thread.id,active:true}}),0);
+  assert((await listArchivedInternalCommunications(db,f.owner.actor)).some(row=>row.id===thread.id));
+  await assert.rejects(listArchivedInternalCommunications(db,f.outsider.actor),denied);
+  const restore={...thread,expectedVersion:2,restore:true,selection:{userIds:[],groups:[]}};
+  const preview=await previewInternalCommunication(db,f.owner.actor,restore,f.credentials);
+  await confirmInternalCommunication(db,f.owner.actor,restore,preview.evidenceHash,f.credentials);
+  assert.equal((await db.internalCommunicationThread.findUniqueOrThrow({where:{id:thread.id}})).deletedAt,null);
+  assert.equal(await db.internalCommunicationParticipant.count({where:{threadId:thread.id,active:true}}),1);
+  await assert.rejects(readPracticeCommunications(db,f.member.actor,context),denied);
+  assert.equal(await db.communicationVersion.count({where:{messageId:saved.id}}),1);
+  assert.equal(await db.auditLog.count({where:{entityId:thread.id,event:'internal_communication_archived'}}),1);
+});
 const fault={ $transaction: (work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>db.$transaction(async tx=>{
   await tx.$queryRaw`SELECT set_config('fai.context_fault','error',true)`;return work(tx);
 },opts)} as unknown as PrismaClient;
@@ -37,7 +58,7 @@ function latch(){let done!:()=>void;const promise=new Promise<void>(r=>done=r);r
 
 test('schema71 is exact, historical v1 payload retained and all context FKs restrict deletion',options,async()=>{
   const [row]=await db.$queryRaw<Array<{count:number}>>`SELECT count(*)::integer AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(row.count, 71);
+  assert.equal(row.count, 72);
   const columns=await db.$queryRaw<Array<{conname:string;confdeltype:string}>>`SELECT conname,confdeltype FROM pg_constraint WHERE contype='f' AND conrelid IN ('"InternalCommunicationThread"'::regclass,'"InternalCommunicationParticipant"'::regclass,'"CommunicationContextFile"'::regclass)`;
   assert.equal(columns.length,9);assert.ok(columns.every(c=>c.confdeltype==='r'));
   const old=await db.approvedCommunication.findUniqueOrThrow({where:{id:'22222222-5252-4252-8252-222222222222'},include:{versions:true}});

@@ -17,11 +17,14 @@ import { TechnicalUploadProfileFields, emptyUploadProfile, uploadProfileFromChoi
 import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
 import { RomeDateTimeInput } from './rome-date-time-input';
 import { operationalRomeTime as when } from '@/lib/operational-time';
+import { settleTechnicalAssignmentAction } from '@/lib/technical-assignment-actions';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 type Data = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>;
 type Outcome = Awaited<ReturnType<typeof readTechnicalAssignmentOutcome>>;
 export type TechnicalAssignmentManagementState = { ok: boolean; message: string; uncertain?: boolean;
   rejectedBeforeWrite?: true;
+  stepUpRequired?: true;
   preview?: Awaited<ReturnType<typeof previewTechnicalAssignment>>; outcome?: Outcome };
 export type TechnicalAssignmentManagementAction = (previous: TechnicalAssignmentManagementState, form: FormData) => Promise<TechnicalAssignmentManagementState>;
 type Actions = { previewAction: TechnicalAssignmentManagementAction; confirmAction: TechnicalAssignmentManagementAction;
@@ -39,18 +42,29 @@ function Recovery({ reference, commandId, action }: { reference: TechnicalAssign
   action: TechnicalAssignmentManagementAction }) {
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(action, initial);
+  const [settled, settle, settling] = useActionState(settleTechnicalAssignmentAction, initial);
+  const outcome = settled.outcome ?? state.outcome;
   return <section className="space-y-3 rounded-xl border border-amber-400 bg-amber-50 p-4" aria-label="Verifica esito incarico">
     <p>Verifica l’esito prima di decidere un altro incarico. Questa consultazione non modifica i permessi.</p>
     <form action={submit}><input type="hidden" name="reference" value={JSON.stringify(reference)} />
       <input type="hidden" name="commandId" value={commandId} />
       <button className={button} disabled={!ready || pending}>Verifica esito della decisione</button></form>
     <p role="status">{state.message}</p>
-    {state.outcome?.status === 'RECORDED' && <a className="font-semibold underline" href={technicalManagementPath(reference)}>Ricarica gli incarichi correnti</a>}
+    {state.outcome?.status === 'NOT_OBSERVED' && !settled.outcome && <form action={settle} className="space-y-3">
+      <input type="hidden" name="reference" value={JSON.stringify(reference)} /><input type="hidden" name="commandId" value={commandId} />
+      <label className="flex gap-2"><input name="confirmedSettlement" type="checkbox" required />Verifica eventuali operazioni ancora in corso e chiudi questo tentativo se non risulta registrato.</label>
+      <button className={button} disabled={settling || pending}>Riconcilia e chiudi il tentativo</button>
+      <p>Nessun incarico viene creato o ripetuto. Un risultato già registrato viene conservato.</p>
+    </form>}
+    <p role="status">{settled.message}</p>
+    {(outcome?.status === 'RECORDED' || outcome?.status === 'CLOSED_WITHOUT_RECEIPT') && <a className="font-semibold underline"
+      href={`${technicalManagementPath(reference)}?recipient=${encodeURIComponent(reference.recipientId)}`}>Riapri le scelte della persona</a>}
   </section>;
 }
 
-function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
-  preview: NonNullable<TechnicalAssignmentManagementState['preview']>; blocked: boolean }) {
+function Confirm({ preview, blocked, confirmAction, receiptAction, onRejected }: Actions & {
+  preview: NonNullable<TechnicalAssignmentManagementState['preview']>; blocked: boolean;
+  onRejected: (message: string, needsConfirmation: boolean) => void }) {
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(confirmAction, initial);
   useEffect(() => {
@@ -62,7 +76,8 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
     // A missing receipt or unknown error must keep recovery in place.
     url.searchParams.delete('assignmentDecision');
     window.history.replaceState(window.history.state, '', url);
-  }, [state.rejectedBeforeWrite, state.uncertain, preview.input.commandId, preview.reference.recipientId]);
+    onRejected(state.message, !!state.stepUpRequired);
+  }, [state.rejectedBeforeWrite, state.uncertain, state.message, state.stepUpRequired, preview.input.commandId, preview.reference.recipientId, onRejected]);
   const assign = 'selection' in preview.input ? preview.input.selection : null;
   const locked = !ready || blocked || pending || !!state.message;
   return <section className="min-w-0 space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo incarico">
@@ -120,7 +135,9 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const [uploadChoices, setUploadChoices] = useState(emptyUploadProfile);
   const [expires, setExpires] = useState(''), [reason, setReason] = useState(''), [revokeReason, setRevokeReason] = useState('');
   const [commandId, setCommand] = useState(initialCommandId), [generation, setGeneration] = useState(0);
+  const [revokeCommandId, setRevokeCommandId] = useState(revocationCommandId);
   const [previewGeneration, setPreviewGeneration] = useState(-1), [submitted, setSubmitted] = useState(false);
+  const [resumption, setResumption] = useState<{ message: string; needsConfirmation: boolean } | null>(null);
   const [preview, prepare, preparing] = useActionState(actions.previewAction, initial);
   const [revocation, revokePreview, preparingRevoke] = useActionState(actions.previewAction, initial);
   const [revokeGeneration, setRevokeGeneration] = useState(0), [preparedRevokeGeneration, setPreparedRevokeGeneration] = useState(-1);
@@ -136,13 +153,24 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
-  const prepared = previewGeneration === generation ? preview.preview : undefined;
-  const preparedRevoke = preparedRevokeGeneration === revokeGeneration ? revocation.preview : undefined;
+  // useActionState retains its previous response while preparing the next one.
+  // Never render that old decision as the new preview, even for one frame.
+  const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId ? preview.preview : undefined;
+  const preparedRevoke = !preparingRevoke && preparedRevokeGeneration === revokeGeneration
+    && revocation.preview?.input.commandId === revokeCommandId ? revocation.preview : undefined;
+  const resume = (message: string, needsConfirmation: boolean) => {
+    setSubmitted(false); setPreviewGeneration(-1); setPreparedRevokeGeneration(-1);
+    setGeneration(value => value + 1); setCommand(crypto.randomUUID());
+    setRevokeCommandId(crypto.randomUUID());
+    setResumption({ message, needsConfirmation });
+  };
   return <div className="min-w-0 space-y-6" data-technical-editor-ready={ready ? 'true' : 'false'}>
     {data.cataloguesUnavailable && <p role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4">
       Catalogo non disponibile. Puoi consultare gli incarichi registrati e revocarli; ricarica per preparare un nuovo incarico.
     </p>}
     <p>Scegli una persona e il lavoro che potrà svolgere su questo record. Gli incarichi di altri tecnici e il referente commerciale restano distinti.</p>
+    {resumption && <div className="space-y-3"><p role="status">{resumption.message}</p>
+      {resumption.needsConfirmation && <InlinePrivilegedConfirmation />}</div>}
     <form method="get" action={technicalManagementPath(data.target)} className="space-y-3">
       <label className="block font-semibold">Persona da incaricare<select name="recipient" className={control} defaultValue={data.recipient?.id ?? ''} disabled={blocked} required>
         <option value="">Seleziona una persona</option>{data.people.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email}</option>)}</select></label>
@@ -184,7 +212,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
         </fieldset><p role="status">{preview.message}</p>
       </form>}
       {prepared && <div onSubmitCapture={event => { if ((event.target as HTMLFormElement).elements.namedItem('confirmed')) setSubmitted(true); }}>
-        <Confirm key={prepared.token} {...actions} preview={prepared} blocked={blocked} /></div>}
+        <Confirm key={prepared.token} {...actions} preview={prepared} blocked={blocked} onRejected={resume} /></div>}
       {data.currentAssignmentId && data.currentRevokedAt === null && <form action={revokePreview} onSubmit={event => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -195,13 +223,13 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
         <fieldset disabled={blocked || preparing || preparingRevoke} className="space-y-3">
           <label className="block font-semibold">Motivo della revoca<textarea className={control} required minLength={3} maxLength={500} value={revokeReason} onChange={event => { setRevokeReason(event.target.value); setRevokeGeneration(old => old + 1); }} /></label>
           <input type="hidden" name="operation" value="REVOKE" /><input type="hidden" name="reference" value={JSON.stringify(reference)} />
-          <input type="hidden" name="command" value={JSON.stringify({ commandId: revocationCommandId, assignmentId: data.currentAssignmentId,
+          <input type="hidden" name="command" value={JSON.stringify({ commandId: revokeCommandId, assignmentId: data.currentAssignmentId,
             expectedRevision: data.revision, expectedContextSha256: data.contextSha256, reason: revokeReason })} />
           <button className={button}>Anteprima della revoca</button>
         </fieldset><p role="status">{revocation.message}</p>
       </form>}
       {preparedRevoke && <div onSubmitCapture={event => { if ((event.target as HTMLFormElement).elements.namedItem('confirmed')) setSubmitted(true); }}>
-        <Confirm key={preparedRevoke.token} {...actions} preview={preparedRevoke} blocked={blocked} /></div>}
+        <Confirm key={preparedRevoke.token} {...actions} preview={preparedRevoke} blocked={blocked} onRejected={resume} /></div>}
     </>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Incarichi registrati su questo record</h2>
       {!data.assignments.length && <p>Nessun incarico registrato.</p>}

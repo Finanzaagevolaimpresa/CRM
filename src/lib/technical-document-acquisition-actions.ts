@@ -5,7 +5,7 @@ import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation, PrivilegedAdmissionRequired } from './privileged-access';
 import { technicalAssignmentReference } from './technical-assignment-decision';
 import { TechnicalAssignmentError } from './technical-assignment-transaction';
 import { previewTechnicalDocumentAcquisition, confirmTechnicalDocumentAcquisition, readTechnicalDocumentAcquisitionOutcome } from './technical-document-acquisition-service';
@@ -32,15 +32,15 @@ export async function prepareTechnicalAcquisition(_state: TechnicalUploadState, 
   } catch { return failure(); }
 }
 export async function saveTechnicalAcquisition(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
-  const session = await requireSession(); await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE');
-  try { await origin(); const ref = technicalAssignmentReference.parse(json(form, 'reference'));
+  const session = await requireSession();
+  try { await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true }); await origin(); const ref = technicalAssignmentReference.parse(json(form, 'reference'));
     const store = await cookies(), key = await loadActivePrivilegedStepUpKey(prisma); if (!key) return denied();
     const receipt = await confirmTechnicalDocumentAcquisition(prisma, session, { key,
       sessionToken: store.get(process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session')?.value ?? '',
       stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' }, ref, json(form, 'command'), String(form.get('token') ?? ''), form.get('confirmed') === 'on');
     revalidatePath(technicalUploadReviewPath(ref)); revalidatePath('/clients', 'layout');
     return { ok: true, recorded: true, message: `Acquisizione registrata: versione ${receipt.version}. Il file è privato; scegli separatamente chi può vederlo.` };
-  } catch { return failure(true); }
+  } catch (error) { return error instanceof PrivilegedAdmissionRequired ? error.formState : failure(true); }
 }
 export async function checkTechnicalAcquisition(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
   const session = await requireSession();

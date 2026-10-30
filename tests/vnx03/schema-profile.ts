@@ -18,6 +18,7 @@ export function qualificationSchema() {
   if (profile === 'candidate-schema64') return { profile, migrations: 64 } as const;
   if (profile === 'candidate-schema66') return { profile, migrations: 66 } as const;
   if (profile === 'candidate-schema67') return { profile, migrations: 67 } as const;
+  if (profile === 'candidate-schema72') return { profile, migrations: 72 } as const;
   if (profile === 'candidate-schema71') return { profile, migrations: 71 } as const;
   if (profile === 'candidate-schema70') return { profile, migrations: 70 } as const;
   if (profile === 'candidate-schema69') return { profile, migrations: 69 } as const;

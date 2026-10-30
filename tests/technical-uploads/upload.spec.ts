@@ -19,7 +19,7 @@ async function login(page: Page, email: string, stepUp = false) {
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) { await page.goto('/settings/security'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
-    await page.getByLabel('Password corrente', { exact: true }).fill(password); await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByLabel('Password corrente', { exact: true }).fill(password); await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible(); }
 }
 async function assign(page: Page, r: Row, person = r.techA, extension = '.txt') {
@@ -156,6 +156,16 @@ test('native private acquisition, exact technical version selection, positive by
   await login(a, f.adminEmail, true); await login(t, r.techA.email); await login(b, r.techB.email);
   await approved(a, t, r); await prepareAcquisition(a); await screenshot(a, 'acquisition-preview');
   const documents = await db.document.count(), versions = await db.documentVersion.count();
+  await ac.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await a.getByRole('button', { name: 'Acquisisci nel fascicolo privato', exact: true }).click();
+  await expect(a.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  expect(await db.document.count()).toBe(documents);
+  await a.getByLabel('Password corrente', { exact: true }).fill(password);
+  await a.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(a.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await a.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
+  const confirmation = a.getByLabel('Confermo personalmente l’acquisizione privata e la classificazione di questo file esatto.', { exact: true });
+  await expect(confirmation).toBeEnabled(); await confirmation.check();
   await a.getByRole('button', { name: 'Acquisisci nel fascicolo privato', exact: true }).click();
   await expect(a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true })).toBeVisible();
   expect(await db.document.count()).toBe(documents + 1); expect(await db.documentVersion.count()).toBe(versions + 1);

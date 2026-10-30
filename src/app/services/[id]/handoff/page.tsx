@@ -80,7 +80,7 @@ export default async function Page({ params, searchParams }: {
   if (preview.practice && isSelectivePractice(session, preview.practice.id)) notFound();
   const q = (query.q ?? '').trim().slice(0, 120), after = query.after && /^[a-zA-Z0-9_-]{1,128}$/.test(query.after) ? query.after : undefined;
   const candidates = await prisma.user.findMany({ where: { active: true, deletedAt: null, role: { in: [...technicalRoles] },
-    ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true } });
+    ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { email: { contains: q, mode: 'insensitive' as const } }] } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true, email: true } });
   const currentOwner = service.assignedToId ? await prisma.user.findUnique({ where: { id: service.assignedToId }, select: { name: true } }) : null;
   return <div className="crm-space-y-6"><PageHeader title="Affida il servizio acquistato al tecnico" description={`${client.displayName} · ${preview.catalog.name}`} />
     <Link href={`/clients/${client.id}#servizi-acquistati`}>Torna al servizio acquistato</Link>

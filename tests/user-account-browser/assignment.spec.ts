@@ -133,7 +133,7 @@ test('manual leads enter the admin queue; operator HTTP payloads cannot self ass
   }
   await admin.goto('/settings/security');
   await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/leads/' + lead.id);
   await update.locator('select[name="assignedToId"]').selectOption(salesId);

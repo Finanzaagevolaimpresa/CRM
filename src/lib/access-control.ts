@@ -45,6 +45,7 @@ type AiRunAccessContext = {
   createdById?: string | null;
 };
 type AiOutputAccessContext = {
+  contentEditorIds?: string[];
   clientId?: string | null;
   clientServiceId?: string | null;
   projectId?: string | null;
@@ -440,6 +441,7 @@ export function canReviewAiOutput(user: Actor, output: AiOutputAccessContext) {
   if (!canViewAiOutput(user, output)) return false;
   if (output.status !== 'needs_review' || output.requiresHumanReview !== true) return false;
   if (output.reviewedById || output.reviewedAt || hasForbiddenPhrases(output.forbiddenPhrases)) return false;
+  if (output.contentEditorIds?.includes(getActorId(user))) return false;
   return Boolean(output.run?.createdById) && output.run?.createdById !== getActorId(user);
 }
 
@@ -449,6 +451,7 @@ export function canApproveAiOutput(user: Actor, output: AiOutputAccessContext) {
   if (output.status !== 'needs_review' || output.requiresHumanReview !== true) return false;
   if (!output.reviewedById || !output.reviewedAt || hasForbiddenPhrases(output.forbiddenPhrases)) return false;
   const actorId = getActorId(user);
+  if (output.contentEditorIds?.includes(actorId) || output.contentEditorIds?.includes(output.reviewedById)) return false;
   return Boolean(output.run?.createdById)
     && output.run?.createdById !== actorId
     && output.reviewedById !== actorId

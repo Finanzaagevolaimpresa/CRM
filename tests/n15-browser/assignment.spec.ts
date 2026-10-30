@@ -198,7 +198,7 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
   await managerPage.goto(`${appUrl}/settings/security`);
   await waitForInteractiveReady(managerPage);
   await managerPage.getByLabel('Password corrente').fill(password);
-  await managerPage.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await managerPage.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await managerPage.waitForURL(/\/settings\/security\?status=active$/u);
 
   await managerPage.goto(`${appUrl}/leads/inbox?queue=unassigned`);

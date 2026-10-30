@@ -12,9 +12,10 @@ import { OrdinaryEmailInboundRefresh } from '@/components/ordinary-email-inbound
 import { OrdinaryEmailAttachmentDownload } from '@/components/ordinary-email-attachment-download';
 import { CommunicationRecipients } from '@/components/communication-recipients';
 import { CommunicationFiles } from '@/components/communication-files';
+import { PreservedWorkflowForm } from '@/components/preserved-workflow-form';
 import { hasPermission } from '@/lib/permission-evaluator';
 import { InternalCommunicationEditor } from '@/components/internal-communication-editor';
-import { listInternalCommunications, readCommunicationDirectory } from '@/lib/internal-communications';
+import { listInternalCommunications, listArchivedInternalCommunications, readCommunicationDirectory } from '@/lib/internal-communications';
 import { sanitizeFileName } from '@/lib/storage';
 import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server-candidate';
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
@@ -43,7 +44,7 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { da
   replySource?: { id: string; contentHash: string; classification: ApprovedMessageSnapshot['classification'] } }) {
   const updateSelection = emptyCommunicationRecipientSelection();
   if (updateDraft) updateSelection.to.userIds = [updateDraft.recipientId];
-  return <form action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
+  return <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     {replySource ? <><input type="hidden" name="replySourceId" value={replySource.id} /><input type="hidden" name="replySourceHash" value={replySource.contentHash} />
       <p>Prepara una nuova bozza. Scegli mittente, destinatari e allegati; poi scrivi il testo da sottoporre ad approvazione.</p></> : null}
@@ -74,22 +75,28 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { da
     </fieldset>
     <p className="text-sm text-slate-600">Ogni modifica crea una nuova versione da approvare. Nessun destinatario viene aggiunto automaticamente.</p>
     <PrimaryButton type="submit">{snapshot ? 'Salva nuova versione da approvare' : 'Salva bozza'}</PrimaryButton>
-  </form>;
+  </PreservedWorkflowForm>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
   if (!context.success) {
-    if (query.kind || query.practice || query.update || query.request) notFound();
-    const threads = hasPermission(session,'communications.internal.read') ? await listInternalCommunications(prisma, session) : [];
+    if (query.kind || query.practice || query.update || query.request || query.focus) notFound();
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
+    const archived = query.archived === '1';
+    if (query.archived && (!archived || !authority)) notFound();
+    const threads = hasPermission(session,'communications.internal.read') ? archived
+      ? await listArchivedInternalCommunications(prisma, session) : await listInternalCommunications(prisma, session) : [];
     const directory = authority ? await readCommunicationDirectory(prisma, session) : [];
     return <div className="min-w-0 crm-space-y-5 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni" description="Scrivi dal lead, dal cliente o dalla pratica. Le conversazioni interne restano riservate ai partecipanti confermati." />
       <nav className="flex flex-wrap gap-4"><Link className="font-bold underline" href="/leads">Lead</Link><Link className="font-bold underline" href="/clients">Clienti</Link><Link className="font-bold underline" href="/practice-readiness">Pratiche da avviare</Link><Link className="font-bold underline" href="/technical-office/practices">Pratiche tecniche</Link></nav>
       {authority ? <Link className="font-bold underline" href="/communications/updates">Bozze da aggiornamenti</Link> : null}
-      {authority ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
-      <Card title="Conversazioni interne a cui partecipi"><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}><Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link></li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
+      {authority && <Link className="font-bold underline" href={archived ? '/communications' : '/communications?archived=1'}>{archived ? 'Conversazioni operative' : 'Archivio delle tue conversazioni'}</Link>}
+      {authority && !archived ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
+      <Card title={archived ? 'Conversazioni archiviate' : 'Conversazioni interne a cui partecipi'}><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}>{archived
+        ? <details className="rounded-xl border p-3"><summary className="font-semibold">{thread.title} · prepara il ripristino</summary><InternalCommunicationEditor id={thread.id} version={thread.version} title={thread.title} people={directory} stepUpActive={authority?.stepUpActive ?? false} restore /></details>
+        : <Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link>}</li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
       {session.role === 'admin' ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     </div>;
   }
@@ -109,7 +116,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
   }
   let data: Data;
   try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page),
-    updatePrefill?.saved ? updatePrefill.deliveryId : requestPrefill?.saved ? requestPrefill.requestId : undefined); }
+    updatePrefill?.saved ? updatePrefill.deliveryId : requestPrefill?.saved ? requestPrefill.requestId : query.focus); }
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
   const replyParent = query.reply ? data.messages.find(message => message.replies.some(reply => reply.id === query.reply)) : undefined;
   const replySource = replyParent?.replies.find(reply => reply.id === query.reply);
@@ -128,7 +135,10 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <CommunicationFiles key={`${data.context.kind}-${data.context.id}-${data.contextFiles.map(file=>file.id).join(',')}`}
         context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} requestId={randomUUID()} />
     </details>
-    {data.canWrite && !updatePrefill?.saved && !requestPrefill?.saved ? <Card title={requestPrefill ? 'Bozza dalla richiesta interna' : updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
+    {query.focus && <div className="space-y-2 rounded-xl border p-3"><p>Verifica del messaggio conservato. Nessuna operazione viene ripetuta.</p>
+      {!data.messages.length && <p>Il messaggio non risulta disponibile nel contesto corrente. Conserva il riferimento e verifica prima di preparare un’altra operazione.</p>}
+      <Link className="underline" href={`/communications?kind=${data.context.kind}&practice=${data.context.id}`}>Torna alla timeline del contesto</Link></div>}
+    {data.canWrite && !query.focus && !updatePrefill?.saved && !requestPrefill?.saved ? <Card title={requestPrefill ? 'Bozza dalla richiesta interna' : updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
       {requestPrefill && <aside className="mb-4 rounded-xl border p-3"><h3 className="font-bold">{requestPrefill.requestTitle}</h3><p className="whitespace-pre-wrap break-words">{requestPrefill.requestDetails}</p><p>Indicazioni interne: rivedile prima di comporre il testo per il destinatario.</p></aside>}
       {replySource ? <aside className="mb-4 rounded-xl border p-3"><p>{replySource.sender} · {replySource.receivedAt.toISOString()}</p>
         <h3 className="font-bold">{replySource.subject}</h3><p className="whitespace-pre-wrap break-words">{replySource.body}</p>
@@ -150,18 +160,18 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
           stepUpActive={ordinaryAuthority?.stepUpActive ?? false}>
           <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} requestSource={message.requestSource ?? undefined} updateDraft={message.updateDraft ?? undefined} /></details>
         </OrdinaryEmailReview> : null}
-        {data.canWrite && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'DRAFT' ? <form action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></form> : null}
-        {data.isAdmin && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'PENDING' ? <form action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></form> : null}
+        {data.canWrite && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'DRAFT' ? <PreservedWorkflowForm action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></PreservedWorkflowForm> : null}
+        {data.isAdmin && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'PENDING' ? <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></PreservedWorkflowForm> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && message.state === 'SENDING' && message.attempts[0] ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={message.attempts[0].requestId} resume /> : null}
-        {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && (message.state === 'SENDING' || (message.state === 'UNCERTAIN' && data.isAdmin)) && message.attempts[0] ? <form action={mutateApprovedMessageAction} className="grid gap-3 rounded-xl border p-4">
+        {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && (message.state === 'SENDING' || (message.state === 'UNCERTAIN' && data.isAdmin)) && message.attempts[0] ? <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid gap-3 rounded-xl border p-4">
           <BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="evidence" /><input type="hidden" name="attemptId" value={message.attempts[0].id} /><input type="hidden" name="reconciliation" value={String(message.state === 'UNCERTAIN')} />
           <h3 className="font-bold">{message.state === 'UNCERTAIN' ? 'Riconciliazione admin dell’esito incerto' : 'Registra l’esito manuale'}</h3>
           <label>Esito<select className={field} name="outcome"><option value="UNCERTAIN">Incerto · non ripetere</option><option value="SENT">Invio dichiarato eseguito</option><option value="NOT_SENT">Non inviata · verificato</option></select></label>
           <label>Data e ora con fuso<input className={field} name="occurredAt" defaultValue={new Date().toISOString()} required /></label>
           <label>Riferimento della ricevuta esterna<input className={field} name="reference" required maxLength={500} /></label><label>Nota<textarea className={field} name="note" maxLength={2000} /></label>
           <PrimaryButton type="submit">Registra dichiarazione</PrimaryButton>
-        </form> : null}
+        </PreservedWorkflowForm> : null}
       </div>
       <details><summary className="cursor-pointer font-bold">Timeline e versioni</summary><p className="break-all text-xs">Riferimento: {message.id} · impronta del messaggio: {message.snapshotHash}</p><ol className="mt-3 crm-space-y-2 text-sm">{message.events.map(event => <li key={event.id}>{event.createdAt.toISOString()} · {event.event === 'ORDINARY_REJECTED' ? 'Versione rifiutata · nuova bozza da approvare' : event.event}{event.event.startsWith('MANUAL_OUTCOME') ? <span> · dichiarazione manuale conservata</span> : null}</li>)}</ol><p className="mt-3 text-sm">Versioni conservate: {message.versions.map(version => `v${version.revision}`).join(', ')}.</p></details>
       <div className="mt-4"><h3 className="font-bold">Risposte collegate</h3>

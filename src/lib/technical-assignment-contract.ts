@@ -13,8 +13,8 @@ export const technicalAssignmentActions = ['update_fields', 'update_status', 'ma
 // Each operation also needs its explicit item selection or bounded upload
 // profile in the retained personal decision and fresh runtime admission.
 export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document'] as const;
-export const projectTechnicalFields = ['title', 'description', 'status'] as const;
-export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote'] as const;
+export const projectTechnicalFields = ['title', 'description', 'status', 'priority', 'technicalOwnerName', 'commercialOwnerName'] as const;
+export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote', 'technicalOwnerName', 'commercialOwnerName'] as const;
 export const projectEditableTechnicalFields = ['title', 'description'] as const;
 export const practiceEditableTechnicalFields = ['title', 'practiceType', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote'] as const;
 

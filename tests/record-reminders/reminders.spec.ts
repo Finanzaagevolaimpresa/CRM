@@ -28,7 +28,7 @@ async function login(page: Page, person = f.admin, stepUp = person.id === f.admi
   await page.getByRole('button', { name: 'Login interno', exact: true }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) {
     await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
 }
@@ -95,6 +95,16 @@ test('two technicians receive only the selected deadline at its real time; curre
   const summary = admin.getByRole('region', { name: 'Riepilogo promemoria', exact: true });
   await expect(summary.getByText(/escluso: accesso pertinente assente/)).toHaveCount(2);
   await screen(admin, 'exact-preview', 1440); await screen(admin, 'exact-preview', 390);
+  await ac.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  const beforeRenewal = await db.recordUpdateCommand.count(); await confirm(admin);
+  await expect(admin.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  expect(await db.recordUpdateCommand.count()).toBe(beforeRenewal);
+  await admin.getByLabel('Password corrente', { exact: true }).fill(password);
+  await admin.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(admin.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await admin.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
+  await expect(admin.getByText('Riepilogo aggiornato. Controllalo e conferma personalmente.', { exact: true })).toBeVisible();
+  await admin.getByLabel('Confermo questo istante e questi destinatari per l’avviso CRM', { exact: true }).check();
   const beforeMail = await db.approvedCommunication.count(); await confirm(admin); const commandId = await recorded(admin);
   const rows = await deliveries(commandId); expect(rows.map(r => r.recipientId).sort()).toEqual([f.techA.id, f.techB.id].sort());
   const a = rows.find(r => r.recipientId === f.techA.id)!, b = rows.find(r => r.recipientId === f.techB.id)!;
@@ -220,15 +230,22 @@ test('Admin personal confirmation, current session and direct-route permissions 
   const page = await ac.newPage(), tech = await tc.newPage(), other = await oc.newPage(), row = f.rows[5];
   await login(page, f.admin, false); await login(tech, f.techA); await login(other, f.otherAdmin, false);
   const before = await readOnlyCounts(); await open(page, row);
+  expect(await readOnlyCounts(), 'opening the form is read-only').toEqual(before);
+  const blockedBefore = await db.auditLog.count({ where: { actorId: f.admin.id, event: 'blocked_privileged_step_up', after: { path: ['action'], equals: 'RECORD_UPDATE_MANAGE' } } });
   await select(page, row.taskId, futureMinute(), [f.techA]);
-  await expect(page.getByRole('status')).toContainText('Operazione non registrata');
+  await expect(page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+  await expect(page.getByText('Conferma la tua identità. Le scelte del promemoria restano disponibili; nessuna operazione è stata eseguita.', { exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Riepilogo promemoria', exact: true })).toHaveCount(0);
+  const afterDeniedPost = await readOnlyCounts();
+  expect(afterDeniedPost.slice(0, 4)).toEqual(before.slice(0, 4));
+  expect(afterDeniedPost[4]).toBe(before[4] + 1);
+  expect(await db.auditLog.count({ where: { actorId: f.admin.id, event: 'blocked_privileged_step_up', after: { path: ['action'], equals: 'RECORD_UPDATE_MANAGE' } } })).toBe(blockedBefore + 1);
   expect((await tech.goto(setupPath(row)))?.status()).toBe(404);
   expect((await tech.goto('/notifications/reminders'))?.status()).toBe(404);
   await other.goto(setupPath(row)); await expect(other.getByRole('option', { name: new RegExp(row.title) })).toHaveCount(0);
   const saved = await db.recordUpdateCommand.findFirstOrThrow({ where: { actorId: f.admin.id, operation: 'REMINDER' } });
   expect((await other.goto(managementPath(saved.id)))?.status()).toBe(404);
-  expect(await readOnlyCounts()).toEqual(before);
+  expect(await readOnlyCounts(), 'denied GETs cannot create business data or security audit entries').toEqual(afterDeniedPost);
   await page.getByLabel('Cerca fra le attività con scadenza', { exact: true }).fill('Nessunrisultatosintetico');
   await page.getByRole('button', { name: 'Cerca attività', exact: true }).click();
   await expect(page.getByText('Nessuna attività con scadenza disponibile', { exact: true })).toBeVisible();

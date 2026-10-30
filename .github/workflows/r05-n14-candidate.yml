@@ -6,13 +6,13 @@ on:
 permissions:
   contents: read
 jobs:
-  n14-candidate-schema71:
+  n14-candidate-schema72:
     name: WordPress and admin N14 on exact candidate schema71
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       VNX03_EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      VNX03_QUALIFICATION_PROFILE: candidate-schema71
+      VNX03_QUALIFICATION_PROFILE: candidate-schema72
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,8 +79,8 @@ jobs:
             const receipt = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/${file}`, 'utf8'));
             assert.equal(receipt.sourceCommit, process.env.VNX03_EXPECTED_SOURCE_COMMIT);
             assert.equal(receipt.sourceTree, process.env.VNX03_EXPECTED_SOURCE_TREE);
-            assert.equal(receipt.profile, 'candidate-schema71');
-            assert.equal(receipt.migrations, 71);
+            assert.equal(receipt.profile, 'candidate-schema72');
+            assert.equal(receipt.migrations, 72);
             assert.equal(receipt.productionContact, false);
             if (file === 'n14-runtime.json') {
               assert.equal(receipt.adminAssignmentBrowserCompleted, true);

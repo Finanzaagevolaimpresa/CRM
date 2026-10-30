@@ -17,7 +17,7 @@ async function login(page: Page, email: string, stepUp = false) {
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) {
     await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
 }
@@ -324,7 +324,8 @@ test('native email proposals for lead/client/practice are explicit unapproved dr
     const edit = page.locator('form[data-message-draft="' + saved.id + '"]');
     await edit.getByLabel('Testo esatto', { exact: true }).fill('Testo personale sintetico da approvare');
     await edit.getByRole('button', { name: 'Salva nuova versione da approvare', exact: true }).click();
-    await expect(page.getByRole('status')).toContainText('Operazione registrata');
+    await expect(page).toHaveURL(/result=RECORDED/);
+    await expect(page.getByText('Operazione registrata.', { exact: true })).toBeVisible();
     expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: saved.id } })).currentRevision).toBe(2);
   }
   await ac.close(); await oc.close();

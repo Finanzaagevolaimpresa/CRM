@@ -5,6 +5,7 @@ export const selectiveProjectFields = {
   title: 'Titolo', description: 'Descrizione', totalInvestment: 'Investimento',
   requestedAmount: 'Importo richiesto', startTiming: 'Tempi di avvio', region: 'Regione',
   province: 'Provincia', sector: 'Settore', status: 'Stato', priority: 'Priorità',
+  technicalOwnerName: 'Responsabile tecnico · nome', commercialOwnerName: 'Referente commerciale · nome',
 } as const;
 export type SelectiveProjectField = keyof typeof selectiveProjectFields;
 const field = z.enum(Object.keys(selectiveProjectFields) as [SelectiveProjectField, ...SelectiveProjectField[]]);

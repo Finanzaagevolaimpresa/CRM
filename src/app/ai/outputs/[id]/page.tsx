@@ -1,4 +1,5 @@
 import { Card, PageHeader, StatusBadge, TimestampMeta, formatDateTime } from '@/components/ui';
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { prisma } from '@/lib/prisma';
 import { buildClientServiceLabel } from '@/lib/client-service-label';
@@ -23,6 +24,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const createDisabledReason = !canCreateDossier ? 'Permesso dossier.write richiesto' : !client ? 'Output AI non collegato a un cliente' : output.status === 'archived' ? 'Output AI archiviato' : output.status !== 'approved' ? 'Output AI non ancora approvato/revisionato' : '';
   return <div className="crm-space-y-6">
     <PageHeader title={output.title} description="Dettaglio output AI interno nel perimetro autorizzato e soggetto a revisione umana obbligatoria." />
+    <AdminRecordShortcut session={session} model="AiOutput" id={id} />
     <div className="flex flex-wrap gap-2"><SecondaryLink href={client ? `/clients/${client.id}#output-ai` : '/ai/outputs-to-review'}>← Torna al fascicolo</SecondaryLink><StatusBadge status={output.status} /></div>
     <Card title="Contesto output">
       <div className="grid gap-3 text-sm md:grid-cols-2">

@@ -22,7 +22,7 @@ export default async function Page({ params, searchParams }: {
     {commandId && <p role="status" className="rounded-xl border bg-slate-50 p-4">{receipt
       ? `Operazione registrata: ${receipt.operation === 'GRANT' ? 'selezione' : 'revoca'}, revisione ${receipt.revision}. Lo stato corrente è riportato sotto.`
       : 'Ricevuta non disponibile. Verifica lo stato corrente prima di una nuova operazione.'}</p>}
-    <Card title="Scegli cosa condividere"><SelectiveClientSharing key={randomUUID()} clientId={id} recipients={data.recipients}
+    <Card title="Scegli cosa condividere"><SelectiveClientSharing key={id} clientId={id} recipients={data.recipients}
       documentOptions={data.documentOptions} documentsLimited={data.documentsLimited}
       companyOptions={data.companyOptions} companiesLimited={data.companiesLimited}
       personOptions={data.personOptions} peopleLimited={data.peopleLimited}

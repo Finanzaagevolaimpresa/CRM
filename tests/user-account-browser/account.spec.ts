@@ -58,7 +58,7 @@ test('admin account management, own profile/password, direct denials, revocation
   await login(admin, adminEmail, password);
   await admin.goto('/settings/security');
   await admin.getByLabel('Password corrente').fill(password);
-  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/settings/users');
   await admin.getByPlaceholder('Nome', { exact: true }).fill('M1 Operator');
@@ -66,6 +66,8 @@ test('admin account management, own profile/password, direct denials, revocation
   await admin.locator('form').filter({ has: admin.getByRole('button', { name: 'Crea utente', exact: true }) }).locator('select[name="role"]').selectOption('consulente');
   await admin.getByPlaceholder('Password temporanea').fill(password);
   await admin.getByRole('button', { name: 'Crea utente', exact: true }).click();
+  await expect(admin.getByText('Operazione account registrata. Riapri la scheda per verificare lo stato corrente.', { exact: true })).toBeVisible();
+  await admin.goto('/settings/users');
   await expect(admin.getByRole('cell', { name: operatorEmail, exact: true })).toBeVisible();
   const operatorUser = await db.user.findUniqueOrThrow({ where: { email: operatorEmail } });
   const adminUser = await db.user.findUniqueOrThrow({ where: { email: adminEmail } });
@@ -106,17 +108,19 @@ test('admin account management, own profile/password, direct denials, revocation
   const resetRequest = admin.waitForRequest((req) => Boolean(req.headers()['next-action']));
   await reset.getByRole('button', { name: 'Reimposta password', exact: true }).click();
   const capturedReset = await resetRequest;
-  await expect(reset.getByRole('status')).toHaveText('Password aggiornata. Le sessioni precedenti sono state revocate.');
+  await expect(reset.getByRole('status')).toContainText('Operazione account registrata.');
+  await expect(reset.getByLabel('Nuova password', { exact: true })).toHaveValue('');
   await operator.goto('/settings/account');
   await expect(operator).toHaveURL(/\/login$/);
   await login(operator, operatorEmail, password);
   await replay(operator, capturedReset, operatorUser.id, adminUser.id);
   expect((await db.user.findUniqueOrThrow({ where: { id: adminUser.id } })).passwordHash === adminUser.passwordHash).toBe(true);
 
+  await admin.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
   const adminProfile = admin.getByRole('form', { name: 'Modifica profilo' });
   await adminProfile.getByLabel('Email di accesso').fill(changedEmail);
   await adminProfile.getByRole('button', { name: 'Salva profilo' }).click();
-  await expect(adminProfile.getByRole('status')).toHaveText('Profilo aggiornato.');
+  await expect(adminProfile.getByRole('status')).toContainText('Profilo aggiornato. Operazione account registrata.');
   await operator.goto('/settings/account');
   await expect(operator).toHaveURL(/\/login$/);
   await login(operator, operatorEmail, password, false);
@@ -144,15 +148,18 @@ test('own admin profile name works without step-up while email still requires ad
   const newEmail = `m1-self-updated-${scope}@example.test`;
   await profile.getByLabel('Email di accesso').fill(newEmail);
   await profile.getByRole('button', { name: 'Salva profilo' }).click();
-  await expect(page).toHaveURL(privilegedMode === 'enforced' ? /\/settings\/security\?status=required$/ : /\/settings\/security\?status=unavailable$/);
+  await expect(page).toHaveURL(/\/settings\/account$/);
+  await expect(profile.getByLabel('Email di accesso')).toHaveValue(newEmail);
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  if (privilegedMode === 'enforced') await expect(inline).toBeVisible();
+  else await expect(profile.getByRole('status')).toContainText('non disponibile');
   expect((await db.user.findUniqueOrThrow({ where: { id: user.id } })).email).toBe(selfAdminEmail);
   expect(await db.auditLog.count({ where: { actorId: user.id, event: 'user_profile_updated' } })).toBe(1);
   if (privilegedMode === 'enforced') {
-    await page.getByLabel('Password corrente').fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
-    await expect(page).toHaveURL(/status=active/);
-    await page.goto('/settings/account');
-    await profile.getByLabel('Email di accesso').fill(newEmail);
+    await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+    await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+    await expect(inline).toContainText('Identità confermata.');
+    await expect(profile.getByLabel('Email di accesso')).toHaveValue(newEmail);
     await profile.getByRole('button', { name: 'Salva profilo' }).click();
     await expect(page).toHaveURL(/\/login\?status=account-updated$/);
     expect((await db.user.findUniqueOrThrow({ where: { id: user.id } })).email).toBe(newEmail);

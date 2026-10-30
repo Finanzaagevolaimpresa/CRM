@@ -1,3 +1,4 @@
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import type { Prisma } from '@prisma/client';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { PaginationNav } from '@/components/pagination-nav';
@@ -39,6 +40,7 @@ export default async function Page({
   if (mode !== 'enforced') {
     return <div className="crm-space-y-6">
       <PageHeader title="Commercial Lead Inbox" description="Foundation N14 dormiente: nessuna policy o activation è attiva." />
+    <AdminRecordShortcut session={session} model="CommercialLeadSlaPolicyVersion" />
       <SecondaryLink href="/leads">← Torna alla pipeline</SecondaryLink>
       <EmptyState title="Inbox non attiva">Il deploy foundation non iscrive Lead e non avvia SLA.</EmptyState>
     </div>;
@@ -90,6 +92,7 @@ export default async function Page({
 
   return <div className="crm-space-y-6">
     <PageHeader title="Commercial Lead Inbox" description="Assegna un referente commerciale; il referente registra la risposta effettiva prima della conversione in cliente." />
+    <AdminRecordShortcut session={session} model="CommercialLeadSlaPolicyVersion" />
     <div className="flex flex-wrap gap-3">
       <SecondaryLink href="/leads">← Pipeline</SecondaryLink>
       {queues.map((queue) => <SecondaryLink key={queue} href={`/leads/inbox?queue=${queue}`}>{queue}</SecondaryLink>)}
@@ -98,7 +101,7 @@ export default async function Page({
     {assignmentAuthority && <Card title="Assegnazione del referente commerciale">
       {canManage ? <p>Conferma personale attiva. Scegli il referente nella scheda del lead e premi Assegna. L’assegnazione non registra una risposta e non converte il lead.</p>
         : readiness.mode === 'enforced' && readiness.keyReady ? <div className="crm-space-y-3">
-          <p>Per assegnare, cambiare o rilasciare un referente devi prima confermare la tua identità. La conferma vale cinque minuti nella sessione corrente; nessun lead viene modificato da questo passaggio.</p>
+          <p>Per assegnare, cambiare o rilasciare un referente devi prima confermare la tua identità. La conferma Admin vale 30 minuti nella sessione corrente; nessun lead viene modificato da questo passaggio.</p>
           <SecondaryLink href="/settings/security?returnTo=lead-inbox">Conferma identità per assegnare</SecondaryLink>
         </div> : <p>La protezione necessaria per assegnare il referente non è disponibile. I dati restano consultabili; l’assegnazione rimane bloccata.</p>}
     </Card>}

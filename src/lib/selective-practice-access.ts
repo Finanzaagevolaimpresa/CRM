@@ -61,7 +61,7 @@ async function personal(tx: Tx, current: AuthSession, proof: PracticeSharingCred
   const digest = await tokenDigestFromCookie(proof.sessionToken);
   if (privilegedAccessMode() !== 'enforced' || !session || !digest || digest.length !== session.tokenDigest.length
     || !timingSafeEqual(digest, session.tokenDigest) || !verifyPrivilegedStepUpToken({ key: proof.key,
-      expectedUserId: current.userId, sessionToken: proof.sessionToken, token: proof.stepUpToken,
+      expectedUserId: current.userId, role: current.role, sessionToken: proof.sessionToken, token: proof.stepUpToken,
       nowSeconds: Math.floor(now.getTime() / 1000) })) deny();
 }
 
@@ -370,6 +370,7 @@ export async function practiceSharingManagement(db: PrismaClient, claimed: AuthS
           recipientEmail: grant.recipient.email, revision: grant.revision, revoked: !!grant.revokedAt,
           expiresAt: payload.success ? payload.data.selection.expiresAt : null,
           fields: payload.success ? payload.data.selection.fields : [],
+          documents: payload.success ? (payload.data.selection.documents ?? []) : [],
           documentCount: payload.success ? (payload.data.documents?.length ?? 0) : 0 };
       }) };
   });

@@ -20,7 +20,7 @@ async function login(page: Page, email: string, stepUp = false) {
     await page.goto('/settings/security'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
     await page.getByLabel('Password corrente', { exact: true }).fill(password);
     const response = page.waitForResponse(r => new URL(r.url()).pathname === '/settings/security' && r.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     expect((await response).status()).toBeLessThan(400);
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
@@ -434,5 +434,25 @@ test('native V4 can combine an explicit person field, company field and exact do
   await expect(reader.getByRole('link', { name: 'Scarica versione', exact: true })).toHaveCount(0);
   expect(await reader.content()).not.toContain(row.person!.name); expect(await reader.content()).not.toContain(row.companyName);
   expect(await reader.content()).not.toContain(row.documents[1].title); expect(await reader.content()).not.toContain(row.documents[2].title);
+  await admin.reload(); await admin.getByLabel('Persona esistente').selectOption(row.readerId);
+  const personGroup = admin.getByRole('group', { name: row.person!.name + ' · ' + row.companyName, exact: true });
+  await expect(personGroup.getByLabel('Email', { exact: true })).toBeChecked();
+  await expect(personGroup.getByLabel('Nome', { exact: true })).not.toBeChecked();
+  await expect(admin.getByRole('group', { name: row.companyName, exact: true }).getByLabel('Partita IVA', { exact: true })).toBeChecked();
+  const documentChoice = admin.getByLabel(row.documents[0].title + ' · versione 1', { exact: false });
+  await expect(documentChoice).toBeChecked();
+  const documentCard = documentChoice.locator('..').locator('..');
+  await documentCard.getByLabel('Consenti anche il download di questa versione', { exact: true }).check();
+  await admin.getByRole('button', { name: 'Anteprima come destinatario', exact: true }).click();
+  const renewedPreview = admin.getByRole('region', { name: 'Riepilogo e anteprima', exact: true });
+  await expect(renewedPreview).toBeVisible(); await renewedPreview.getByRole('checkbox').check();
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revision).toBe(2);
+  await reader.reload(); await expect(reader.getByRole('link', { name: 'Scarica versione', exact: true })).toHaveCount(1);
+  const download = await rc.request.get(`/shared-clients/${row.clientId}/documents/${row.documents[0].versionId}?download=1`);
+  expect(download.status()).toBe(200); expect(await download.text()).toBe(row.documents[0].content);
+  expect((await rc.request.get(`/shared-clients/${row.clientId}/documents/${row.documents[1].versionId}?download=1`)).status()).toBe(404);
+  await revokeAfterReload(admin, row.clientId);
+  expect((await rc.request.get(`/shared-clients/${row.clientId}/documents/${row.documents[0].versionId}?download=1`)).status()).toBe(404);
   await ac.close(); await rc.close();
 });

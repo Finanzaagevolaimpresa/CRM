@@ -13,3 +13,8 @@ export class TechnicalAssignmentError extends Error {
     this.name = 'TechnicalAssignmentError';
   }
 }
+
+/** A durable, actor-bound closure prevents this command from ever mutating. */
+export class TechnicalAssignmentAttemptClosedError extends Error {
+  constructor() { super('TECHNICAL_ASSIGNMENT_ATTEMPT_CLOSED'); }
+}

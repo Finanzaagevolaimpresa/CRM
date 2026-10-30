@@ -5,7 +5,7 @@ import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { saveApprovedMessageDraft, submitApprovedMessage, approveExactMessage, prepareManualMessage, recordManualMessageEvidence,
   configureCommunicationMailbox, qualifyCommunicationMailbox, acquireManualReply, linkAmbiguousReply,
-  readPracticeCommunications, readCommunicationAdministration } from '../../src/lib/approved-communications';
+  readPracticeCommunications, readCommunicationAdministration, listAdminComplaintMessages } from '../../src/lib/approved-communications';
 import { ApprovedCommunicationError } from '../../src/lib/approved-communication-contract';
 import { readinessCommunicationFixture } from './readiness-fixture';
 
@@ -63,7 +63,7 @@ test('M4 migration registers exactly seven disabled mailboxes and preserves dorm
   assert.equal(boxes.length, 7); assert.ok(boxes.every(box => box.kind === 'UNATTESTED' && !box.enabled && !box.canSend && !box.testedAt));
   assert.equal(await db.communicationIntentRecord.count(), 0); assert.equal(await db.businessOutboxEvent.count(), 0);
   await assert.rejects(db.communicationMailbox.update({ where: { id: boxes[0].id }, data: { enabled: true } }));
-  assert.equal(Number((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count), 71);
+  assert.equal(Number((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count), 72);
 });
 
 test('M4 exact admin approval, commercial preparation and changed versions are enforced in storage', { skip: !enabled }, async () => {
@@ -192,6 +192,9 @@ test('M4 replies deduplicate aliases, retain ambiguous inputs, and require an ex
 test('M4 complaint content cannot be disclosed by reclassifying a later revision', { skip: !enabled }, async () => {
   const f = await fixture();
   const saved = await saveApprovedMessageDraft(db, f.admin, { ...f.input, classification: 'COMPLAINT' }, runtime);
+  const complaints = await listAdminComplaintMessages(db, f.admin);
+  assert(complaints.messages.some(item => item.id === saved.id && item.subject === f.input.subject));
+  await assert.rejects(listAdminComplaintMessages(db, f.operator), failure('DENIED'));
   assert.equal((await readPracticeCommunications(db, f.operator, f.context)).messages.length, 0);
   await assert.rejects(saveApprovedMessageDraft(db, f.admin, { ...f.input, expectedRevision: saved.revision, classification: 'ORDINARY' }, runtime), failure('DENIED'));
   const outsider = await user('consulente');

@@ -1,3 +1,4 @@
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -40,6 +41,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   return <div className="crm-space-y-6">
     <PageHeader title={`Contratto — ${contract.contractNumber}`} description="Contratto interno con stato e gestione manuale di invio/firma." />
+    <AdminRecordShortcut session={session} model="Contract" id={contract.id} />
     <SecondaryLink href="/contracts">← Torna alla lista</SecondaryLink>
     <Card title="Dati contratto">
       <p>Cliente: {client?.displayName ?? 'Cliente non disponibile'}</p>

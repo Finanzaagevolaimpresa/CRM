@@ -1,4 +1,6 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
+import { sharingLocalExpiry, UnavailableSharingChoices } from './sharing-draft-helpers';
 
 import { useActionState, useState } from 'react';
 import { confirmSharing, prepareSharingPreview, revokeSharing, type SharingState } from '@/lib/selective-project-actions';
@@ -6,9 +8,10 @@ import { selectiveProjectFields, type SelectiveProjectField } from '@/lib/select
 import { SelectiveProjectView } from './selective-project-view';
 
 const initial: SharingState = { ok: false, message: '' };
-type Grant = { id: string; recipientId: string; revision: number; revoked: boolean; suspended: boolean; expiresAt: string | null };
+type Grant = { id: string; recipientId: string; revision: number; revoked: boolean; suspended: boolean; expiresAt: string | null;
+  fields: SelectiveProjectField[]; documents: { versionId: string; download: boolean }[] };
 export function SelectiveProjectSharing({ projectId, recipients, documents, grants }: {
-  projectId: string; recipients: { id: string; name: string; role: string }[];
+  projectId: string; recipients: { id: string; name: string; email: string; role: string }[];
   documents: { versionId: string; title: string; fileName: string; version: number }[]; grants: Grant[];
 }) {
   const [recipientId, setRecipient] = useState('');
@@ -23,11 +26,19 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
     documents: Object.entries(selected).map(([versionId, download]) => ({ versionId, download })),
     expiresAt: expires ? new Date(expires).toISOString() : null };
   const changed = () => setGeneration(value => value + 1);
+  function chooseRecipient(id: string) {
+    const existing = grants.find(row => row.recipientId === id);
+    setRecipient(id); setFields(existing?.fields ?? []); setDocuments(Object.fromEntries((existing?.documents ?? []).map(row => [row.versionId, row.download])));
+    setExpires(sharingLocalExpiry(existing?.expiresAt));
+  }
   return <div className="space-y-6">
-    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-5 rounded-xl border bg-white p-5">
+    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-5 rounded-xl border bg-white p-5">
+      <fieldset disabled={preparing || confirming || confirmation.ok} className="min-w-0 space-y-5">
       <h2 className="text-xl font-bold">Condividi accesso</h2>
-      <label className="block">Persona esistente<select required value={recipientId} onChange={event => setRecipient(event.target.value)} className="block rounded border p-2">
-        <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
+      <label className="block">Persona esistente<select required value={recipientId} onChange={event => chooseRecipient(event.target.value)} className="block rounded border p-2">
+        <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email} · {person.role}</option>)}</select></label>
+      {grant && <p role="status">Bozza dalla selezione registrata, revisione {grant.revision}{grant.revoked ? ' · revocata' : ''}. Controlla campi, versioni e scadenza; nessuna concessione cambia prima della nuova conferma.</p>}
+      <UnavailableSharingChoices label="Versioni selezionate non presenti nell’elenco" ids={Object.keys(selected).filter(id => !documents.some(row => row.versionId === id))} remove={id => { setDocuments(old => Object.fromEntries(Object.entries(old).filter(([key]) => key !== id))); changed(); }} />
       <fieldset><legend className="font-semibold">Informazioni selezionate</legend><div className="grid gap-2 md:grid-cols-2">
         {(Object.entries(selectiveProjectFields) as [SelectiveProjectField, string][]).map(([key, label]) => <label key={key}><input type="checkbox" checked={fields.includes(key)}
           onChange={event => setFields(old => event.target.checked ? [...old, key] : old.filter(value => value !== key))} /> {label}</label>)}
@@ -40,30 +51,36 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
       <label className="block">Scadenza facoltativa<input type="datetime-local" value={expires} onChange={event => setExpires(event.target.value)} className="ml-3 rounded border p-2" /></label>
       <input type="hidden" name="selection" value={JSON.stringify(selection)} />
       <button type="submit" disabled={preparing || !recipientId} className="rounded bg-blue-900 px-4 py-2 text-white">{preparing ? 'Preparazione…' : 'Anteprima come utente'}</button>
+      </fieldset>
       <p role="status">{preview.message}</p>
     </form>
-    {preview.preview && previewGeneration === generation && !confirmation.ok && <>
-      <div className="rounded border border-amber-500 p-4"><h2 className="font-semibold">Impatto prima della conferma — {preview.preview.recipientName}</h2>
+    {!preparing && preview.preview && previewGeneration === generation && !confirmation.ok && <>
+      <div className="rounded border border-amber-500 p-4"><h2 className="font-semibold">Impatto prima della conferma — {preview.preview.recipientName} · {preview.preview.recipientEmail}</h2>
         <p>{preview.preview.impact.previouslyFullProjectAccess ? 'La persona dispone già di accesso ordinario al progetto: verrà sostituito dalla sola selezione.' : 'La persona potrà consultare soltanto la selezione approvata.'}</p>
         <p>Ruoli globali, assegnazioni, perimetri cliente e override non amplieranno questa selezione. Modifica, caricamento, invio e assegnazione saranno bloccati sul progetto. Gli altri fascicoli mantengono i propri permessi.</p>
         {preview.preview.impact.replacesPreviousSelection && <p>Questa conferma sostituirà la precedente selezione.</p>}
         <p>Dopo revoca o scadenza, i permessi più ampi precedenti non si riattiveranno automaticamente.</p>
       </div>
       <SelectiveProjectView projection={preview.preview.projection} preview previewToken={preview.preview.token} />
-      <form action={confirm} className="space-y-3"><input type="hidden" name="token" value={preview.preview.token} />
+      <form action={confirm} onReset={event => event.preventDefault()} className="space-y-3"><input type="hidden" name="token" value={preview.preview.token} />
         <label className="block"><input required name="personalConfirmation" type="checkbox" /> Confermo personalmente la selezione e l’impatto indicati.</label>
         <p className="text-sm">È richiesta la conferma di sicurezza dell’account privilegiato autorizzato.</p>
         <button disabled={confirming} className="rounded bg-blue-900 px-4 py-2 text-white">Conferma accesso</button>
       </form>
     </>}
     <p role="status">{confirmation.message}</p>
-    <section><h2 className="text-xl font-bold">Concessioni precedenti</h2>{grants.map(row => <Revoke key={`${row.id}:${row.revision}`} grant={row} name={recipients.find(person => person.id === row.recipientId)?.name ?? 'Persona non attiva'} />)}</section>
+    {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
+    {confirmation.ok && <a className="font-semibold underline" href={`/projects/${projectId}/share`}>Riapri le concessioni registrate</a>}
+    <section><h2 className="text-xl font-bold">Concessioni precedenti</h2>{grants.map(row => {
+      const person = recipients.find(person => person.id === row.recipientId);
+      return <Revoke key={`${row.id}:${row.revision}`} grant={row} name={person ? `${person.name} · ${person.email}` : 'Persona non attiva'} />;
+    })}</section>
   </div>;
 }
 function Revoke({ grant, name }: { grant: Grant; name: string }) {
   const [state, action, pending] = useActionState(revokeSharing, initial);
-  return <form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.suspended ? 'Sospesa: serve una nuova anteprima e conferma personale' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
+  return <div><form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.suspended ? 'Sospesa: serve una nuova anteprima e conferma personale' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
     <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} />
     {!grant.revoked && !state.ok && <button disabled={pending} className="underline">Revoca accesso</button>}<p role="status">{grant.revoked ? 'Accesso revocato.' : state.message}</p>
-  </form>;
+  </form>{state.stepUpRequired && <InlinePrivilegedConfirmation />}</div>;
 }

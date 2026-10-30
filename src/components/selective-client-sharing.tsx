@@ -1,9 +1,10 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
+import { sharingLocalExpiry, UnavailableSharingChoices } from './sharing-draft-helpers';
 
 import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
 import { useActionState, useState, useSyncExternalStore } from 'react';
-import { useRouter } from 'next/navigation';
 import { prepareClientSharing, confirmClientSharingAction, revokeClientSharingAction, checkClientSharingReceipt, type ClientSharingState } from '@/lib/selective-client-actions';
 import { selectiveClientFields, type SelectiveClientField } from '@/lib/selective-client-policy';
 import { maxClientDocuments, type ClientDocumentChoice } from '@/lib/selective-client-document-policy';
@@ -16,7 +17,7 @@ const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-whit
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 type Grant = { id: string; recipientId: string; recipientName: string; recipientEmail: string; revision: number;
-  revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; commandId: string; documentCount: number; companyCount: number; companyFieldCount: number; personCount: number; personFieldCount: number };
+  revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; documents: ClientDocumentChoice[]; companies: ClientCompanyChoice[]; people: ClientPersonChoice[]; commandId: string; documentCount: number; companyCount: number; companyFieldCount: number; personCount: number; personFieldCount: number };
 type DocumentOption = { documentId: string; versionId: string; version: number; title: string; fileName: string; mimeType: string; category: string; area: string };
 function rememberCommand(id: string) {
   // A lost response can be reconciled after reload without creating a command.
@@ -39,7 +40,6 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   companyOptions: { id: string; name: string }[]; companiesLimited: boolean;
   personOptions: ClientPersonOption[]; peopleLimited: boolean;
 }) {
-  const router = useRouter();
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [recipientId, setRecipient] = useState(''), [fields, setFields] = useState<SelectiveClientField[]>([]);
   const [documents, setDocuments] = useState<ClientDocumentChoice[]>([]), [documentSearch, setDocumentSearch] = useState('');
@@ -56,13 +56,22 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
     expiresAt: expiresTime !== null && validExpiry ? new Date(expiresTime).toISOString() : null };
   const locked = confirming || confirmation.ok || !!confirmation.uncertain;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
-  const prepared = previewGeneration === generation && preview.preview;
+  function chooseRecipient(id: string) {
+    const existing = grants.find(row => row.recipientId === id);
+    setRecipient(id); setFields(existing?.fields ?? []); setDocuments(existing?.documents ?? []);
+    setCompanies(existing?.companies ?? []); setPeople(existing?.people ?? []); setExpires(sharingLocalExpiry(existing?.expiresAt));
+  }
+  const prepared = !preparing && previewGeneration === generation && preview.preview?.input.commandId === commandId && preview.preview;
   return <div className="min-w-0 space-y-6" data-testid="client-sharing" data-interactive-ready={ready}>
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-4">
       <fieldset disabled={!ready || locked || preparing} className="min-w-0 space-y-4">
-        <label className="block font-semibold">Persona esistente<select required className={control} value={recipientId} onChange={event => setRecipient(event.target.value)}>
+        <label className="block font-semibold">Persona esistente<select required className={control} value={recipientId} onChange={event => chooseRecipient(event.target.value)}>
           <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email} · {person.role}</option>)}
         </select></label>
+        {grant && <p role="status">Bozza dalla selezione registrata, revisione {grant.revision}{grant.revoked ? ' · revocata' : ''}. Controlla campi, versioni e scadenza; nessuna concessione cambia prima della nuova conferma.</p>}
+        <UnavailableSharingChoices label="Versioni selezionate non presenti nell’elenco" ids={documents.filter(row => !documentOptions.some(option => option.versionId === row.versionId)).map(row => row.versionId)} remove={id => { setDocuments(old => old.filter(row => row.versionId !== id)); changed(); }} />
+        <UnavailableSharingChoices label="Aziende selezionate non presenti nell’elenco" ids={companies.filter(row => !companyOptions.some(option => option.id === row.companyId)).map(row => row.companyId)} remove={id => { setCompanies(old => old.filter(row => row.companyId !== id)); changed(); }} />
+        <UnavailableSharingChoices label="Referenti selezionati non presenti nell’elenco" ids={people.filter(row => !personOptions.some(option => option.membershipId === row.membershipId)).map(row => row.membershipId)} remove={id => { setPeople(old => old.filter(row => row.membershipId !== id)); changed(); }} />
         <fieldset><legend className="mb-2 font-semibold">Campi che la persona potrà leggere</legend><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {(Object.entries(selectiveClientFields) as [SelectiveClientField, string][]).map(([key, label]) => <label className="flex items-center gap-2 rounded-lg border p-3" key={key}>
             <input type="checkbox" checked={fields.includes(key)} onChange={event => setFields(old => event.target.checked ? [...old, key] : old.filter(value => value !== key))} />{label}</label>)}
@@ -127,7 +136,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
         <h4 className="font-semibold">Referente {index + 1}</h4><dl className="grid min-w-0 gap-3 sm:grid-cols-2">{person.fields.map(field => <div key={field.key} className="min-w-0"><dt>{field.label}</dt><dd className="break-words whitespace-pre-wrap">{field.value}</dd></div>)}</dl>
       </section>)}</div>}
       {!!prepared.documents.length && <div className="space-y-2 rounded-xl bg-white p-4"><h3 className="font-semibold">Versioni visibili al destinatario</h3>{prepared.documents.map(document => <p key={document.versionId} className="break-words">{document.title} · versione {document.version} · {document.fileName} · {selectedDocumentAccessLabel(document, document.download)}</p>)}</div>}
-      <form action={confirm} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
+      <form action={confirm} onReset={event => event.preventDefault()} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
         <input type="hidden" name="selection" value={JSON.stringify(prepared.input)} /><input type="hidden" name="token" value={prepared.token} />
         <label className="flex items-start gap-2"><input required type="checkbox" name="confirmed" disabled={locked} />Confermo personalmente i campi del cliente, delle aziende e dei referenti, le versioni dei documenti, il destinatario e l’effetto sui permessi.</label>
         <p className="text-sm">È necessaria la conferma di sicurezza del profilo personale autorizzato.</p>
@@ -136,7 +145,8 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
       <Receipt commandId={prepared.input.commandId} clientId={clientId} />
     </section>}
     <p role="status">{confirmation.message}</p>
-    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => router.refresh()}>Ricarica lo stato corrente</button>}
+    {confirmation.stepUpRequired && <InlinePrivilegedConfirmation />}
+    {(confirmation.ok || confirmation.uncertain) && <button className="font-semibold underline" onClick={() => window.location.reload()}>Ricarica lo stato corrente</button>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Selezioni e revoche</h2>
       {!grants.length && <p>Nessuna selezione registrata per questo cliente.</p>}
       {grants.map(row => <Revoke key={`${row.id}:${row.revision}`} grant={row} clientId={clientId} />)}
@@ -144,6 +154,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   </div>;
 }
 function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
+  const [commandId] = useState(grant.commandId);
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, action, pending] = useActionState(revokeClientSharingAction, initial);
   return <div className="min-w-0 space-y-3 rounded-xl border p-4">
@@ -154,11 +165,12 @@ function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
     <p className="text-sm">Aziende selezionate: {grant.companyCount} · campi aziendali: {grant.companyFieldCount}</p>
     <p className="text-sm">Collegamenti dei referenti selezionati: {grant.personCount} · campi dei referenti: {grant.personFieldCount}</p>
     <p>{grant.expiresAt ? `Scadenza: ${new Date(grant.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza indicata'}</p>
-    {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(grant.commandId)} className="space-y-3">
-      <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={grant.commandId} />
+    {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(commandId)} className="space-y-3">
+      <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={commandId} />
       <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={!ready || pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
       <button disabled={!ready || pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
     </form>}
-    <p role="status">{state.message}</p>{!grant.revoked && <Receipt commandId={grant.commandId} clientId={clientId} />}
+    <p role="status">{state.message}</p>
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}{!grant.revoked && <Receipt commandId={commandId} clientId={clientId} />}
   </div>;
 }

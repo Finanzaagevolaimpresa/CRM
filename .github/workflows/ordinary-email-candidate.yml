@@ -84,7 +84,7 @@ jobs:
           set -euo pipefail
           export LOCAL_DOCUMENT_STORAGE_ROOT="$(mktemp -d "$RUNNER_TEMP/synthetic-context-files-XXXXXX")"
           node --import tsx --test --test-reporter=tap tests/admin-email-contexts-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/contexts-database.tap"
-          grep -Fx '# pass 22' "$RUNNER_TEMP/ordinary-email/contexts-database.tap"
+          grep -Fx '# pass 23' "$RUNNER_TEMP/ordinary-email/contexts-database.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/contexts-database.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/contexts-database.tap"
       - name: Native browser decisions through an isolated real TLS transport

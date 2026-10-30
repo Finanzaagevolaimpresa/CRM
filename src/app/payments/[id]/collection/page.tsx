@@ -1,3 +1,4 @@
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader } from '@/components/ui';
@@ -28,6 +29,7 @@ export default async function CollectionPage({ params, searchParams }: {
   }
   return <div className="crm-space-y-6 min-w-0">
     <PageHeader title="Conferma incasso" description={`${setup.client} · ${setup.contract} · € ${setup.amount}`} />
+    <AdminRecordShortcut session={session} model="Payment" id={id} />
     <Link className="font-semibold text-fai-blue underline" href="/payments">Torna ai pagamenti</Link>
     <Card title="Rata e prova del pagamento">
       {!setup.reconciliationOnly && <><p className="mb-4">Registra l’incasso effettivo della rata già presente. L’importo non viene modificato. Scegli la prova verificata nel fascicolo, distinta dall’incarico firmato; dimensione massima 50 MB.</p>

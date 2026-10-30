@@ -100,7 +100,7 @@ test('child-only project and service assignments retain uploads and inherited do
   const first = await upload(clientId, '', inheritedServiceId, 'before');
   if (process.env.PRIVILEGED_ACCESS_MODE === 'enforced') {
     await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-    await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
+    await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
   }
   await admin.goto('/clients/' + clientId);
   const assignment = admin.getByRole('form', { name: 'Assegna responsabili' });

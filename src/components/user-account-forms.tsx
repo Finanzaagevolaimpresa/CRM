@@ -1,6 +1,7 @@
 'use client';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { adminResetPassword, revokeAllAccountSessions, saveAccountProfile, saveOwnPassword } from '@/lib/user-account-actions';
 import { initialAccountFormState } from '@/lib/user-account-contract';
 
@@ -10,36 +11,43 @@ const button = 'rounded-xl bg-fai-green px-4 py-3 font-bold text-white disabled:
 export function UserAccountForms({ user, own, admin, available }: {
   user: { id: string; name: string; email: string }; own: boolean; admin: boolean; available: boolean;
 }) {
+  const [name, setName] = useState(user.name), [email, setEmail] = useState(user.email);
+  const [passwords, setPasswords] = useState({ currentPassword: '', password: '', confirmation: '' });
   const [profileState, profileAction, profilePending] = useActionState(saveAccountProfile, initialAccountFormState);
-  const [passwordState, passwordAction, passwordPending] = useActionState(own ? saveOwnPassword : adminResetPassword, initialAccountFormState);
+  const [passwordState, passwordAction, passwordPending] = useActionState(async (state: typeof initialAccountFormState, form: FormData) => {
+    const result = await (own ? saveOwnPassword : adminResetPassword)(state, form);
+    if (result.ok) setPasswords({ currentPassword: '', password: '', confirmation: '' });
+    return result;
+  }, initialAccountFormState);
   const [revokeState, revokeAction, revokePending] = useActionState(revokeAllAccountSessions, initialAccountFormState);
   if (!available) return <p role="status">La gestione del profilo e delle sessioni non è disponibile. Contatta un amministratore.</p>;
   return <div className="crm-space-y-6">
-    <form action={profileAction} aria-label="Modifica profilo" className="crm-space-y-3">
+    <form onReset={event => event.preventDefault()} action={profileAction} aria-label="Modifica profilo" className="crm-space-y-3">
       <h3 className="text-lg font-bold">Dati professionali</h3>
       <input type="hidden" name="userId" value={user.id} />
-      <label className="block">Nome<input className={field} name="name" defaultValue={user.name} required maxLength={120} /></label>
-      <label className="block">Email di accesso<input className={field} name="email" type="email" defaultValue={user.email} required readOnly={!admin} maxLength={254} /></label>
+      <label className="block">Nome<input className={field} name="name" value={name} onChange={event => setName(event.target.value)} required maxLength={120} /></label>
+      <label className="block">Email di accesso<input className={field} name="email" type="email" value={email} onChange={event => setEmail(event.target.value)} required readOnly={!admin} maxLength={254} /></label>
       {admin && <p className="text-sm">Il cambio dell’email revoca tutte le sessioni dell’account.</p>}
       <button className={button} disabled={profilePending}>Salva profilo</button>
       <p role="status">{profileState.message}</p>
     </form>
-    <form action={passwordAction} aria-label={own ? 'Cambia password' : 'Reimposta password'} className="crm-space-y-3">
+    <form onReset={event => event.preventDefault()} action={passwordAction} aria-label={own ? 'Cambia password' : 'Reimposta password'} className="crm-space-y-3">
       <h3 className="text-lg font-bold">{own ? 'Cambia password' : 'Reimposta password'}</h3>
       <input type="hidden" name="userId" value={user.id} />
-      {own && <label className="block">Password attuale<input className={field} type="password" name="currentPassword" autoComplete="current-password" required /></label>}
-      <label className="block">Nuova password<input className={field} type="password" name="password" autoComplete="new-password" minLength={12} maxLength={72} required /></label>
-      <label className="block">Conferma password<input className={field} type="password" name="confirmation" autoComplete="new-password" minLength={12} maxLength={72} required /></label>
+      {own && <label className="block">Password attuale<input className={field} type="password" name="currentPassword" value={passwords.currentPassword} onChange={event => setPasswords({ ...passwords, currentPassword: event.target.value })} autoComplete="current-password" required /></label>}
+      <label className="block">Nuova password<input className={field} type="password" name="password" value={passwords.password} onChange={event => setPasswords({ ...passwords, password: event.target.value })} autoComplete="new-password" minLength={12} maxLength={72} required /></label>
+      <label className="block">Conferma password<input className={field} type="password" name="confirmation" value={passwords.confirmation} onChange={event => setPasswords({ ...passwords, confirmation: event.target.value })} autoComplete="new-password" minLength={12} maxLength={72} required /></label>
       <p className="text-sm">Usa almeno 12 caratteri. La modifica revoca tutte le sessioni, anche sugli altri dispositivi.{own ? ' Dovrai accedere nuovamente.' : ''}</p>
       <button className={button} disabled={passwordPending}>{own ? 'Aggiorna password' : 'Reimposta password'}</button>
       <p role="status">{passwordState.message}</p>
     </form>
-    <form action={revokeAction} aria-label="Revoca sessioni" className="crm-space-y-3">
+    <form onReset={event => event.preventDefault()} action={revokeAction} aria-label="Revoca sessioni" className="crm-space-y-3">
       <input type="hidden" name="userId" value={user.id} />
       <h3 className="text-lg font-bold">Accessi aperti</h3>
       <p className="text-sm">Chiudi tutte le sessioni dell’account.{own ? ' Anche questa sessione verrà chiusa.' : ' Il prossimo accesso richiederà la password.'}</p>
       <button className={button} disabled={revokePending}>Revoca tutte le sessioni</button>
       <p role="status">{revokeState.message}</p>
     </form>
+    {(profileState.stepUpRequired || passwordState.stepUpRequired || revokeState.stepUpRequired) && <InlinePrivilegedConfirmation />}
   </div>;
 }

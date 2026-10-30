@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { mayManageSelectiveAccess } from '@/lib/selective-project-access';
 import { SelectiveProjectSharing } from '@/components/selective-project-sharing';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
+import { selectiveSelectionSchema } from '@/lib/selective-project-policy';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession();
@@ -13,9 +14,9 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const project = await prisma.project.findFirst({ where: { id, deletedAt: null, status: { not: 'archiviato' } } });
   if (!project || !await prisma.client.findFirst({ where: { id: project.clientId, deletedAt: null }, select: { id: true } })) notFound();
   const [recipients, candidates, grants] = await Promise.all([
-    prisma.user.findMany({ where: { active: true, deletedAt: null, id: { not: session.userId } }, orderBy: [{ name: 'asc' }, { id: 'asc' }], select: { id: true, name: true, role: true } }),
+    prisma.user.findMany({ where: { active: true, deletedAt: null, id: { not: session.userId } }, orderBy: [{ name: 'asc' }, { id: 'asc' }], select: { id: true, name: true, email: true, role: true } }),
     prisma.document.findMany({ where: { projectId: id, clientId: project.clientId, deletedAt: null, visibilityLevel: 'interno', mimeType: { in: ['application/pdf', 'text/plain', 'image/png', 'image/jpeg'] } } }),
-    prisma.selectiveProjectGrant.findMany({ where: { projectId: id }, orderBy: { approvedAt: 'desc' }, select: { id: true, recipientId: true, revision: true, revokedAt: true, expiresAt: true, approvedAt: true } }),
+    prisma.selectiveProjectGrant.findMany({ where: { projectId: id }, orderBy: { approvedAt: 'desc' }, select: { id: true, recipientId: true, revision: true, revokedAt: true, expiresAt: true, approvedAt: true, selection: true } }),
   ]);
   const lifecycle = await prisma.auditLog.findFirst({ where: { event: 'project_lifecycle_changed', entityType: 'Project', entityId: id }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
   const documents = await filterFinancialDocuments(prisma, { role: 'commerciale', active: true, permissionOverrides: [] }, candidates);
@@ -25,6 +26,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <SelectiveProjectSharing projectId={id} recipients={recipients} documents={versions.flatMap(version => {
       const doc = byId.get(version.documentId);
       return doc ? [{ versionId: version.id, version: version.version, title: doc.title, fileName: doc.fileName }] : [];
-    })} grants={grants.map(grant => ({ id: grant.id, recipientId: grant.recipientId, revision: grant.revision, revoked: Boolean(grant.revokedAt), suspended: Boolean(lifecycle && lifecycle.createdAt >= grant.approvedAt), expiresAt: grant.expiresAt?.toISOString() ?? null }))} />
+    })} grants={grants.map(grant => {
+      const selection = selectiveSelectionSchema.safeParse(grant.selection && typeof grant.selection === 'object' && !Array.isArray(grant.selection) ? grant.selection.input : null);
+      return { id: grant.id, recipientId: grant.recipientId, revision: grant.revision, revoked: Boolean(grant.revokedAt), suspended: Boolean(lifecycle && lifecycle.createdAt >= grant.approvedAt), expiresAt: grant.expiresAt?.toISOString() ?? null,
+        fields: selection.success ? selection.data.fields : [], documents: selection.success ? selection.data.documents : [] };
+    })} />
   </div>;
 }

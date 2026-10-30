@@ -1,7 +1,7 @@
 import type { previewTechnicalUpload } from './technical-upload-service';
 import type { previewTechnicalUploadReview } from './technical-upload-review-service';
 import type { previewTechnicalDocumentAcquisition } from './technical-document-acquisition-service';
-export type TechnicalUploadState = { ok: boolean; message: string; uncertain?: boolean; recorded?: boolean;
+export type TechnicalUploadState = { ok: boolean; message: string; uncertain?: boolean; recorded?: boolean; stepUpRequired?: boolean;
   uploadPreview?: Awaited<ReturnType<typeof previewTechnicalUpload>>;
   reviewPreview?: Awaited<ReturnType<typeof previewTechnicalUploadReview>>;
   acquisitionPreview?: Awaited<ReturnType<typeof previewTechnicalDocumentAcquisition>> };

@@ -18,7 +18,7 @@ async function login(page: Page, email: string) {
 }
 async function stepUp(page: Page) {
   await page.goto('/settings/security'); await page.getByLabel('Password corrente').fill(password);
-  await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(page).toHaveURL(/status=active/);
+  await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(page).toHaveURL(/status=active/);
 }
 async function capture(page: Page, path: string) {
   await page.evaluate(pathname => {
@@ -65,10 +65,20 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
     await form.getByLabel('Motivazione', { exact: true }).fill(f.input.reason); await form.getByRole('checkbox').check();
     await capture(admin, path); await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click(); return captured(admin);
   }
-  const denied = await submit(); await expect(admin).toHaveURL(/\/settings\/security/); expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
+  const denied = await submit(); expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
   await replay(tech, denied); expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
-  if (mode === 'disabled') { await ac.close(); await tc.close(); await oc.close(); return; }
-  await stepUp(admin); const committedRequest = await submit();
+  if (mode === 'disabled') { await expect(form.getByRole('status')).toContainText('non disponibile'); await ac.close(); await tc.close(); await oc.close(); return; }
+  const inline = admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible();
+  await expect(form.getByLabel('Referente tecnico', { exact: true })).toHaveValue(f.tech.id);
+  await expect(form.getByLabel('Motivazione', { exact: true })).toHaveValue(f.input.reason);
+  await expect(form.getByRole('checkbox')).toBeChecked();
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
+  await capture(admin, path); await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
+  const committedRequest = await captured(admin);
   await expect.poll(async () => Boolean(await getHandoffReceipt(db, f.service.id))).toBe(true);
   const receipt = (await getHandoffReceipt(db, f.service.id))!;
   await admin.goto(path);

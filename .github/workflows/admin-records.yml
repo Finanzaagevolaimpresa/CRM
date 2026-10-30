@@ -1,0 +1,114 @@
+name: Admin master records
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  qualify:
+    name: Admin records ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [migration, postgresql, browser] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-admin-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-admin-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      ADMIN_RECORD_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-admin-auth-only-000000000000
+      AUTH_COOKIE_NAME: fai_admin_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-admin-step-up-00000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      PRACTICE_READINESS_MODE: synthetic
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3059
+      ADMIN_RECORD_BROWSER_PASSWORD: synthetic-admin-browser-password-000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bind source and prepare only the isolated database
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          evidence="$RUNNER_TEMP/admin-records"
+          mkdir -p "$evidence"
+          echo "ADMIN_RECORD_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$evidence/synthetic-files" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          if [[ '${{ matrix.target }}' == migration ]]; then
+            ADMIN_RECORD_EVIDENCE="$evidence" bash scripts/admin-records/qualify-migration.sh
+          else
+            npm run prisma:migrate:deploy
+          fi
+      - name: Types, field contracts and Admin boundaries
+        run: |
+          npx tsc --noEmit
+          npx eslint src/lib/admin-record*.ts src/lib/admin-user*.ts src/lib/user-actions.ts src/components/admin-record-editor.tsx src/components/admin-reference-select.tsx src/components/admin-user*.tsx src/app/admin/records tests/admin-record*.test.ts tests/admin-records --max-warnings 0
+          node --import tsx --test tests/admin-record-values.test.ts tests/admin-privileged-window.test.ts
+      - name: PostgreSQL correction, lifecycle, concurrency, reconciliation and rollback
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/admin-records-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 49' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 49' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+      - name: Prepare isolated browser accounts
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/admin-records/provision-browser.ts
+      - name: Native Admin correction, inline confirmation, recovery and reopening
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3059 > "$ADMIN_RECORD_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3059/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"; sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_RECORD_EVIDENCE/playwright.json" npx playwright test --config tests/admin-records/playwright.config.ts --reporter=line,json
+          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==15 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Preserve exact source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$ADMIN_RECORD_EVIDENCE/source.txt"
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: admin-records-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/admin-records
+            test-results
+          if-no-files-found: error
+          retention-days: 14

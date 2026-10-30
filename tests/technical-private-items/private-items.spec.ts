@@ -18,7 +18,7 @@ async function login(page: Page, email: string, stepUp = false) {
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) { await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    await page.getByRole('button', { name: /Conferma per (5|30) minuti/, exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible(); }
 }
 async function preview(page: Page, row: Row, kind: 'Task' | 'ChecklistItem', title: string, project = false) {
@@ -69,7 +69,22 @@ test('native preview creates nothing; exact private task and checklist save with
     const title = kind === 'Task' ? 'Relazione tecnica privata' : 'Documenti tecnici da preparare';
     const command = await preview(page, row, kind, title);
     expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
-    await screenshot(page, kind.toLowerCase() + '-creation-preview'); await save(page);
+    await screenshot(page, kind.toLowerCase() + '-creation-preview');
+    if (kind === 'Task') {
+      await page.context().clearCookies({ name: 'fai_crm_privileged_step_up' });
+      await page.getByRole('button', { name: 'Crea elemento privato', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
+      expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
+      await expect(page.getByLabel('Confermo il contenuto e la creazione privata.', { exact: true })).toBeChecked();
+      await page.getByLabel('Password corrente', { exact: true }).fill(password);
+      await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+      await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+      expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(0);
+      await page.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Crea elemento privato', exact: true })).toBeEnabled();
+      await page.getByLabel('Confermo il contenuto e la creazione privata.', { exact: true }).check();
+    }
+    await save(page);
     expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(1);
     expect(await db.auditLog.count({ where: { id: command.commandId } })).toBe(1);
     await screenshot(page, kind.toLowerCase() + '-creation-receipt');
@@ -129,11 +144,29 @@ test('lost native response recovers the single creation receipt without another 
   await page.getByRole('button', { name: 'Crea elemento privato', exact: true }).click(); await complete;
   await page.unroute('**/assignments/create**'); expect(forwarded).toBe(1);
   expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: command.commandId } })).toBe(1);
-  await page.reload(); await expect(page.getByRole('button', { name: 'Crea elemento privato', exact: true })).toHaveCount(0);
+  const recoveryUrl = page.url(); await login(page, fixture.adminEmail, true); await page.goto(recoveryUrl);
+  await expect(page.getByRole('button', { name: 'Crea elemento privato', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Verifica esito della creazione', exact: true }).click();
   await expect(page.getByText('Creazione già registrata. L’elemento resta privato finché non scegli chi potrà utilizzarlo.', { exact: true })).toBeVisible();
   await screenshot(page, 'private-creation-recovery');
   expect(await db.auditLog.count({ where: { id: command.commandId } })).toBe(1);
+  const absent = await preview(page, row, 'Task', 'Richiesta interrotta prima del server');
+  let late: { url: string; body: Buffer; headers: Record<string, string> } | undefined;
+  await page.route('**/assignments/create**', async route => {
+    const request = route.request(); if (request.method() !== 'POST' || !request.headers()['next-action']) return route.continue();
+    late = { url: request.url(), body: request.postDataBuffer()!, headers: { 'next-action': request.headers()['next-action'], 'content-type': request.headers()['content-type'], origin: new URL(request.url()).origin } };
+    await route.abort('failed');
+  });
+  await page.getByRole('button', { name: 'Crea elemento privato', exact: true }).click();
+  await expect.poll(() => Boolean(late)).toBe(true); await page.unroute('**/assignments/create**'); await page.reload();
+  await page.getByRole('button', { name: 'Verifica esito della creazione', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Riconcilia e chiudi la creazione non registrata', exact: true })).toBeVisible();
+  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Riconcilia e chiudi la creazione non registrata', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Prepara una nuova creazione', exact: true })).toBeVisible();
+  expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: absent.commandId } })).toBe(0);
+  await page.request.post(late!.url, { headers: late!.headers, data: late!.body });
+  expect(await db.technicalPrivateItemOrigin.count({ where: { commandId: absent.commandId } })).toBe(0);
+  expect(await db.auditLog.count({ where: { id: 'technical-private-attempt:' + absent.commandId } })).toBe(1);
 });
 test('revocation of the open Admin session prevents native confirmation and creates no private row', async ({ page }) => {
   const row = fixture.rows[3]; await login(page, fixture.adminEmail, true);

@@ -16,6 +16,10 @@ import { readCommercialProgress } from '../src/lib/commercial-progress';
 import { createTechnicalAssignmentPreview } from '../src/lib/technical-assignment-preview';
 import { TechnicalAssignmentPreparationError } from '../src/lib/technical-assignment-errors';
 import { technicalAssignmentFailure } from '../src/lib/technical-assignment-failure';
+import { settleTechnicalAssignmentAttempt } from '../src/lib/technical-assignment-service';
+import { TechnicalAssignmentAttemptClosedError } from '../src/lib/technical-assignment-errors';
+import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
+import { loadOperationalWorkCatalogue } from '../src/lib/operational-work';
 
 // New PostgreSQL execution is confined to the approved ephemeral CI job.
 const enabled = process.env.RUN_TECHNICAL_ASSIGNMENT_DB_TESTS === '1';
@@ -42,6 +46,91 @@ test('no sharing/email/Admin authority substitutes the distinct empty technical 
   const other = await syntheticPerson(db, 'Admin senza binding sintetico');
   await assert.rejects(readTechnicalAssignmentManagement(db, other.session, target));
   assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).operational, true);
+});
+
+test('project priority and named owners are visible only when individually selected, including the operational list', options, async () => {
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), target = technicalTarget(f, 'Project');
+  await assignTechnical(db, admin, target, f.techB, { statusOnly: true });
+  const first = await readTechnicalWork(db, f.techB.session, target);
+  assert.deepEqual(first.fields.map(row => row.key), ['status']);
+  const input = await assignmentInput(db, admin, target, f.techB, { statusOnly: true });
+  assert.equal(input.selection.kind, 'Project');
+  if (input.selection.kind !== 'Project') throw new Error('fixture target');
+  input.selection.readableFields = ['status', 'priority', 'technicalOwnerName', 'commercialOwnerName'];
+  const ref = { ...target, recipientId: f.techB.user.id };
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true);
+  const view = await readTechnicalWork(db, f.techB.session, target);
+  assert.equal(view.fields.find(field => field.key === 'technicalOwnerName')?.value, f.techA.user.name);
+  assert.equal(view.fields.find(field => field.key === 'commercialOwnerName')?.value, f.salesA.user.name);
+  const row = (await loadOperationalWorkCatalogue(db, f.techB.session, 'Project')).records.find(item => item.id === target.targetId)!;
+  assert.equal(row.priority, f.project.priority);
+  assert.deepEqual(row.technicalOwner, { id: null, name: f.techA.user.name });
+  assert.deepEqual(row.commercialOwner, { id: null, name: f.salesA.user.name });
+  assert.equal(row.client, null);
+  assert(!JSON.stringify(view.fields).includes(f.salesA.user.id));
+  await revokeTechnical(db, admin, target, f.techB);
+  assert(!(await loadOperationalWorkCatalogue(db, f.techB.session, 'Project')).records.some(item => item.id === target.targetId));
+});
+
+test('Admin thirty-minute proof works after five minutes and a revoked login still denies every operation', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), input = await assignmentInput(db, admin, target, f.techA);
+  const ref = { ...target, recipientId: f.techA.user.id }, proof = leadProof(admin);
+  proof.stepUpToken = createPrivilegedStepUpToken({ key: proof.key, userId: admin.user.id,
+    sessionToken: proof.sessionToken, role: 'admin', nowSeconds: Math.floor(Date.now() / 1000) - 600 });
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  const receipt = await confirmTechnicalAssignment(db, admin.session, proof, ref, 'ASSIGN', input, preview.token, true);
+  assert.equal(receipt.commandId, input.commandId);
+  const login = await syntheticSession(db, admin.user);
+  const revokedProof = { key: proof.key, sessionToken: login.token, stepUpToken: createPrivilegedStepUpToken({ key: proof.key,
+    userId: admin.user.id, sessionToken: login.token, role: 'admin' }) };
+  await db.internalSession.update({ where: { id: login.session.sessionId! }, data: { revokedAt: new Date() } });
+  await assert.rejects(confirmTechnicalAssignment(db, login.session, revokedProof, ref, 'ASSIGN', input, preview.token, true));
+  await assert.rejects(settleTechnicalAssignmentAttempt(db, login.session, ref, randomUUID()));
+  assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 1);
+});
+
+test('settlement durably closes an absent command, survives reopening and refuses its later execution', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), input = await assignmentInput(db, admin, target, f.techA);
+  input.commandId = '03012345-6789-4012-8123-123456789012';
+  const ref = { ...target, recipientId: f.techA.user.id }, preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  assert.deepEqual(await readTechnicalAssignmentOutcome(db, admin.session, ref, input.commandId), { status: 'NOT_OBSERVED' });
+  const closed = await settleTechnicalAssignmentAttempt(db, admin.session, ref, input.commandId);
+  assert.deepEqual(closed, { status: 'CLOSED_WITHOUT_RECEIPT', commandId: input.commandId });
+  assert.deepEqual(await settleTechnicalAssignmentAttempt(db, admin.session, ref, input.commandId), closed);
+  assert.deepEqual(await readTechnicalAssignmentOutcome(db, admin.session, ref, input.commandId), closed);
+  await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true), TechnicalAssignmentAttemptClosedError);
+  assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 0);
+  assert.equal(await db.auditLog.count({ where: { id: `technical-attempt:${input.commandId}` } }), 1);
+  await assert.rejects(db.auditLog.delete({ where: { id: `technical-attempt:${input.commandId}` } }), /ADMIN_COMMAND_AUDIT_RETAINED/);
+  await assert.rejects(db.auditLog.update({ where: { id: `technical-attempt:${input.commandId}` }, data: { after: {} } }), /ADMIN_COMMAND_AUDIT_RETAINED/);
+  const next = { ...input, commandId: randomUUID() };
+  const fresh = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', next);
+  await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', next, fresh.token, true);
+  assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 1);
+});
+
+test('settlement after a lost response returns the recorded receipt and never closes or duplicates it', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), a = await assignTechnical(db, admin, target, f.techA);
+  assert.deepEqual(await settleTechnicalAssignmentAttempt(db, admin.session, a.ref, a.input.commandId), { status: 'RECORDED', receipt: a.receipt });
+  assert.equal(await db.auditLog.count({ where: { id: `technical-attempt:${a.input.commandId}` } }), 0);
+  await assert.rejects(settleTechnicalAssignmentAttempt(db, admin.session, { ...a.ref, recipientId: f.techB.user.id }, a.input.commandId));
+  const otherSession = await syntheticSession(db, admin.user);
+  await assert.rejects(settleTechnicalAssignmentAttempt(db, otherSession.session, a.ref, a.input.commandId));
+});
+
+test('concurrent confirmation and settlement produce one receipt or one terminal closure, never both', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), input = await assignmentInput(db, admin, target, f.techA);
+  const ref = { ...target, recipientId: f.techA.user.id }, preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await Promise.allSettled([
+    confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true),
+    settleTechnicalAssignmentAttempt(db, admin.session, ref, input.commandId),
+  ]);
+  const outcome = await settleTechnicalAssignmentAttempt(db, admin.session, ref, input.commandId);
+  const closureCount = await db.auditLog.count({ where: { id: `technical-attempt:${input.commandId}` } });
+  const assignmentCount = (await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length;
+  assert.equal(closureCount + assignmentCount, 1);
+  assert.equal(outcome.status === 'RECORDED', assignmentCount === 1);
 });
 
 test('preview is read-only; two personal assignments coexist without changing sales or legacy technical owners', options, async () => {

@@ -38,6 +38,7 @@ export function TechnicalWorkItemChoices({ data, actions, choices, onChange, cat
           checked={!!choice && enabled} onChange={event => { const next = { ...choices };
             if (event.target.checked) next[key] = { option: item, readable: [], editable: [] }; else delete next[key]; onChange(next); }} />
           {item.kind === 'Task' ? 'Attività' : 'Checklist'} · {item.title}</label>
+        <a className="font-semibold underline" target="_blank" rel="noopener" href={`/admin/records/${item.kind === 'Task' ? 'Task' : 'DocumentChecklistItem'}/${item.itemId}`}>Correggi, archivia o ripristina in una nuova scheda</a>
         {choice && !enabled && <p>Scelta conservata ma esclusa dal riepilogo: riabilita l’operazione pertinente oppure rimuovila.</p>}
         {choice && enabled && <div className="grid gap-3 sm:grid-cols-2">{technicalItemFields(item.kind).map(field => <div key={field.key} className="space-y-2">
           <label className="flex items-center gap-2"><input type="checkbox" checked={choice.readable.includes(field.key)} onChange={event => onChange({ ...choices,

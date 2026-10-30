@@ -23,6 +23,9 @@ import { technicalFieldPreview } from './technical-assignment-display';
 import { technicalAssignmentTargetFields } from './technical-assignment-target';
 import { technicalImplementedActions } from './technical-assignment-contract';
 import { assertTechnicalWorkItemChoices } from './technical-work-item-source';
+import { withTechnicalAssignmentAttemptSettlement } from './technical-assignment-transaction';
+import { readTechnicalAttemptClosure, persistTechnicalAttemptClosure } from './technical-assignment-attempt';
+import { TechnicalAssignmentAttemptClosedError } from './technical-assignment-errors';
 
 type Tx = Prisma.TransactionClient;
 type Input = ReturnType<typeof parseTechnicalAssignmentDecision>;
@@ -113,6 +116,7 @@ export async function confirmTechnicalAssignment(db: PrismaClient, claimed: Auth
     const previous = await previousOutcome(tx, state, reference, input.commandId,
       technicalAssignmentRequestDigest(operation, reference, input));
     if (previous) return previous;
+    if (await readTechnicalAttemptClosure(tx, state, reference, input.commandId)) throw new TechnicalAssignmentAttemptClosedError();
     const admission = await currentAdmission(tx, state, locked, reference, operation, input);
     const change = prepareTechnicalAssignmentDecision({ operation, key: state.key, raw: input, token, admission,
       previous: locked.previous, journal: locked.journal, assignmentId: locked.previous?.id ?? randomUUID(),
@@ -133,6 +137,31 @@ export async function readTechnicalAssignmentOutcome(db: PrismaClient, claimed: 
   return withTechnicalAssignmentManagementRead(db, claimed, reference.kind, reference.recipientId, async (tx, state) => {
     await lockedState(tx, state, reference, false, true);
     const receipt = await previousOutcome(tx, state, reference, commandId);
-    return receipt ? { status: 'RECORDED' as const, receipt } : { status: 'NOT_OBSERVED' as const };
+    return receipt ? { status: 'RECORDED' as const, receipt }
+      : await readTechnicalAttemptClosure(tx, state, reference, commandId) ?? { status: 'NOT_OBSERVED' as const };
   }, inactive);
+}
+
+/** Explicit settlement waits for the same locks as an in-flight decision.
+ * It returns the committed receipt or durably prevents any future execution
+ * of that command. An empty read alone never unlocks the editor. */
+export async function settleTechnicalAssignmentAttempt(db: PrismaClient, claimed: AuthSession,
+  rawReference: TechnicalAssignmentReference, commandId: string) {
+  const reference = technicalAssignmentReference.parse(rawReference);
+  z.string().uuid().parse(commandId);
+  let stage = 'admission';
+  try { return await withTechnicalAssignmentAttemptSettlement(db, claimed, reference.kind, reference.recipientId, async (tx, state) => {
+    stage = 'context';
+    await lockedState(tx, state, reference, true, true);
+    stage = 'receipt';
+    const receipt = await previousOutcome(tx, state, reference, commandId);
+    if (receipt) return { status: 'RECORDED' as const, receipt };
+    stage = 'closure';
+    return persistTechnicalAttemptClosure(tx, state, reference, commandId);
+  }); } catch (error) {
+    // Fixed diagnostic codes only: no subject, command, token or submitted data.
+    console.warn('TECHNICAL_ATTEMPT_SETTLEMENT_FAILED', stage,
+      error instanceof TechnicalAssignmentError ? error.code : 'UNAVAILABLE');
+    throw error;
+  }
 }

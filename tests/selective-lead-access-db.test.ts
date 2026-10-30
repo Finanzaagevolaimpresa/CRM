@@ -373,8 +373,9 @@ test('personal authority suspension fails closed for management and open recipie
 
 async function writeFixture(operation: LeadWriteAction) {
   const f = await fixture();
-  // Exercise moving an offer from independent lead B to restricted target A.
-  if (operation === 'updateCommercialOffer') await db.commercialOffer.update({ where: { id: f.offer.id }, data: { leadId: f.other.id, clientId: null } });
+  // Exercise moving an unissued draft from independent lead B to restricted A.
+  // An issued offer is immutable and is not a valid positive write fixture.
+  if (operation === 'updateCommercialOffer') await db.commercialOffer.update({ where: { id: f.offer.id }, data: { leadId: f.other.id, clientId: null, status: 'bozza' } });
   const values = operation === 'createClient'
     ? { type: 'societa', displayName: 'CLIENTE_AZIONE_SINTETICA_' + randomUUID(), leadId: f.lead.id }
     : { id: f.offer.id, leadId: f.lead.id, title: 'OFFERTA_AZIONE_SINTETICA_' + randomUUID(),
@@ -417,7 +418,13 @@ for (const operation of leadWriteActions) {
     assert.ok(after.audits.length > before.audits.length);
     if (operation === 'createClient') assert.equal(after.clients.length, before.clients.length + 1);
     else if (operation === 'createCommercialOffer') assert.equal(after.offers.length, before.offers.length + 1);
-    else assert.equal(after.offers.find(row => row.id === f.offer.id)!.leadId, f.lead.id);
+    else {
+      assert.equal(after.offers.find(row => row.id === f.offer.id)!.leadId, f.lead.id);
+      await db.commercialOffer.update({ where: { id: f.offer.id }, data: { status: 'inviata' } });
+      const issued = await businessState(f);
+      await assert.rejects(actualLeadWriteActions(db, f.reader.session)[operation](f.form), /condizioni.*storiche/);
+      assert.deepEqual(await businessState(f), issued, 'issuing freezes terms even for an independently authorized writer');
+    }
   });
 
   test(`F200-01 ${operation}: existing and revoked selection deny before any business write`, options, async () => {

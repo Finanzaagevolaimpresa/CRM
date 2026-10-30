@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export type AccountFormState = { ok: boolean; message: string };
+export type AccountFormState = { ok: boolean; message: string; stepUpRequired?: boolean };
 export const initialAccountFormState: AccountFormState = { ok: false, message: '' };
 
 export const accountProfileSchema = z.object({

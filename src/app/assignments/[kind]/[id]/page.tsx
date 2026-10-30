@@ -35,13 +35,13 @@ export default async function Page({ params, searchParams }: {
   const currentState = data.context?.state ?? data.current?.decision.state;
   const ids = [...new Set([currentState?.commercialOwnerId, currentState?.technicalOwnerId, data.current?.actorId,
     ...snapshots.flatMap(entry => [entry.row.actorId, ...(entry.decision.success ? [entry.decision.data.state.commercialOwnerId, entry.decision.data.state.technicalOwnerId] : [])])].filter((value): value is string => Boolean(value)))];
-  const named = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, active: true, deletedAt: true, role: true } });
+  const named = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true, active: true, deletedAt: true, role: true } });
   const userMap = new Map(named.map(user => [user.id, user]));
   const nameOf = (userId: string | null | undefined) => { const user = userId ? userMap.get(userId) : null;
     return user ? user.name + (user.deletedAt ? ' (rimosso)' : !user.active ? ' (sospeso)' : '') : userId ? 'Identità storica non presente' : 'Non assegnato'; };
   const q = (query.q ?? '').trim().slice(0, 120), after = query.after && /^[a-zA-Z0-9_-]{1,128}$/.test(query.after) ? query.after : undefined;
   const candidates = session.role === 'admin' ? await prisma.user.findMany({ where: { active: true, deletedAt: null, role: { in: ['admin', 'direzione', 'commerciale', 'consulente', 'backoffice'] },
-    ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true, role: true } }) : [];
+    ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { email: { contains: q, mode: 'insensitive' as const } }] } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true, email: true, role: true } }) : [];
   const choices = [...new Map([...named.filter(user => [currentState?.commercialOwnerId, currentState?.technicalOwnerId].includes(user.id)).map(user => ({ ...user, name: nameOf(user.id) })), ...candidates.slice(0, 25)].map(user => [user.id, user])).values()];
   return <div className="crm-space-y-6"><PageHeader title="Responsabilità e presa in carico" description="La decisione dell’amministratore e la conferma personale del referente sono registrazioni distinte." />
     <div className="flex gap-4"><Link href={source}>Torna alla scheda</Link><Link href="/assignments">Le mie assegnazioni</Link></div>

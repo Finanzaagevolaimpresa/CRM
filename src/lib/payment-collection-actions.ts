@@ -7,7 +7,7 @@ import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
-import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation, PrivilegedAdmissionRequired } from './privileged-access';
 import { previewPaymentCollection, confirmPaymentCollection, readPaymentCollectionReceipt } from './payment-collection';
 import { PaymentCollectionError } from './payment-collection-contract';
 import { RecordUpdateError } from './record-update-contract';
@@ -38,8 +38,8 @@ export async function previewPaymentCollectionAction(raw: unknown) {
 }
 export async function confirmPaymentCollectionAction(raw: unknown, digest: string) {
   const session = await actor();
-  await requireEnforcedPrivilegedMutation(session, 'PAYMENT_COLLECTION_DECLARE');
   try {
+    await requireEnforcedPrivilegedMutation(session, 'PAYMENT_COLLECTION_DECLARE', { inline: true });
     const key = await loadActivePrivilegedStepUpKey(prisma);
     if (!key) throw new PaymentCollectionError('DENIED');
     const store = await cookies();
@@ -49,7 +49,10 @@ export async function confirmPaymentCollectionAction(raw: unknown, digest: strin
     for (const path of ['/payments', `/payments/${result.paymentId}/collection`, `/clients/${result.clientId}`,
       `/clients/${result.clientId}/services/new`]) revalidatePath(path);
     return { ok: true as const, result };
-  } catch (error) { return failure(error); }
+  } catch (error) {
+    if (error instanceof PrivilegedAdmissionRequired) return { ok: false as const, uncertain: false, stepUpRequired: true, message: error.formState.message };
+    return failure(error);
+  }
 }
 export async function verifyPaymentCollectionAction(clientId: string, paymentId: string, commandId: string) {
   const session = await actor();

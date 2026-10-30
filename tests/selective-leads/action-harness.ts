@@ -6,6 +6,7 @@ import type { AuthSession } from '../../src/lib/auth';
 import { commercialOfferSchema, commercialOfferUpdateSchema, clientSchema } from '../../src/lib/validation';
 import { redactAuditPayload } from '../../src/lib/data-classification';
 import { withProjectResources } from '../../src/lib/project-resource-guard';
+import { assertCommercialOfferTermsPreserved } from '../../src/lib/commercial-offer-history';
 import { lockLeadActor, lockLeadWriteActor, assertLeadOperational, assertLeadActorLive } from '../../src/lib/lead-lifecycle-lock';
 import { requireLeadEditAccess, requireCommercialOfferEditAccess, requireCommercialOfferTargetAccess } from '../../src/lib/write-access';
 
@@ -27,7 +28,7 @@ const javascript = ts.transpileModule(bodies, { compilerOptions: { target: ts.Sc
 export function actualLeadWriteActions(db: PrismaClient, session: AuthSession, schedule: typeof withProjectResources = withProjectResources) {
   const dependencies = {
     prisma: db, requirePermission: async () => session,
-    commercialOfferSchema, commercialOfferUpdateSchema, clientSchema, redactAuditPayload,
+    commercialOfferSchema, commercialOfferUpdateSchema, clientSchema, redactAuditPayload, assertCommercialOfferTermsPreserved,
     withProjectResources: schedule, lockLeadActor, lockLeadWriteActor, assertLeadOperational, assertLeadActorLive,
     requireLeadEditAccess: (actor: AuthSession, id: string, tx = db) => requireLeadEditAccess(actor, id, tx),
     requireCommercialOfferEditAccess: (actor: AuthSession, id: string, tx = db) => requireCommercialOfferEditAccess(actor, id, tx),

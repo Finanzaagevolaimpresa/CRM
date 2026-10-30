@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 
-import { DisabledAction, Hint, SecondaryLink } from '@/components/actions';
+import { SecondaryLink } from '@/components/actions';
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import { Card, PageHeader, StatusBadge, TimestampMeta } from '@/components/ui';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -21,8 +22,11 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   return <div className="crm-space-y-6">
     <PageHeader title={`Dossier — ${dossier.title}`} description="Contenuto interno del dossier nel perimetro cliente/progetto autorizzato." />
-    <div className="flex flex-wrap gap-3"><SecondaryLink href="/dossiers">← Torna alla lista</SecondaryLink><DisabledAction>Export PDF</DisabledAction><DisabledAction>Export DOCX</DisabledAction></div>
-    <Hint>Funzione prevista, non ancora attiva nel MVP: gli export non vengono generati automaticamente.</Hint>
+    <AdminRecordShortcut session={session} model="Dossier" id={id} />
+    <div className="flex flex-wrap gap-3"><SecondaryLink href="/dossiers">← Torna alla lista</SecondaryLink>
+      <a className="font-semibold underline" href={`/dossiers/${id}/export?format=docx`}>Scarica DOCX</a>
+      <a className="font-semibold underline" href={`/dossiers/${id}/export?format=markdown`}>Scarica testo Markdown</a>
+      <SecondaryLink href={`/dossiers/${id}/print`}>Stampa / salva PDF</SecondaryLink></div>
     <Card title="Dati"><p>Cliente: {client?.displayName ?? '—'}</p><p>Progetto: {project?.title ?? '—'}</p><p>Tipo: {dossier.type}</p><p>Versione: {dossier.version}</p><p>Stato: <StatusBadge status={dossier.status} /></p><TimestampMeta createdAt={dossier.createdAt} updatedAt={dossier.updatedAt} createdBy={modifier?.name ?? dossier.modifiedById} updatedBy={reviewer?.name ?? dossier.reviewedById} /></Card>
     <Card title="Contenuto"><div className="whitespace-pre-wrap text-sm text-fai-gray">{dossier.markdownContent ?? 'Nessun dato presente'}</div></Card>
   </div>;

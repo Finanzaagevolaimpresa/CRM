@@ -3,12 +3,15 @@ import { startTransition, useActionState, useId, useState } from 'react';
 import type { TechnicalAssignmentReference } from '@/lib/technical-assignment-decision';
 import type { TechnicalUploadAction, TechnicalUploadState } from '@/lib/technical-upload-ui-state';
 import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
+import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import { TechnicalUploadRecovery, technicalUploadInitial, useUploadReady, uploadButton, uploadControl, rememberUpload } from './technical-upload-recovery';
 const labels: Record<string, string> = { TECHNICAL_DOCUMENT: 'Documento tecnico', CONTRACT: 'Contratto · riservato', PAYMENT: 'Pagamento · riservato', OTHER_CONFIDENTIAL: 'Altro documento riservato' };
-function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<TechnicalUploadState['acquisitionPreview']>;
-  action: TechnicalUploadAction; recovery: TechnicalUploadAction; edit: () => void }) {
-  const ready = useUploadReady(), [state, submit, pending] = useActionState(action, technicalUploadInitial), [sent, setSent] = useState(false);
-  const locked = !ready || sent || pending;
+function Confirm({ preview, action, recovery, edit, renew, preparing }: { preview: NonNullable<TechnicalUploadState['acquisitionPreview']>;
+  action: TechnicalUploadAction; recovery: TechnicalUploadAction; edit: () => void; renew: () => void; preparing: boolean }) {
+  const ready = useUploadReady(), [state, submit, pending] = useActionState(async (previous: TechnicalUploadState, form: FormData) => {
+    const result = await action(previous, form); if (result.stepUpRequired !== undefined) rememberUpload('acquisitionDecision', ''); return result;
+  }, technicalUploadInitial), [sent, setSent] = useState(false);
+  const locked = !ready || sent || pending || preparing;
   return <section className="min-w-0 space-y-3 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo acquisizione nel fascicolo">
     <h3 className="text-xl font-bold">{preview.command.title}</h3><p>{labels[preview.command.classification]}</p>
     <p className="break-words">{preview.file.fileName} · {preview.file.sizeBytes} byte · versione 1</p>
@@ -17,11 +20,13 @@ function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<Tec
     <p>Scadenza del documento: {preview.command.expiresAt ? new Date(preview.command.expiresAt).toLocaleString('it-IT') : 'Non impostata'}.</p>
     <p>Le persone e le versioni da mostrare si scelgono separatamente dopo l’acquisizione. Contratti e pagamenti restano riservati ad Admin e Amministrazione.</p>
     <button type="button" className="font-semibold underline" disabled={locked} onClick={edit}>Rivedi la classificazione</button>
-    <form action={submit} className="space-y-3" onSubmit={() => { rememberUpload('acquisitionDecision', preview.command.commandId); setSent(true); }}>
+    <form action={submit} className="space-y-3" onReset={event => event.preventDefault()} onSubmit={() => { rememberUpload('acquisitionDecision', preview.command.commandId); setSent(true); }}>
       <input type="hidden" name="reference" value={JSON.stringify(preview.reference)} /><input type="hidden" name="command" value={JSON.stringify(preview.command)} />
       <input type="hidden" name="token" value={preview.token} /><label className="flex items-start gap-2"><input type="checkbox" name="confirmed" required disabled={locked} />Confermo personalmente l’acquisizione privata e la classificazione di questo file esatto.</label>
       <p>È richiesta la conferma di sicurezza del profilo personale autorizzato.</p><button className={uploadButton} disabled={locked}>Acquisisci nel fascicolo privato</button>
     </form><p role="status">{state.message}</p>
+    {state.stepUpRequired && <InlinePrivilegedConfirmation />}
+    {state.stepUpRequired !== undefined && <button type="button" className="font-semibold underline" disabled={pending || preparing} onClick={renew}>Aggiorna riepilogo dopo la conferma</button>}
     {state.recorded && <a className="font-semibold underline" href={`/clients/${encodeURIComponent(preview.clientId)}/acquired-documents`}>Apri documenti acquisiti e scegli la visibilità</a>}
     {state.uncertain && <TechnicalUploadRecovery reference={preview.reference} commandId={preview.command.commandId} action={recovery} returnPath={technicalUploadReviewPath(preview.reference)} />}
   </section>;
@@ -45,6 +50,7 @@ export function TechnicalDocumentAcquisitionForm({ reference, submissionCommandI
       <p>La classificazione riguarda il contenuto, anche quando il nome del file non lo descrive. Nessuna persona riceve accesso automaticamente.</p>
       <label className="block font-semibold" htmlFor={field + '-expiry'}>Scadenza del documento (facoltativa)</label><input id={field + '-expiry'} type="datetime-local" className={uploadControl} value={expiry} disabled={locked} onChange={e => { setExpiry(e.target.value); changed(); }} />
       <button className={uploadButton} disabled={locked || !classification || title.trim().length < 3}>Prepara acquisizione privata</button><p role="status">{state.message}</p>
-    </form>{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction} edit={changed} />}
+    </form>{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction} edit={changed} preparing={pending}
+      renew={() => { const form = new FormData(); form.set('reference', JSON.stringify(reference)); form.set('command', JSON.stringify(preview.command)); startTransition(() => submit(form)); }} />}
   </div>;
 }

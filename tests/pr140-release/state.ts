@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { assertSyntheticCatalogDatabase, CatalogV2PreparationError, prepareInternalServiceCatalogV2 } from '../../src/lib/service-catalog-v2-persistence';
@@ -60,6 +60,9 @@ async function main() {
     };
     writeFileSync(process.argv[3], JSON.stringify(epochs, null, 2) + '\n');
   } else if (mode === 'footprint') {
+    const adminFixture = JSON.parse(readFileSync(process.env.R05_ADMIN_RECORD_RECOVERY_FIXTURE!, 'utf8')) as { commandIds: string[]; closedId: string; clientId: string };
+    const adminCommandIds = [...adminFixture.commandIds, adminFixture.closedId];
+    assert.equal(adminCommandIds.length, 4); assert.equal(new Set(adminCommandIds).size, 4);
     const videoAssets = await db.videoAsset.findMany({ orderBy: { id: 'asc' } });
     const videoFiles = [];
     for (const asset of videoAssets.filter(row => row.state === 'READY')) {
@@ -115,6 +118,9 @@ async function main() {
       uploadFiles.push({ commandId: row.commandId, sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
     }
     const data = {
+      adminRecordRevisions: await db.adminRecordRevision.findMany({ where: { commandId: { in: adminCommandIds } }, orderBy: { commandId: 'asc' } }),
+      adminRecordAudit: await db.auditLog.findMany({ where: { id: { in: adminCommandIds.map(id => `admin-record:${id}`) } }, orderBy: { id: 'asc' } }),
+      adminRecordClients: await db.client.findMany({ where: { id: adminFixture.clientId }, orderBy: { id: 'asc' } }),
       uploadSubmissions, uploadReviews, uploadFiles,
       uploadAudit: await db.auditLog.findMany({ where: { entityType: 'TechnicalUploadSubmission' }, orderBy: { id: 'asc' } }),
       adminRequests: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequest" ORDER BY id`,
@@ -250,14 +256,17 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 71);
+    assert.equal(data.ledger.length, 72);
+    assert.equal(data.adminRecordRevisions.length, 4); assert.equal(data.adminRecordAudit.length, 4);
+    assert.equal(data.adminRecordClients.length, 1); assert.equal(data.adminRecordClients[0].deletedAt, null);
+    assert.deepEqual(data.adminRecordRevisions.map(row => row.operation).sort(), ['CLOSE', 'RESTORE', 'TRASH', 'UPDATE']);
     assert.equal(data.reminders.length, 5); assert.equal(data.reminderCancellations.length, 1);
     assert.equal(data.reminderAudits.length, 6);
     assert.equal(data.historicalContacts.length, 2); assert.equal(data.historicalConversions.length, 1);
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261028180000_record_deadline_reminders_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261029190000_admin_record_revisions_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);

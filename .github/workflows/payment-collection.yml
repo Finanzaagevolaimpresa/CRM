@@ -48,18 +48,19 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Exact source, preserved prefix70 and bound schema71
+      - name: Exact source, preserved prefix71 and bound schema72
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
-          git diff --exit-code f1818bde23496b310a297b4f0ed3260bdce85e33 HEAD -- prisma/migrations ":(exclude)prisma/migrations/20261028180000_record_deadline_reminders_v1"
+          git diff --exit-code 60b7b1ea78c85c945b7637f75c3c5e312a508e04 HEAD -- prisma/migrations ":(exclude)prisma/migrations/20261029190000_admin_record_revisions_v1"
           evidence="$RUNNER_TEMP/payment-collection-evidence"
           mkdir -p "$evidence"
           echo "PAYMENT_COLLECTION_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npx prisma migrate deploy
+          npx prisma generate
       - name: PostgreSQL collection, concurrency, atomic audit, revocation and recovery
         if: matrix.target == 'postgresql'
         shell: bash

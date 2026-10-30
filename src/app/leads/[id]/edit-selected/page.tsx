@@ -19,7 +19,7 @@ export default async function Page({ params, searchParams }: {
   const { editCommandId } = await searchParams;
   return <div className="min-w-0 space-y-6"><PageHeader title="Modifica i campi abilitati" description="Controlla i valori prima di salvarli." />
     <SecondaryLink href={`/shared-leads/${id}`}>Torna al lead condiviso</SecondaryLink>
-    <Card title="Modifica selettiva del lead"><SelectiveLeadEditor key={randomUUID()} view={view} initialCommandId={randomUUID()}
+    <Card title="Modifica selettiva del lead"><SelectiveLeadEditor key={id} view={view} initialCommandId={randomUUID()}
       recoverCommandId={editCommandId} previewAction={prepareSelectedLeadEdit} confirmAction={confirmSelectedLeadEdit} outcomeAction={checkSelectedLeadEdit} /></Card>
   </div>;
 }

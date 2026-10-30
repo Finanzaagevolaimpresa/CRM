@@ -36,7 +36,7 @@ export async function readOrdinaryEmailUiAuthority(db: Pick<PrismaClient, '$tran
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (!rows[0] || !claimed.active || actor.expiresAt <= clock.now || claimed.expiresAt * 1000 <= clock.now.getTime()) return null;
     return { mailboxId: rows[0].mailboxId, stepUpActive: Boolean(verifyPrivilegedStepUpToken({ key,
-      expectedUserId: actor.userId, sessionToken: credentials.sessionToken, token: credentials.stepUpToken,
+      expectedUserId: actor.userId, role: actor.role, sessionToken: credentials.sessionToken, token: credentials.stepUpToken,
       nowSeconds: Math.floor(clock.now.getTime() / 1000) })) };
   }, { timeout: 30_000 });
 }

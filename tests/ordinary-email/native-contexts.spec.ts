@@ -36,20 +36,25 @@ test('native lead, standalone client and internal composition preserve context, 
   await draft(leadForm,f.box.id,f.box.address,'Native lead message');
   const leadMessage=await leadForm.locator('input[name="messageId"]').inputValue();
   await leadForm.getByRole('button',{name:'Salva bozza',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('result=RECORDED&focus='+leadMessage));
   await expect.poll(()=>db.approvedCommunication.count({where:{id:leadMessage,leadId:lead.id,contextKind:'LEAD',clientId:null}})).toBe(1);
   await page.goto('/clients/'+f.client.id);await page.getByRole('link',{name:'Scrivi email',exact:true}).click();
   const clientForm=freshDraft();await draft(clientForm,f.box.id,f.box.address,'Native client message');await clientForm.locator('input[name="to"]').fill('client-native@invalid.test');
   const clientMessage=await clientForm.locator('input[name="messageId"]').inputValue();await clientForm.getByRole('button',{name:'Salva bozza',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('result=RECORDED&focus='+clientMessage));
   await expect.poll(()=>db.approvedCommunication.count({where:{id:clientMessage,contextKind:'CLIENT',clientId:f.client.id,technicalPracticeId:null,readinessId:null}})).toBe(1);
 
   await page.goto('/communications');await page.getByLabel('Titolo della comunicazione interna').fill('Native private conversation');
   await page.locator('input[name="participant"][value="'+member.id+'"]').check();
   await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();
-  await expect(page.getByRole('button',{name:'Conferma partecipanti',exact:true})).toBeDisabled();
-  await page.goto('/settings/security');await page.getByLabel('Password corrente').fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
-  await page.getByRole('button',{name:'Conferma per cinque minuti'}).click();await expect(page).toHaveURL(/status=active/);
-  await page.goto('/communications');await page.getByLabel('Titolo della comunicazione interna').fill('Native private conversation');
-  await page.locator('input[name="participant"][value="'+member.id+'"]').check();await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();
+  await page.getByLabel('Confermo queste persone e l’accesso indicato.').check();await page.getByRole('button',{name:'Conferma partecipanti',exact:true}).click();
+  const inline=page.getByRole('region',{name:'Conferma identità senza lasciare il lavoro',exact:true});
+  await expect(inline).toBeVisible();expect(await db.internalCommunicationThread.count({where:{title:'Native private conversation'}})).toBe(0);
+  await inline.getByLabel('Password corrente',{exact:true}).fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
+  await inline.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await expect(page.getByLabel('Titolo della comunicazione interna')).toHaveValue('Native private conversation');
+  await expect(page.locator('input[name="participant"][value="'+member.id+'"]')).toBeChecked();
   await page.getByLabel('Confermo queste persone e l’accesso indicato.').check();await page.getByRole('button',{name:'Conferma partecipanti',exact:true}).click();
   await expect(page).toHaveURL(/kind=INTERNAL&practice=/);
   const internalUrl=new URL(page.url()),threadId=internalUrl.searchParams.get('practice')!,target=internalUrl.pathname+internalUrl.search;
@@ -66,6 +71,7 @@ test('native lead, standalone client and internal composition preserve context, 
   await internalForm.locator('input[name="contextFileId"][value="'+file.id+'"]').check();
   const internalMessage=await internalForm.locator('input[name="messageId"]').inputValue();
   await internalForm.getByRole('button',{name:'Salva bozza',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('result=RECORDED&focus='+internalMessage));
   await expect.poll(()=>db.approvedCommunication.count({where:{id:internalMessage,internalThreadId:threadId,clientId:null}})).toBe(1);
   const snapshot=(await db.communicationVersion.findUniqueOrThrow({where:{messageId_revision:{messageId:internalMessage,revision:1}}})).snapshot as {schema:string;to:string[];attachments:Array<{source:string;sha256:string}>};
   expect(snapshot.schema).toBe('fai.approved-email.v2');expect(snapshot.to).toEqual([member.email]);expect(snapshot.attachments).toMatchObject([{source:'CONTEXT_FILE',sha256}]);
@@ -91,6 +97,22 @@ test('native lead, standalone client and internal composition preserve context, 
   await page.reload();await page.locator('[data-ordinary-ready="true"]').first().waitFor({state:'attached'});
   const review=page.locator('[data-ordinary-ready]').filter({has:page.locator('form[data-message-draft="'+internalMessage+'"]')});
   await review.getByRole('button',{name:'Anteprima email ordinaria'}).click();await expect(review).toContainText('non più disponibili');
+
+  await page.goto(target);await page.locator('summary').filter({hasText:'Gestisci partecipanti della conversazione interna'}).click();
+  await page.locator('summary').filter({hasText:'Archivia la conversazione'}).click();
+  await page.getByLabel('Motivazione dell’archiviazione',{exact:true}).fill('Archivio sintetico con storico conservato');
+  await page.getByLabel('Confermo l’archiviazione e la sospensione degli accessi.',{exact:true}).check();
+  await page.getByRole('button',{name:'Archivia conversazione',exact:true}).click();await expect(page).toHaveURL(/archived=1/);
+  expect((await participant.request.get(target)).status()).toBe(404);
+  expect(await db.internalCommunicationParticipant.count({where:{threadId,active:true}})).toBe(0);
+  expect(await db.approvedCommunication.count({where:{id:internalMessage}})).toBe(1);
+  await page.locator('summary').filter({hasText:'Native private conversation · prepara il ripristino'}).click();
+  await expect(page.locator('input[name="participant"][value="'+member.id+'"]')).not.toBeChecked();
+  await page.getByRole('button',{name:'Mostra riepilogo partecipanti',exact:true}).click();
+  await page.getByLabel('Confermo queste persone e l’accesso indicato.').check();await page.getByRole('button',{name:'Conferma partecipanti',exact:true}).click();
+  await expect(page).toHaveURL(/kind=INTERNAL&practice=/);
+  expect(await db.internalCommunicationParticipant.count({where:{threadId,active:true}})).toBe(1);
+  expect((await participant.request.get(target)).status()).toBe(404);
 
   await page.goto('/communications');await page.getByLabel('Titolo della comunicazione interna').fill('Native lost response conversation');
   await page.locator('input[name="participant"][value="'+member.id+'"]').check();await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();

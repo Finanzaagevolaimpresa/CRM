@@ -19,6 +19,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   try { state = await documentVersionPage(prisma, actor, id, before); }
   catch (error) { if (error instanceof DocumentVersionError || error instanceof ProjectUnavailableError) notFound(); throw error; }
   return <div className="crm-space-y-6"><PageHeader title="Versioni del documento" description={state.title} />
+    {actor.role === 'admin' && <a className="inline-block font-bold underline" href={`/admin/records/Document/${id}`}>Correggi metadati e gestisci il cestino</a>}
     <Card title="Storico conservato"><p className="mb-3 break-all">{state.fileName}</p>
       <p>Versione corrente: {state.currentVersion ?? 'non disponibile'}.</p>
       {before !== undefined && <a href={`/documents/${encodeURIComponent(id)}/versions`} className="font-bold underline">Torna alle versioni recenti</a>}

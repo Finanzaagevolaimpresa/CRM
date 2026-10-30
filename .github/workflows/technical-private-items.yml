@@ -80,7 +80,7 @@ jobs:
         if: matrix.target != 'historical-observer'
         run: |
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 72
       - name: Read-only observer boundary tests
         run: python3 -B -m unittest discover -s scripts/technical-private-items/release-observer -p "test_*.py" -v
       - name: Pure admission and retained receipt contracts
@@ -91,8 +91,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/technical-private-items-db.test.ts | tee "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 13' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 13' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 14' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 14' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
       - name: Prepare isolated native browser

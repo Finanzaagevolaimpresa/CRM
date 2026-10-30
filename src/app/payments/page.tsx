@@ -1,3 +1,4 @@
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
@@ -38,6 +39,7 @@ export default async function Page() {
 
   return <div className="crm-space-y-6">
     <PageHeader title="Pagamenti" description="Scadenze, incassi e note amministrative collegate ai contratti accessibili." />
+    <AdminRecordShortcut session={session} model="Payment" />
     {canWrite ? <Card title="Registra pagamento">
       <form action={registerPaymentAndRefresh} className="grid gap-3 md:grid-cols-5">
         <select className="rounded-xl border p-3" name="contractId" required>{visibleContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.contractNumber}</option>)}</select>
