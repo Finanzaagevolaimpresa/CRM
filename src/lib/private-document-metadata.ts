@@ -13,7 +13,7 @@ export const privateMetadataValues=z.object({
 export type PrivateMetadataValues=z.infer<typeof privateMetadataValues>;
 export const privateMetadataSnapshot=z.object({
   id:z.string().min(1).max(128),sourceHash:z.string().regex(/^[a-f0-9]{64}$/),
-  revision:z.number().int().min(0),values:privateMetadataValues,
+  revision:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),values:privateMetadataValues,
 }).strict();
 const categories={TECHNICAL_DOCUMENT:'documento_tecnico',CONTRACT:'contratto',PAYMENT:'pagamento',OTHER_CONFIDENTIAL:'riservato'} as const;
 export const privateMetadataDigest=(value:unknown)=>canonicalSha256(JSON.parse(JSON.stringify(value)));
@@ -30,17 +30,27 @@ export async function readPrivateDocumentMetadata(tx:Prisma.TransactionClient,do
   if(document.visibilityLevel!==technicalDocumentPrivateVisibility)throw new PrivateDocumentMetadataError('DENIED');
   const original=privateMetadataSnapshot.parse({id:document.id,sourceHash:privateDocumentSourceHash(document),revision:0,
     values:{title:document.title,classification,expiresAt:document.validUntil?.toISOString()??null}});
-  const rows=await tx.$queryRaw<Array<{commandId:string}>>`
-    SELECT "commandId" FROM "AdminRecordRevision" WHERE model=${privateMetadataModel} AND "recordId"=${document.id}
-    AND operation='UPDATE' ORDER BY (after->>'revision')::integer DESC LIMIT 1`;
-  if(!rows[0])return {original,current:original,commandId:null};
-  const row=await tx.adminRecordRevision.findUniqueOrThrow({where:{commandId:rows[0].commandId}});
-  const before=privateMetadataSnapshot.safeParse(row.before),after=privateMetadataSnapshot.safeParse(row.after);
-  if(!before.success||!after.success||after.data.id!==document.id||before.data.id!==document.id
-    ||after.data.sourceHash!==original.sourceHash||before.data.sourceHash!==original.sourceHash
-    ||after.data.revision!==before.data.revision+1||privateMetadataDigest(row.before)!==row.beforeHash
-    ||privateMetadataDigest(row.after)!==row.afterHash)throw new PrivateDocumentMetadataError('INTEGRITY');
-  return {original,current:after.data,commandId:row.commandId};
+  // A self-consistent latest row is insufficient: it may hide a missing,
+  // duplicated or corrupt predecessor. Validate every revision and anchor the
+  // chain to the exact signed source. CLOSE receipts do not change metadata.
+  const rows=await tx.adminRecordRevision.findMany({where:{model:privateMetadataModel,recordId:document.id,operation:{not:'CLOSE'}},
+    select:{commandId:true,operation:true,before:true,after:true,beforeHash:true,afterHash:true}});
+  const revisions=rows.map(row=>{
+    const before=privateMetadataSnapshot.safeParse(row.before),after=privateMetadataSnapshot.safeParse(row.after);
+    if(row.operation!=='UPDATE'||!before.success||!after.success||after.data.id!==document.id||before.data.id!==document.id
+      ||after.data.sourceHash!==original.sourceHash||before.data.sourceHash!==original.sourceHash
+      ||after.data.revision!==before.data.revision+1||privateMetadataDigest(row.before)!==row.beforeHash
+      ||privateMetadataDigest(row.after)!==row.afterHash||privateMetadataDigest(before.data)!==row.beforeHash
+      ||privateMetadataDigest(after.data)!==row.afterHash)throw new PrivateDocumentMetadataError('INTEGRITY');
+    return {commandId:row.commandId,before:before.data,after:after.data};
+  }).sort((a,b)=>a.after.revision-b.after.revision);
+  let current=original,commandId:string|null=null;
+  for(const revision of revisions){
+    if(revision.after.revision!==current.revision+1||privateMetadataDigest(revision.before)!==privateMetadataDigest(current))
+      throw new PrivateDocumentMetadataError('INTEGRITY');
+    current=revision.after;commandId=revision.commandId;
+  }
+  return {original,current,commandId};
 }
 export function effectivePrivateDocument(document:Document,values:PrivateMetadataValues):Document{
   return {...document,title:values.title,documentCategory:categories[values.classification],type:categories[values.classification],

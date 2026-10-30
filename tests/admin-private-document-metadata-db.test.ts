@@ -7,7 +7,7 @@ import {assertAiOrchestratorEphemeralDatabaseIdentity} from './db/ai-orchestrato
 import {lifecyclePrivateDocumentFixture} from './admin-lifecycle/fixtures';
 import {createPrivilegedStepUpToken} from '../src/lib/privileged-step-up-token';
 import {readAdminPrivateDocumentMetadata,saveAdminPrivateDocumentMetadata,reconcileAdminPrivateDocumentMetadata} from '../src/lib/admin-private-document-metadata';
-import {privateMetadataModel,type PrivateMetadataValues} from '../src/lib/private-document-metadata';
+import {privateMetadataModel,privateMetadataDigest,type PrivateMetadataValues} from '../src/lib/private-document-metadata';
 import {readPersonalAcquiredDocument,listPersonalAcquiredDocuments,selectedTechnicalAcquisition} from '../src/lib/technical-document-acquired-access';
 import {selectClientDocuments} from '../src/lib/selective-client-documents';
 import {assignTechnical} from './technical-assignments/fixtures';
@@ -168,3 +168,53 @@ test('revoked sessions cannot write or read a previously prepared correction',op
   admin={user:admin.user,...await syntheticSession(db,admin.user)};
   await save(input);assert.equal((await history(input.id)).length,1);
 });
+
+test('valid metadata history beyond one UI page remains anchored and readable in every admission path',options,async()=>{
+  const f=await lifecyclePrivateDocumentFixture(db,admin),id=f.receipt.documentId;
+  const source=await db.document.findUniqueOrThrow({where:{id}}),version=await db.documentVersion.findUniqueOrThrow({where:{id:f.receipt.versionId}});
+  for(let revision=1;revision<=51;revision++)await save(await command(id,{title:'Cronologia sintetica revisione '+revision}));
+  const first=await readAdminPrivateDocumentMetadata(db,admin.session,id),second=await readAdminPrivateDocumentMetadata(db,admin.session,id,2);
+  assert.equal(first.current.revision,51);assert.equal(first.history.length,50);assert.equal(first.hasMore,true);
+  assert.equal(second.history.length,1);assert.equal(second.hasMore,false);assert.deepEqual(second.current,first.current);
+  assert.equal(first.current.values.title,'Cronologia sintetica revisione 51');
+  assert.deepEqual((await readPersonalAcquiredDocument(db,admin.session,id)).bytes,f.bytes);
+  assert.equal((await selected(f)).snapshots[0].title,first.current.values.title);
+  const current=await db.document.findUniqueOrThrow({where:{id}});
+  assert.deepEqual({...current,selectiveEpoch:source.selectiveEpoch},source);assert.equal(current.selectiveEpoch,source.selectiveEpoch+51);
+  assert.deepEqual(await db.documentVersion.findUniqueOrThrow({where:{id:version.id}}),version);
+  assert.equal((await history(id)).length,51);
+});
+
+for(const scenario of ['orphan_revision_two','first_before_not_original','predecessor_disagrees','gap_before_latest',
+  'duplicate_highest_revision','earlier_corrupt_hash'] as const){
+  test('private metadata rejects SQL-admitted inconsistent history: '+scenario,options,async()=>{
+    const f=await lifecyclePrivateDocumentFixture(db,admin),id=f.receipt.documentId;
+    const original=(await readAdminPrivateDocumentMetadata(db,admin.session,id)).original;
+    const v1={...original,revision:1,values:{...original.values,title:'Revisione sintetica 1'}};
+    const v2={...original,revision:2,values:{...original.values,title:'Revisione sintetica 2'}};
+    const v3={...original,revision:3,values:{...original.values,title:'Revisione sintetica 3'}};
+    type Snapshot=typeof original;
+    const pairs:Array<{before:Snapshot;after:Snapshot;badHash?:boolean}>=scenario==='orphan_revision_two'?[{before:v1,after:v2}]
+      :scenario==='first_before_not_original'?[{before:{...original,values:{...original.values,title:'Origine falsa sintetica'}},after:v1}]
+      :scenario==='predecessor_disagrees'?[{before:original,after:v1},{before:{...v1,values:{...v1.values,title:'Predecessore diverso sintetico'}},after:v2}]
+      :scenario==='gap_before_latest'?[{before:original,after:v1},{before:v2,after:v3}]
+      :scenario==='duplicate_highest_revision'?[{before:original,after:v1},{before:original,after:{...v1,values:{...v1.values,title:'Secondo ramo sintetico'}}}]
+      :[{before:original,after:v1,badHash:true},{before:v1,after:v2}];
+    // Isolated corruption fixture: normal schema72 session/audit/append-only
+    // guards remain enabled. No production row or trigger is changed.
+    await db.$transaction(async tx=>{
+      for(const pair of pairs){
+        const commandId=randomUUID(),beforeHash=pair.badHash?'0'.repeat(64):privateMetadataDigest(pair.before),afterHash=privateMetadataDigest(pair.after);
+        await tx.adminRecordRevision.create({data:{commandId,model:privateMetadataModel,recordId:id,actorId:admin.user.id,
+          sessionId:admin.session.sessionId!,operation:'UPDATE',requestHash:privateMetadataDigest({scenario,commandId}),beforeHash,afterHash,
+          before:JSON.parse(JSON.stringify(pair.before)),after:JSON.parse(JSON.stringify(pair.after)),reason:'Prova sintetica negativa di integrità '+scenario}});
+        await tx.auditLog.create({data:{id:'admin-record:'+commandId,actorId:admin.user.id,entityType:privateMetadataModel,entityId:id,
+          event:'admin_record_changed',after:{commandId,action:'UPDATE',beforeHash,afterHash,changedPaths:['administrativeMetadata']}}});
+      }
+    });
+    await assert.rejects(readAdminPrivateDocumentMetadata(db,admin.session,id),/INTEGRITY/);
+    await assert.rejects(readPersonalAcquiredDocument(db,admin.session,id),/INTEGRITY/);
+    await assert.rejects(selected(f),/INTEGRITY/);
+    assert.equal(await db.adminRecordRevision.count({where:{model:privateMetadataModel,recordId:id}}),pairs.length);
+  });
+}
