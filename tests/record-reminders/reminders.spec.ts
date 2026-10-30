@@ -101,7 +101,7 @@ test('two technicians receive only the selected deadline at its real time; curre
   expect(await db.recordUpdateCommand.count()).toBe(beforeRenewal);
   await admin.getByLabel('Password corrente', { exact: true }).fill(password);
   await admin.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
-  await expect(admin.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await expect(admin.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   await admin.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
   await expect(admin.getByText('Riepilogo aggiornato. Controllalo e conferma personalmente.', { exact: true })).toBeVisible();
   await admin.getByLabel('Confermo questo istante e questi destinatari per l’avviso CRM', { exact: true }).check();

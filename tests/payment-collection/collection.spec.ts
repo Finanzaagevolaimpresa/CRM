@@ -100,7 +100,7 @@ test('mobile service registration, actual collection, explicit linking and techn
   await expect(form.getByLabel('Attività incluse, una per riga', { exact: true })).toHaveValue(f.input.activities.join('\n'));
   await page.getByLabel('Password corrente', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
-  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
   await expect.poll(async () => Boolean(await getHandoffReceipt(db, service.id))).toBe(true);
   await page.goto(`/services/${service.id}/handoff`);
@@ -154,7 +154,7 @@ test('missing personal step-up preserves the exact collection preview and resume
   await expect(page.getByRole('checkbox')).toBeChecked();
   await page.getByLabel('Password corrente', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
-  await expect(page.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible(); await unpaid();
+  await expect(page.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible(); await unpaid();
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Incasso registrato', exact: true })).toBeVisible();
   expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(1);

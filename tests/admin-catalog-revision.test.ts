@@ -79,4 +79,3 @@ test('native catalogue hashes stay selectable while a valid newer internal revis
   assert.equal(available.length, FAI_SERVICE_CATALOG_V2.length);
   assert.equal(available.find(row => row.code === 'progetti_digitali')?.revisionVersion, 3);
 });
-

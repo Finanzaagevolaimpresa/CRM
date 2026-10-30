@@ -71,7 +71,7 @@ test('department does not grant access; actual admin decisions and personal acce
   await expect(form.getByLabel('Motivazione', { exact: true })).toHaveValue('Explicit decision for the synthetic assigned work');
   await admin.getByLabel('Password corrente', { exact: true }).fill(password);
   await admin.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
-  await expect(admin.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await expect(admin.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   expect(await decisions()).toHaveLength(0); await form.getByRole('button', { name: 'Registra decisione', exact: true }).click();
   await expect.poll(async () => (await decisions()).length).toBe(1);
   await expect(admin.getByText('Referente individuale mancante: presa in carico tecnica non avvenuta.', { exact: true })).toBeVisible();

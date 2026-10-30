@@ -162,7 +162,7 @@ test('native private acquisition, exact technical version selection, positive by
   expect(await db.document.count()).toBe(documents);
   await a.getByLabel('Password corrente', { exact: true }).fill(password);
   await a.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
-  await expect(a.getByText('Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
+  await expect(a.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   await a.getByRole('button', { name: 'Aggiorna riepilogo dopo la conferma', exact: true }).click();
   const confirmation = a.getByLabel('Confermo personalmente l’acquisizione privata e la classificazione di questo file esatto.', { exact: true });
   await expect(confirmation).toBeEnabled(); await confirmation.check();
