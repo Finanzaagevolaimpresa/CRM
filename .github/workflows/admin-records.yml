@@ -35,6 +35,7 @@ jobs:
       PRIVILEGED_STEP_UP_KEY_VERSION: '1'
       PRIVILEGED_STEP_UP_SECRET: synthetic-admin-step-up-00000000000000
       COMMERCIAL_LEAD_INBOX_MODE: disabled
+      PRACTICE_READINESS_MODE: synthetic
       LOGIN_THROTTLE_MODE: disabled
       SECURITY_HEADERS_MODE: report-only
       APP_ORIGIN: http://127.0.0.1:3059
@@ -72,8 +73,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-records-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 35' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 35' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 39' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 39' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
       - name: Prepare isolated browser accounts

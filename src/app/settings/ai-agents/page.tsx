@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, PageHeader, TimestampMeta } from '@/components/ui';
+import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import { updateAiAgentConfig, updateAiControlSetting } from '@/lib/actions';
 import { getAiControlPolicy } from '@/lib/ai-control-plane';
 import { hasPermission, requirePermission } from '@/lib/auth';
@@ -25,6 +26,7 @@ export default async function Page() {
   return (
     <div className="crm-space-y-6">
       <PageHeader title="Agenti AI interni" description="Control Plane server-side per provider, modelli autorizzati e prompt degli agenti interni CRM FAI. Nessuna chiave API viene mostrata o salvata da questa pagina." />
+      <AdminRecordShortcut session={session} model="AiAgent" />
 
       <Card title="Kill switch provider esterni" action={<Badge tone={externalRuntimeConfigured ? 'green' : 'orange'}>{externalRuntimeConfigured ? 'gate aperto' : 'fail-closed'}</Badge>}>
         <div className="grid gap-4 text-sm leading-6 text-slate-700 md:grid-cols-2 xl:grid-cols-4">

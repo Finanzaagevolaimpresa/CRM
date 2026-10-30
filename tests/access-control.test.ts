@@ -330,6 +330,9 @@ test('output AI richiedono contesto run identico e revisione indipendente dal ge
   assert.equal(canReviewAiOutput(scopedReviewer, { ...output, run: { ...run, createdById: null } }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), output), false);
   assert.equal(canApproveAiOutput(actor('admin', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), true);
+  assert.equal(canReviewAiOutput(actor('direzione', 'independent-supervisor'), { ...output, contentEditorIds: ['independent-supervisor'] }), false);
+  assert.equal(canApproveAiOutput(actor('admin', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date(), contentEditorIds: ['approver-1'] }), false);
+  assert.equal(canApproveAiOutput(actor('admin', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date(), contentEditorIds: ['reviewer-1'] }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'reviewer-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), { ...output, reviewedById: 'generator-1', reviewedAt: new Date() }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'generator-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);

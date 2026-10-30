@@ -122,9 +122,9 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
   }
 }
 
-async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowReviewAssignment = false) {
+async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowReviewAssignment = false, allowArchived = false) {
   const dossier = await tx.clientDossier.findUnique({ where: { id: dossierId } });
-  if (!dossier || dossier.status === 'archiviata' || !dossier.practiceReadinessId || !dossier.preAnalysisId) throw new EngagementDossierError('DENIED');
+  if (!dossier || (!allowArchived && dossier.status === 'archiviata') || !dossier.practiceReadinessId || !dossier.preAnalysisId) throw new EngagementDossierError('DENIED');
   await assertProjectOperational(tx, dossier);
   const [client, project, service] = await Promise.all([
     tx.client.findFirst({ where: { id: dossier.clientId, deletedAt: null } }),
@@ -168,8 +168,8 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
   return { dossier, client, project: hydratedProject, service: hydratedService, versions, practice };
 }
 
-async function readContext(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string) {
-  const context = await scope(tx, current, dossierId, true);
+async function readContext(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowArchived = false) {
+  const context = await scope(tx, current, dossierId, true, allowArchived);
   const [reviews, authorizations] = await Promise.all([
     tx.engagementDossierReview.findMany({ where: { dossierId }, orderBy: { decidedAt: 'desc' } }),
     tx.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId }, orderBy: { authorizedAt: 'desc' } }),
@@ -185,6 +185,14 @@ async function readContext(tx: Prisma.TransactionClient, current: AuthSession, d
 }
 
 type DossierContext = Awaited<ReturnType<typeof scope>>;
+
+/** Administrative lifecycle retains the same material, version, review and
+ * receipt checks as native reading, including when reopening an archive. */
+export async function assertAdminEngagementDossierLifecycle(tx: Prisma.TransactionClient, claimed: AuthSession, dossierId: string) {
+  const current = await actor(tx, claimed, 'dossier.read', new Date());
+  if (current.role !== 'admin' || !hasPermission(current, 'dossier.write')) throw new EngagementDossierError('DENIED');
+  await readContext(tx, current, dossierId, true);
+}
 type WorkRuntime = Runtime & { readDocument?: typeof readPrivateDocumentBounded };
 
 function checkedWorkExport(row: { id: string; actorId: string | null; after: unknown }, context: DossierContext) {

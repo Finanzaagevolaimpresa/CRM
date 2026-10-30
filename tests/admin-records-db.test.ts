@@ -14,6 +14,10 @@ import { technicalFixture, technicalTarget } from './technical-assignments/fixtu
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../src/lib/technical-private-item-service';
 import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-item-contract';
 import { paymentCorrectionFixture } from './admin-records/payment-fixture';
+import { adminDossierFixture } from './admin-records/dossier-fixture';
+import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
+import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
+import { canReviewAiOutput, canApproveAiOutput } from '../src/lib/access-control';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences,
   type AdminRecordCommand } from '../src/lib/admin-records';
 
@@ -39,6 +43,107 @@ async function command(model: string, id: string, patch: Record<string, string> 
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
+
+test('CRM agent metadata corrections create one immutable version without changing execution configuration', options, async () => {
+  const row = await db.aiAgent.create({ data: { code: 'SYNTHETIC-' + randomUUID(), name: 'Agente sintetico', promptVersion: 'v1',
+    systemPrompt: 'Istruzione originale da conservare', active: false, provider: 'mock', inputSchema: { type: 'object' }, outputSchema: { type: 'object' } } });
+  const previous = await db.aiAgentConfigVersion.create({ data: { agentId: row.id, version: 1, code: row.code, name: row.name,
+    description: row.description, operationalScope: row.operationalScope, systemPrompt: row.systemPrompt, requiredDataChecklist: [],
+    expectedOutput: row.expectedOutput, toneStyle: row.toneStyle, active: row.active, provider: row.provider, model: row.futureModel,
+    promptVersion: row.promptVersion, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, createdById: admin.user.id } });
+  const input = await command('AiAgent', row.id, { name: 'Nome operativo corretto', description: 'Descrizione aggiornata', requiredDataChecklist: '["Documento sintetico"]' });
+  const receipt = await save(input); assert.equal((await save(input)).replayed, true);
+  const next = await db.aiAgent.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(next.name, 'Nome operativo corretto'); assert.equal(next.configVersion, 2);
+  for (const name of ['systemPrompt', 'provider', 'futureModel', 'active', 'inputSchema', 'outputSchema', 'code'] as const) assert.deepEqual(next[name], row[name]);
+  const version = await db.aiAgentConfigVersion.findUniqueOrThrow({ where: { agentId_version: { agentId: row.id, version: 2 } } });
+  assert.equal(version.name, next.name); assert.equal(version.systemPrompt, row.systemPrompt); assert.equal(version.createdById, admin.user.id);
+  assert.equal(await db.aiAgentConfigVersion.count({ where: { agentId: row.id } }), 2);
+  assert.deepEqual(await db.aiAgentConfigVersion.findUniqueOrThrow({ where: { id: previous.id } }), previous);
+  await assert.rejects(save({ ...await command('AiAgent', row.id), values: { ...(await command('AiAgent', row.id)).values, active: 'true' } }), /INVALID/);
+  assert.equal((await readAdminRecordReceipt(db, admin.session, receipt.commandId))?.id, row.id);
+});
+
+test('content corrections keep their author distinct from review and cannot reuse an existing human approval', options, async () => {
+  const f = await fixture(), generator = await syntheticPerson(db, 'Autore sintetico originale'), reviewer = await syntheticPerson(db, 'Revisore sintetico indipendente');
+  // Exercise correction receipts and the existing review policy without
+  // creating or authorizing a new AI execution for this lifecycle test.
+  const output = await db.aiOutput.create({ data: { aiRunId: 'synthetic-historical-run-reference', clientId: f.client.id, projectId: f.project.id,
+    title: 'Risultato sintetico da revisionare', content: 'Testo originario', requiresHumanReview: true, status: 'needs_review' } });
+  await save(await command('AiOutput', output.id, { content: 'Correzione manuale tracciata' }));
+  const current = await db.aiOutput.findUniqueOrThrow({ where: { id: output.id } });
+  const authors = await db.$transaction(tx => aiOutputAdminAuthors(tx, [output.id]));
+  const context = { ...current, contentEditorIds: authors.get(output.id), client: f.client, project: { ...f.project, client: f.client }, clientService: null,
+    run: { clientId: f.client.id, projectId: f.project.id, clientServiceId: null, createdById: generator.user.id } };
+  assert.deepEqual(context.contentEditorIds, [admin.user.id]);
+  assert.equal(canReviewAiOutput(admin.session, context), false); assert.equal(canReviewAiOutput(reviewer.session, context), true);
+  const reviewedAt = new Date();
+  assert.equal(canApproveAiOutput(admin.session, { ...context, reviewedById: reviewer.user.id, reviewedAt }), false);
+  await db.aiOutput.update({ where: { id: output.id }, data: { reviewedById: reviewer.user.id, reviewedAt } });
+  await assert.rejects(save(await command('AiOutput', output.id, { content: 'Cannot replace reviewed content' })), /HISTORY/);
+  assert.equal((await db.aiOutput.findUniqueOrThrow({ where: { id: output.id } })).aiRunId, output.aiRunId);
+  assert.equal((await db.aiOutput.findUniqueOrThrow({ where: { id: output.id } })).reviewedById, reviewer.user.id);
+  const dossier = await db.clientDossier.create({ data: { clientId: f.client.id, projectId: f.project.id, title: 'Bozza manuale', content: 'Originale', createdById: generator.user.id } });
+  await save(await command('ClientDossier', dossier.id, { content: 'Correzione del nuovo autore' }));
+  assert.equal((await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } })).updatedById, admin.user.id);
+  await db.clientDossier.update({ where: { id: dossier.id }, data: { reviewedById: reviewer.user.id, reviewedAt } });
+  await assert.rejects(save(await command('ClientDossier', dossier.id, { content: 'Cannot retain a stale review' })), /HISTORY/);
+  const pre = await db.preAnalysis.create({ data: { clientId: f.client.id, projectId: f.project.id, status: 'bozza_generata', reviewedById: reviewer.user.id } });
+  await assert.rejects(save(await command('PreAnalysis', pre.id, { internalSummary: 'Cannot retain a stale review' })), /HISTORY/);
+});
+
+test('versioned dossier archive and restoration preserve approval and delivered proof while unused delivery stays revoked', options, async () => {
+  const f = await adminDossierFixture(db, admin.session);
+  const original = await db.clientDossier.findUniqueOrThrow({ where: { id: f.dossier.id } });
+  const versions = await db.engagementDossierVersion.findMany({ where: { dossierId: original.id } });
+  const reviews = await db.engagementDossierReview.findMany({ where: { dossierId: original.id } });
+  await save(await command('ClientDossier', original.id, { status: 'archiviata' }));
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.operator, original.id), null);
+  assert((await db.engagementDossierDeliveryAuthorization.findUniqueOrThrow({ where: { id: f.pending.id } })).revokedAt);
+  assert.deepEqual(await db.engagementDossierDeliveryAuthorization.findUniqueOrThrow({ where: { id: f.consumed.id } }), f.consumed);
+  assert.deepEqual(await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { id: f.receipt.id } }), f.receipt);
+  await save(await command('ClientDossier', original.id, { status: original.status }));
+  const restored = await getEngagementDossierReadAccess(db, f.actors.operator, original.id);
+  assert(restored); assert.equal(restored.dossier.approvedVersionId, original.approvedVersionId);
+  assert.equal(restored.dossier.content, original.content); assert.equal(restored.dossier.archivedAt, null);
+  assert.deepEqual(await db.engagementDossierVersion.findMany({ where: { dossierId: original.id } }), versions);
+  assert.deepEqual(await db.engagementDossierReview.findMany({ where: { dossierId: original.id } }), reviews);
+  await assert.rejects(recordEngagementDossierDelivery(db, f.actors.operator, { authorizationId: f.pending.id, outcome: 'DELIVERED',
+    evidence: { reference: 'MUST_NOT_BE_REUSED', deliveredAt: new Date(), synthetic: true } }));
+  await assert.rejects(save(await command('ClientDossier', original.id, { title: 'Rewriting an approved version' })), /HISTORY/);
+  await save(await command('ClientDossier', original.id, {}, 'RECTIFY'));
+  assert.deepEqual(await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { id: f.receipt.id } }), f.receipt);
+  const archived = await command('ClientDossier', original.id, { status: 'archiviata' });
+  await db.engagementDossierVersion.update({ where: { id: f.version.id }, data: { content: 'Synthetic integrity failure' } });
+  await assert.rejects(save(archived));
+  assert.equal((await db.clientDossier.findUniqueOrThrow({ where: { id: original.id } })).status, original.status);
+  await db.engagementDossierVersion.update({ where: { id: f.version.id }, data: { content: f.version.content } });
+});
+
+test('practice communication drafts move with their context and used archives restore without rewriting personal evidence', options, async () => {
+  const a = await fixture(), b = await fixture();
+  const practice = (f: Awaited<ReturnType<typeof fixture>>, title: string) => db.technicalPractice.create({ data: {
+    clientId: f.client.id, projectId: f.project.id, title, practiceType: 'verifica', targetEntity: 'Ente sintetico', createdById: admin.user.id } });
+  const first = await practice(a, 'Origine sintetica'), second = await practice(b, 'Destinazione sintetica');
+  const draft = await db.practiceCommunication.create({ data: { technicalPracticeId: first.id, clientId: a.client.id, projectId: a.project.id,
+    title: 'Nota sintetica', content: 'Testo da correggere', type: 'interna', channel: 'nota_interna', createdById: admin.user.id } });
+  await save(await command('PracticeCommunication', draft.id, { technicalPracticeId: second.id }));
+  const moved = await db.practiceCommunication.findUniqueOrThrow({ where: { id: draft.id } });
+  assert.equal(moved.clientId, b.client.id); assert.equal(moved.projectId, b.project.id); assert.equal(moved.technicalOwnerId, second.technicalOwnerId);
+  await assert.rejects(save(await command('PracticeCommunication', draft.id, { channel: 'email' })), /HISTORY/);
+  const used = await db.practiceCommunication.update({ where: { id: draft.id }, data: { status: 'usata_inviata',
+    reviewedAt: new Date(), reviewedById: admin.user.id, usedAt: new Date() } });
+  await assert.rejects(save(await command('PracticeCommunication', draft.id, { content: 'Altered used text' })), /HISTORY/);
+  await save(await command('PracticeCommunication', draft.id, {}, 'RECTIFY'));
+  await save(await command('PracticeCommunication', draft.id, {}, 'TRASH'));
+  await save(await command('PracticeCommunication', draft.id, {}, 'RESTORE'));
+  const restored = await db.practiceCommunication.findUniqueOrThrow({ where: { id: draft.id } });
+  for (const key of ['content', 'reviewedById', 'reviewedAt', 'usedAt', 'status'] as const) assert.deepEqual(restored[key], used[key]);
+  await db.practiceCommunication.update({ where: { id: draft.id }, data: { status: 'archiviata', deletedAt: new Date() } });
+  await save(await command('PracticeCommunication', draft.id, {}, 'RESTORE'));
+  const legacy = await db.practiceCommunication.findUniqueOrThrow({ where: { id: draft.id } });
+  assert.equal(legacy.status, 'usata_inviata'); assert.deepEqual(legacy.usedAt, used.usedAt); assert.equal(legacy.deletedAt, null);
+});
 
 test('rapid sequential corrections persist every submitted value and journal the same committed row', options, async () => {
   const f = await fixture(), lead = await db.lead.create({ data: { firstName: 'Sequenza', lastName: 'Sintetica' } });
@@ -103,6 +208,12 @@ test('manual assessments and document analyses retain amounts, source documents 
   assert.equal((await db.measureMatch.findUniqueOrThrow({ where: { id: measureId } })).expectedBenefitPercent?.toString(), '20');
   await save(await command('BankabilityAssessment', bankId, { ebitda: '-100.00', riskRationale: 'Rettifica sintetica motivata' }));
   assert.equal((await db.bankabilityAssessment.findUniqueOrThrow({ where: { id: bankId } })).ebitda?.toString(), '-100');
+  await assert.rejects(save(await command('GrantAssessment', grantId, {}, 'TRASH')), /DEPENDENCIES/);
+  const assessments = [['BankabilityAssessment', bankId], ['CorporateFinancingAssessment', financeId], ['MeasureMatch', measureId], ['CumulabilityAssessment', cumulabilityId], ['GrantAssessment', grantId]];
+  for (const [model, id] of assessments) await save(await command(model, id, {}, 'TRASH'));
+  for (const [model, id] of [...assessments].reverse()) await save(await command(model, id, {}, 'RESTORE'));
+  assert.equal((await db.bankabilityAssessment.findUniqueOrThrow({ where: { id: bankId } })).ebitda?.toString(), '-100');
+  assert.equal((await db.measureMatch.findUniqueOrThrow({ where: { id: measureId } })).grantAssessmentId, grantId);
   const doc = await db.document.create({ data: { clientId: f.client.id, companyId: company.id, projectId: f.project.id, title: 'Fonte sintetica', type: 'altro',
     fileName: 'source.txt', mimeType: 'text/plain', sizeBytes: 12, storagePath: 'synthetic/unchanged-source.txt', checksum: 'a'.repeat(64), uploadedById: admin.user.id } });
   const extractionId = randomUUID(), visuraId = randomUUID();

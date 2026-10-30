@@ -30,10 +30,10 @@ export default async function Page() {
             : !output.reviewedById
               ? reviewAllowed
                 ? <form action={reviewAiOutputAndRefresh}><input type="hidden" name="id" value={output.id} /><PrimaryButton type="submit">Conferma revisione</PrimaryButton></form>
-                : <span className="text-xs text-fai-gray">Serve un revisore diverso dal generatore</span>
+                : <span className="text-xs text-fai-gray">Serve un revisore diverso dal generatore e dagli autori delle correzioni</span>
               : approvalAllowed
                 ? <form action={approveAiOutputAndRefresh}><input type="hidden" name="id" value={output.id} /><PrimaryButton type="submit">Approva</PrimaryButton></form>
-                : <span className="text-xs text-fai-gray">Revisionato · rilascio riservato a un Admin distinto dal revisore</span>;
+                : <span className="text-xs text-fai-gray">Revisionato · approvazione riservata a un Admin distinto dal revisore e dagli autori</span>;
           return [
             output.title,
             <StatusBadge status={output.status} key="s" />,

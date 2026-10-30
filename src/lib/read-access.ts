@@ -1,4 +1,5 @@
 import { leadVisibilityWhere } from './core-query-policy';
+import { aiOutputAdminAuthors } from './ai-output-admin-authors';
 import { hasPermission } from './permission-evaluator';
 import type { AiOutput, Prisma, Task } from '@prisma/client';
 import {
@@ -297,9 +298,10 @@ export async function listAccessibleAiOutputs(
       where: { id: { in: visibleContexts.map((context) => context.output.id) } },
     });
     const outputById = new Map(outputs.map((output) => [output.id, output]));
+    const authors = await aiOutputAdminAuthors(tx, outputs.map(output => output.id));
     return visibleContexts.flatMap((context) => {
       const output = outputById.get(context.output.id);
-      return output ? [{ ...context, output }] : [];
+      return output ? [{ ...context, output: { ...output, contentEditorIds: authors.get(output.id) ?? [] } }] : [];
     });
   }, { isolationLevel: 'RepeatableRead' });
 }

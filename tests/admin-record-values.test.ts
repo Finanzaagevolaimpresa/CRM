@@ -11,7 +11,8 @@ test('the Admin catalogue excludes security, provenance and protocol mutations',
   for (const model of ['User', 'InternalSession', 'ApplicationKeyVersion', 'OrdinaryEmailAttempt', 'AuditLog', 'TechnicalAssignmentDecision', 'AdminRecordRevision'])
     assert.throws(() => adminRecordPolicy(model));
   const protectedFields = new Set(['id', 'createdAt', 'createdById', 'approvedById', 'approvedAt', 'signedAt', 'signedDocumentId',
-    'collectedAt', 'accountingDocumentId', 'checksum', 'storagePath', 'uploadedById', 'acceptedAt', 'acceptedById', 'passwordHash']);
+    'collectedAt', 'accountingDocumentId', 'checksum', 'storagePath', 'uploadedById', 'acceptedAt', 'acceptedById', 'passwordHash',
+    'provider', 'futureModel', 'systemPrompt', 'inputSchema', 'outputSchema', 'configVersion', 'promptVersion']);
   for (const policy of adminRecordCatalogue) for (const name of policy.fields) {
     assert(!protectedFields.has(name), `${policy.model}.${name}`);
     const field = Prisma.dmmf.datamodel.models.find(row => row.name === policy.model)?.fields.find(row => row.name === name);

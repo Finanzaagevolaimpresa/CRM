@@ -14,6 +14,9 @@ const item = (model: string, label: string, group: string, permission: Permissio
  * Provenance, signatures, receipts, transport and security controls are absent
  * from every editable allowlist. Creation is enabled only for ordinary records. */
 export const adminRecordCatalogue = [
+  item('AiAgent', 'Agenti CRM · metadati operativi', 'Impostazioni operative', 'ai_agents.write',
+    'name description operationalScope requiredDataChecklist expectedOutput toneStyle',
+    { href: '/settings/ai-agents', guidance: 'Ogni correzione crea una versione completa dei metadati, conservando quelle precedenti. Identità, prompt, provider, modello, attivazione e schemi restano invariati. Nessuna esecuzione viene avviata.' }),
   item('Lead', 'Lead · dati commerciali', 'Clienti e anagrafiche', 'lead.write',
     'source leadSource interest declaredInvestment requestedAmount availableBudget commercialStatus notes commercialProposal',
     { href: '/leads/{id}', guidance: 'Contatti, assegnazione, conversione, archivio e cestino sono gestiti nella scheda lead e nella inbox, conservando identità e SLA.' }),
@@ -36,14 +39,14 @@ export const adminRecordCatalogue = [
     'clientId projectId clientServiceId title practiceType targetEntity targetPortal status priority dueDate submittedAt protocolNumber integrationRequestNote internalNotes clientVisibleStatus nextClientUpdateAt lastClientUpdateAt',
     { create: true, trash: 'soft', href: '/technical-office/practices/{id}', guidance: 'Incarichi e responsabilità restano nelle azioni dedicate della pratica. Una data di presentazione dichiarata non crea una ricevuta di invio.' }),
   item('BankabilityAssessment', 'Valutazioni di bancabilità', 'Analisi e dossier', 'project.write',
-    'clientId companyId projectId declaredCrif declaredCentralRisk protestsOrLiens paymentDelays activeLoans taxDebts socialSecurityDebts revenue ebitda netProfit equity estimatedCashflow estimatedDscr monthlyRent existingMonthlyInstalments availableGuarantees riskLevel riskRationale dataCompleteness humanReviewStatus', { create: true }),
+    'clientId companyId projectId declaredCrif declaredCentralRisk protestsOrLiens paymentDelays activeLoans taxDebts socialSecurityDebts revenue ebitda netProfit equity estimatedCashflow estimatedDscr monthlyRent existingMonthlyInstalments availableGuarantees riskLevel riskRationale dataCompleteness humanReviewStatus', { create: true, trash: 'leaf' }),
   item('CorporateFinancingAssessment', 'Valutazioni finanziamento aziendale', 'Analisi e dossier', 'project.write',
-    'clientId companyId projectId clientServiceId requestedAmount purpose timing ordinaryInstruments mortgage unsecuredLoan leasing factoring invoiceAdvance creditLines mcc guarantees fundingNeed sustainableInstallment dscrCashflow existingDebts criticalIssues scenarioA scenarioB nextAction', { create: true }),
-  item('GrantAssessment', 'Valutazioni agevolazioni', 'Analisi e dossier', 'project.write', 'projectId summary', { create: true }),
+    'clientId companyId projectId clientServiceId requestedAmount purpose timing ordinaryInstruments mortgage unsecuredLoan leasing factoring invoiceAdvance creditLines mcc guarantees fundingNeed sustainableInstallment dscrCashflow existingDebts criticalIssues scenarioA scenarioB nextAction', { create: true, trash: 'leaf' }),
+  item('GrantAssessment', 'Valutazioni agevolazioni', 'Analisi e dossier', 'project.write', 'projectId summary', { create: true, trash: 'leaf', guidance: 'Prima della rimozione archivia le misure e le valutazioni di cumulabilità collegate. Per ripristinare il gruppo, ripristina prima questa valutazione e poi le schede collegate. Ogni identità e contenuto restano nello storico.' }),
   item('MeasureMatch', 'Misure valutate', 'Analisi e dossier', 'project.write',
-    'grantAssessmentId internalMeasureName measureStatus opensAt closesAt expectedResult expectedBenefitAmount expectedBenefitPercent difficulty difficultyRationale eligibleExpenses ineligibleExpenses blockingConditions requiredDocuments sourceStatus officialSourceUrl verificationRequired notes', { create: true }),
+    'grantAssessmentId internalMeasureName measureStatus opensAt closesAt expectedResult expectedBenefitAmount expectedBenefitPercent difficulty difficultyRationale eligibleExpenses ineligibleExpenses blockingConditions requiredDocuments sourceStatus officialSourceUrl verificationRequired notes', { create: true, trash: 'leaf' }),
   item('CumulabilityAssessment', 'Valutazioni di cumulabilità', 'Analisi e dossier', 'project.write',
-    'projectId grantAssessmentId summary legalResult technicalResult deMinimisRisk rnaRisk doubleFundingRisk timingConflicts conclusion humanReviewStatus', { create: true }),
+    'projectId grantAssessmentId summary legalResult technicalResult deMinimisRisk rnaRisk doubleFundingRisk timingConflicts conclusion humanReviewStatus', { create: true, trash: 'leaf' }),
   item('Document', 'Documenti · metadati', 'Documenti e attività', 'document.upload',
     'clientId companyId projectId clientServiceId serviceArea documentCategory type title status containsSensitiveData validUntil',
     { trash: 'soft', href: '/documents/{id}/versions', guidance: 'File, checksum, autore e versioni sono prove conservate. Per sostituire il contenuto carica una nuova versione nella scheda documento.' }),
@@ -61,8 +64,8 @@ export const adminRecordCatalogue = [
     { create: true, href: '/preanalyses/{id}', guidance: 'Per correggere contenuti già approvati, registra la rettifica e crea una nuova bozza dalla lista Preanalisi. La nuova bozza non eredita approvazioni, autori o esecuzioni AI.' }),
   item('Dossier', 'Dossier storici · bozze', 'Analisi e dossier', 'dossier.write', 'preAnalysisId projectId clientId title type status markdownContent jsonContent',
     { create: true, guidance: 'Solo bozze modificabili. Dalla lista puoi creare una nuova bozza manuale; le approvazioni, le esportazioni e le prove di consegna del documento precedente restano conservate.' }),
-  item('ClientDossier', 'Dossier cliente', 'Analisi e dossier', 'dossier.write', 'clientId clientServiceId projectId title type content',
-    { create: true, href: '/client-dossiers/{id}', guidance: 'Le nuove bozze manuali non ereditano approvazioni. I dossier versionati usano il proprio editor e il ciclo di revisione; questa correzione è riservata alle bozze non versionate.' }),
+  item('ClientDossier', 'Dossier cliente', 'Analisi e dossier', 'dossier.write', 'clientId clientServiceId projectId title type content status',
+    { create: true, href: '/client-dossiers/{id}', guidance: 'Le nuove bozze manuali non ereditano approvazioni. I dossier versionati usano il proprio editor; qui puoi annotare rettifiche e archiviare o ripristinare lo stato registrato. L’archivio revoca le autorizzazioni di consegna non consumate; il ripristino non le riattiva.' }),
   item('AiOutput', 'Output AI · revisione del contenuto', 'Analisi e dossier', 'ai.review', 'title content status',
     { guidance: 'Correzione delle bozze prima dell’approvazione, con conservazione del testo originario. Non avvia esecuzioni né modifica provider o approvazioni.' }),
   item('Contract', 'Contratti · dati operativi', 'Servizi e amministrazione', 'contract.write',
@@ -80,7 +83,7 @@ export const adminRecordCatalogue = [
   item('ServiceCatalog', 'Catalogo servizi', 'Servizi e amministrazione', 'settings.manage',
     'code name description category basePrice active displayOrder', { create: true, href: '/service-catalog' }),
   item('PracticeCommunication', 'Comunicazioni di pratica · bozze', 'Comunicazioni', 'practice_communications.write',
-    'technicalPracticeId title content internalNote type channel', { trash: 'soft', guidance: 'Le comunicazioni usate o approvate restano prove storiche. Nessuna modifica invia un messaggio o ne dichiara l’invio.' }),
+    'technicalPracticeId title content internalNote type channel', { trash: 'soft', guidance: 'Le note interne in bozza si correggono e ricollegano alla pratica scelta. Le comunicazioni già usate o approvate conservano contenuto e prove: registra una rettifica, oppure spostale nel cestino e ripristinale. Nessuna operazione invia messaggi o registra nuovi invii.' }),
   item('CommercialLeadSlaPolicyVersion', 'Tempi di risposta ai lead · versioni', 'Impostazioni operative', 'settings.manage',
     'responseTargetSeconds status', { create: true, href: '/leads/inbox', guidance: 'Ogni variazione crea una nuova versione. Scegli STAGED per prepararla o ACTIVE per sostituire una politica già attiva. I cicli SLA già aperti conservano la propria scadenza e politica. Questa operazione non attiva inbox, scheduler o provider.' }),
 ] as const;
@@ -91,6 +94,7 @@ export function adminRecordPolicy(model: string): AdminRecordPolicy {
   return found;
 }
 export const adminFieldLabels: Record<string, string> = {
+  operationalScope: 'Ambito operativo', requiredDataChecklist: 'Dati richiesti · elenco JSON', expectedOutput: 'Risultato atteso', toneStyle: 'Tono e stile',
   leadId: 'Lead', services: 'Servizi proposti', includedActivities: 'Attività incluse', operationalConditions: 'Condizioni operative',
   sentAt: 'Data dichiarata di invio manuale', followUpAt: 'Prossimo seguito commerciale', followUpNote: 'Nota sul seguito', outcomeNote: 'Nota sull’esito',
   responseTargetSeconds: 'Tempo di risposta in secondi',
