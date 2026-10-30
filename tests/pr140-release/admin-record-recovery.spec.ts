@@ -5,6 +5,7 @@ test('schema73 exact-image restart preserves Admin corrections, operational hold
   const f = JSON.parse(readFileSync(process.env.R05_ADMIN_RECORD_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; noSend: boolean; adminEmail: string; clientId: string; title: string; commandIds: string[]; closedId: string;
     lifecycleIntakeId:string;lifecycleCommands:string[];lifecycleClosedId:string;
+    metadataId:string;metadataCommands:string[];metadataClosedId:string;metadataAdminEmail:string;metadataTitle:string;
   };
   expect(f.synthetic && f.noSend).toBe(true);
   const origin = process.env.PRACTICE_READINESS_BROWSER_ORIGIN!;
@@ -27,4 +28,15 @@ test('schema73 exact-image restart preserves Admin corrections, operational hold
   await page.goto(origin+'/admin/lifecycle/ControlledIntake/'+f.lifecycleIntakeId+'?command='+f.lifecycleClosedId+'&decision='+f.lifecycleClosedId);
   await page.getByRole('button',{name:'Verifica esito registrato',exact:true}).click();
   await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza modifica.');
+  await page.context().clearCookies();await page.goto(origin+'/login');
+  await page.locator('[data-interactive-ready="true"]').waitFor({state:'attached'});
+  await page.getByLabel('Email',{exact:true}).fill(f.metadataAdminEmail);
+  await page.getByLabel('Password',{exact:true}).fill(process.env.PRACTICE_READINESS_BROWSER_PASSWORD!);
+  await page.getByRole('button',{name:'Login interno',exact:true}).click();await expect(page).toHaveURL(/\/dashboard$/);
+  await page.goto(origin+'/admin/private-documents/'+f.metadataId);
+  await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue(f.metadataTitle);
+  await expect(page.getByRole('heading',{name:'Metadati correnti · revisione 3',exact:true})).toBeVisible();
+  await page.goto(origin+'/admin/private-documents/'+f.metadataId+'?command='+f.metadataClosedId+'&decision='+f.metadataClosedId);
+  await page.getByRole('button',{name:'Verifica esito registrato',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza correzione.');
 });

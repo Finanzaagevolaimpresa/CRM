@@ -11,7 +11,8 @@ import { adminHistoryFixture } from './history-fixture';
 import { adminContextFixture, adminGraphFixture } from './context-fixture';
 import { paymentCorrectionFixture } from './payment-fixture';
 import { romeDateTimeInput } from '../../src/lib/rome-date-time';
-import { lifecycleReadinessFixture } from '../admin-lifecycle/fixtures';
+import { lifecycleReadinessFixture,lifecyclePrivateDocumentFixture } from '../admin-lifecycle/fixtures';
+import {readAdminPrivateDocumentMetadata,saveAdminPrivateDocumentMetadata} from '../../src/lib/admin-private-document-metadata';
 import { readAdminOperationalState, saveAdminOperationalState } from '../../src/lib/admin-operational-lifecycle';
 import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
@@ -744,4 +745,83 @@ test('native dossier actions disappear while its readiness is blocked and reappe
   await page.goto('/client-dossiers/'+source.dossier.id);
   await expect(page.getByRole('button',{name:'Salva come nuova versione',exact:true})).toBeVisible();
   expect((await db.clientDossier.findUniqueOrThrow({where:{id:source.dossier.id}})).currentVersionId).toBe(source.version.id);
+});
+
+async function browserPrivateMetadata(){
+  const user=await db.user.findUniqueOrThrow({where:{email:f.adminEmail}}),person={user,...await syntheticSession(db,user)};
+  return {person,...await lifecyclePrivateDocumentFixture(db,person)};
+}
+async function metadataChoice(page:Page,title:string,note='Correzione privata sintetica da browser'){
+  await page.getByRole('textbox',{name:'Titolo amministrativo',exact:true}).fill(title);
+  await page.getByRole('textbox',{name:'Motivazione',exact:true}).fill(note);
+  await page.getByRole('checkbox',{name:'Confermo la correzione, la conservazione della fonte e l’invalidazione delle vecchie selezioni.',exact:true}).check();
+}
+test('private metadata survives inline confirmation and reopens the correction and an explicit restored version',async({page,context})=>{
+  const source=await browserPrivateMetadata(),id=source.receipt.documentId,original=await db.document.findUniqueOrThrow({where:{id}});
+  await login(page);await page.goto('/clients/'+source.client.id+'/acquired-documents');
+  await page.getByRole('link',{name:'Correggi metadati e consulta le revisioni',exact:true}).click();
+  await metadataChoice(page,'Titolo privato corretto nel browser','Motivazione privata conservata');
+  await page.getByRole('combobox',{name:'Classificazione amministrativa',exact:true}).selectOption('OTHER_CONFIDENTIAL');
+  await page.getByLabel('Scadenza amministrativa',{exact:true}).fill('2030-01-02T10:30');
+  await page.getByRole('checkbox',{name:'Confermo la correzione, la conservazione della fonte e l’invalidazione delle vecchie selezioni.',exact:true}).check();
+  await context.clearCookies({name:'fai_crm_privileged_step_up'});
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  const confirmation=page.getByRole('region',{name:'Conferma identità senza lasciare il lavoro',exact:true});
+  await expect(confirmation).toBeVisible();await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue('Titolo privato corretto nel browser');
+  await expect(page.getByLabel('Scadenza amministrativa',{exact:true})).toHaveValue('2030-01-02T10:30');
+  await expect(page.getByRole('textbox',{name:'Motivazione',exact:true})).toHaveValue('Motivazione privata conservata');
+  await confirmation.getByLabel('Password corrente',{exact:true}).fill(password);
+  await confirmation.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();await expect(confirmation).toContainText('Identità confermata.');
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue('Titolo privato corretto nel browser');
+  await page.getByRole('button',{name:'Riprendi i metadati originali nella bozza',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue(original.title);
+  await page.getByRole('textbox',{name:'Motivazione',exact:true}).fill('Ripristino esplicito dei metadati originali');
+  await page.getByRole('checkbox',{name:'Confermo la correzione, la conservazione della fonte e l’invalidazione delle vecchie selezioni.',exact:true}).check();
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Metadati correnti · revisione 2',exact:true})).toBeVisible();
+  const after=await db.document.findUniqueOrThrow({where:{id}});
+  expect({...after,selectiveEpoch:original.selectiveEpoch}).toEqual(original);expect(after.selectiveEpoch).toBe(original.selectiveEpoch+2);
+  expect(await db.adminRecordRevision.count({where:{model:'AdminPrivateDocumentMetadata',recordId:id,operation:'UPDATE'}})).toBe(2);
+  await page.getByRole('link',{name:'Torna ai documenti acquisiti',exact:true}).click();
+  await expect(page.getByRole('link',{name:'Scarica documento acquisito',exact:true})).toBeVisible();
+});
+test('a lost private metadata response reconciles after reload with one source-preserving correction',async({page})=>{
+  const source=await browserPrivateMetadata(),id=source.receipt.documentId;
+  await login(page);await page.goto('/admin/private-documents/'+id);await metadataChoice(page,'Metadato con esito recuperato');
+  const commandId=new URL(page.url()).searchParams.get('command')!,pattern='**/admin/private-documents/**';let lost=false,posts=0;
+  await page.route(pattern,async route=>{if(route.request().method()!=='POST')return route.continue();posts++;await route.fetch();lost=true;await route.abort('failed');});
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  await expect.poll(()=>lost).toBe(true);await page.unroute(pattern);await page.reload();
+  await page.getByRole('button',{name:'Verifica esito registrato',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Correzione già registrata.');
+  expect(posts).toBe(1);expect(await db.adminRecordRevision.count({where:{commandId}})).toBe(1);
+  expect(await db.auditLog.count({where:{id:'admin-record:'+commandId}})).toBe(1);
+  await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue('Metadato con esito recuperato');
+});
+test('an interrupted private metadata attempt closes before a fresh operation and rejects the late command',async({page})=>{
+  const source=await browserPrivateMetadata(),id=source.receipt.documentId;
+  const before=await readAdminPrivateDocumentMetadata(db,source.person.session,id);
+  await login(page);await page.goto('/admin/private-documents/'+id);await metadataChoice(page,'Metadato interrotto');
+  const commandId=new URL(page.url()).searchParams.get('command')!,pattern='**/admin/private-documents/**';
+  await page.route(pattern,route=>route.request().method()==='POST'?route.abort('failed'):route.continue());
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Verifica esito registrato',exact:true})).toBeVisible();await page.unroute(pattern);await page.reload();
+  await page.getByRole('checkbox',{name:'Chiudi il tentativo soltanto se non ha prodotto una correzione.',exact:true}).check();
+  await page.getByRole('button',{name:'Riconcilia e chiudi il tentativo',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza correzione.');
+  const key={version:Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION),secret:process.env.PRIVILEGED_STEP_UP_SECRET!};
+  await expect(saveAdminPrivateDocumentMetadata(db,source.person.session,{commandId,id,expectedVersion:before.expectedVersion,
+    values:{...before.current.values,title:'Metadato interrotto'},reason:'Tentativo tardivo sintetico',confirmed:true},
+    {key,sessionToken:source.person.token,stepUpToken:createPrivilegedStepUpToken({key,userId:source.person.user.id,sessionToken:source.person.token,role:'admin'})})).rejects.toThrow('CLOSED');
+  await page.getByRole('link',{name:'Riapri i dati correnti per una nuova operazione',exact:true}).click();
+  await expect.poll(()=>new URL(page.url()).searchParams.get('command')).not.toBe(commandId);
+  await metadataChoice(page,'Nuova scelta dopo chiusura');
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue('Nuova scelta dopo chiusura');
+  expect(await db.adminRecordRevision.count({where:{model:'AdminPrivateDocumentMetadata',recordId:id,operation:'UPDATE'}})).toBe(1);
 });

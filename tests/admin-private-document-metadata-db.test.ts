@@ -8,7 +8,7 @@ import {lifecyclePrivateDocumentFixture} from './admin-lifecycle/fixtures';
 import {createPrivilegedStepUpToken} from '../src/lib/privileged-step-up-token';
 import {readAdminPrivateDocumentMetadata,saveAdminPrivateDocumentMetadata,reconcileAdminPrivateDocumentMetadata} from '../src/lib/admin-private-document-metadata';
 import {privateMetadataModel,type PrivateMetadataValues} from '../src/lib/private-document-metadata';
-import {readPersonalAcquiredDocument,listPersonalAcquiredDocuments} from '../src/lib/technical-document-acquired-access';
+import {readPersonalAcquiredDocument,listPersonalAcquiredDocuments,selectedTechnicalAcquisition} from '../src/lib/technical-document-acquired-access';
 import {selectClientDocuments} from '../src/lib/selective-client-documents';
 import {assignTechnical} from './technical-assignments/fixtures';
 import {readTechnicalWorkDocument} from '../src/lib/technical-assignment-access';
@@ -143,6 +143,23 @@ test('metadata correction of an archived source never restores bytes or revives 
   await save(await command(id));
   assert.equal((await readAdminOperationalState(db,admin.session,'Document',id)).state,'ARCHIVED');
   await assert.rejects(readPersonalAcquiredDocument(db,admin.session,id));await assert.rejects(selected(f));
+});
+test('admitted private byte reads retain their source epoch until the read transaction completes',options,async()=>{
+  const f=await lifecyclePrivateDocumentFixture(db,admin),id=f.receipt.documentId,input=await command(id);
+  let admitted!:()=>void,resume!:()=>void;
+  const entered=new Promise<void>(r=>{admitted=r;}),continued=new Promise<void>(r=>{resume=r;});
+  const reading=db.$transaction(async tx=>{
+    const document=await tx.document.findUniqueOrThrow({where:{id}});
+    assert(await selectedTechnicalAcquisition(tx,admin.user.id,document));admitted();await continued;
+  },{timeout:30000});
+  await entered;
+  try{
+    await assert.rejects(db.$transaction(async tx=>{
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '100ms'");
+      await tx.$executeRaw`UPDATE "Document" SET "selectiveEpoch"="selectiveEpoch"+1 WHERE id=${id}`;
+    }),/lock timeout/);
+  }finally{resume();await reading;}
+  await save(input);assert.equal((await history(id)).length,1);
 });
 test('revoked sessions cannot write or read a previously prepared correction',options,async()=>{
   const f=await lifecyclePrivateDocumentFixture(db,admin),input=await command(f.receipt.documentId);

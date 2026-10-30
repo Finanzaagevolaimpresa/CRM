@@ -23,6 +23,10 @@ const deny = (): never => { throw new TechnicalAssignmentError('DENIED'); };
  * document permissions, financial ceiling and every selection fingerprint. */
 async function technicalAcquisitionBasis(tx: Tx, authorityId: string, document: Document, administrativeHistory: boolean) {
   if (document.visibilityLevel !== technicalDocumentPrivateVisibility) return null;
+  // Hold the source epoch through admission and byte delivery. A concurrent
+  // metadata correction cannot commit between the last check and the read.
+  const [locked]=await tx.$queryRaw<Array<{selectiveEpoch:number}>>`SELECT "selectiveEpoch" FROM "Document" WHERE id=${document.id} FOR SHARE`;
+  if(!locked||locked.selectiveEpoch!==document.selectiveEpoch)return deny();
   const key = await loadActivePrivilegedStepUpKey(tx);
   if (!key) return deny();
   const [authority] = await tx.$queryRaw<Array<{ userId: string; revision: number; enabled: boolean }>>`
