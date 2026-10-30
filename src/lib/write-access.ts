@@ -150,8 +150,8 @@ export async function requireClientContextWriteAccess(
   return { client, company, project, clientService };
 }
 
-export async function requireProjectEditAccess(session: AuthSession, projectId: string) {
-  const project = await loadProjectContext(projectId);
+export async function requireProjectEditAccess(session: AuthSession, projectId: string, db: ContextDb = prisma) {
+  const project = await loadProjectContext(projectId, db);
   if (!canEditProject(session, project)) denyWriteAccess();
   return project;
 }

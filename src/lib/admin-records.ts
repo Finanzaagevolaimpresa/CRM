@@ -377,7 +377,9 @@ async function contextGraph(tx: Tx, actor: Actor, model: string, before: Row, va
       adminRecordVersion(node.before[name] ?? null) !== adminRecordVersion(node.patch[name] ?? null));
     if (node.before.clientId) oldClients.add(String(node.before.clientId));
     if (node.before.technicalPrivate === true) blocked.add('Gli elementi tecnici privati mantengono il contesto della creazione personale.');
-    if (changed.length && ['assignedToId', 'consultantId', 'commercialOwnerId', 'technicalOwnerId'].some(name => node.before[name]))
+    // A child can inherit its new client solely through the same parent ID.
+    // Its named assignment must not follow that move even if no scalar changes.
+    if (['assignedToId', 'consultantId', 'commercialOwnerId', 'technicalOwnerId'].some(name => node.before[name]))
       blocked.add('Rimuovi o riassegna gli incarichi nominativi dal percorso dedicato prima di spostare il contesto.');
     for (const dependent of models) {
       // Generation counters are derived guards, maintained by existing triggers.

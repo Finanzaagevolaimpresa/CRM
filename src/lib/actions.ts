@@ -8,6 +8,7 @@ import { listAccessiblePracticeReadiness } from './practice-readiness';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';
 import { assertNoSelectiveClientMutation } from './selective-client-scope';
 import { guardProjectResources, withProjectResources } from './project-resource-guard';
+import { createProjectExpenseRecord } from './project-expenses';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
 import { filterFinancialDocuments } from './financial-document-access';
@@ -18,7 +19,7 @@ import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossier
 import { getSession, hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import {
   createExternalAiPayload,
   externalAiDataCategories,
@@ -885,13 +886,7 @@ export async function createProject(form: FormData) {
 
 export async function createProjectExpense(form: FormData) {
   const s = await requirePermission('project.write');
-  const data = projectExpenseSchema.parse(clean(form));
-  await requireProjectEditAccess(s, data.projectId);
-  return withProjectResources(prisma, s.userId, [data], async tx => {
-    const expense = await tx.projectExpense.create({ data: data as never });
-    await audit(s.userId, 'project_expense_create', 'ProjectExpense', expense.id, expense, tx);
-    return expense;
-  });
+  return createProjectExpenseRecord(prisma, s, clean(form));
 }
 
 export async function uploadDocument(form: FormData) {

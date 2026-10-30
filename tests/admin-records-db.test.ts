@@ -20,6 +20,7 @@ import { adminContextFixture, adminContextSnapshot, adminGraphFixture } from './
 import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
 import { withProjectResources } from '../src/lib/project-resource-guard';
+import { createProjectExpenseRecord } from '../src/lib/project-expenses';
 import { adminCatalogVersion } from '../src/lib/admin-catalog-revision';
 import { catalogV2Storage } from '../src/lib/service-catalog-v2';
 import { selectableStoredCatalogRevision } from '../src/lib/service-catalog-v2-persistence';
@@ -981,6 +982,70 @@ test('an explicit company context summary moves the ordinary graph atomically an
   assert.equal(await db.adminRecordRevision.count({ where: { model: 'Task', recordId: f.task.id } }), 2);
 });
 const inputForGraph = (input: AdminRecordCommand) => ({ model: input.model, id: input.id, expectedVersion: input.expectedVersion, values: input.values });
+
+test('a named task cannot inherit a moved client through an unchanged project link', options, async () => {
+  const f = await fixture(), assigned = await syntheticPerson(db, 'Responsabile sintetico ereditato', 'consulente');
+  const destination = await db.client.create({ data: { displayName: 'Nuovo contesto sintetico', type: 'societa' } });
+  const task = await db.task.create({ data: { projectId: f.project.id, clientId: null,
+    title: 'Attività con solo collegamento progetto', type: 'manuale', assignedToId: assigned.user.id } });
+  const input = await command('Project', f.project.id, { clientId: destination.id });
+  const plan = await prepareAdminContextMove(db, admin.session, inputForGraph(input));
+  assert(plan.blocked.some(message => /incarichi nominativi/.test(message)));
+  input.contextMove = { expectedGraphHash: plan.hash, confirmed: true };
+  await assert.rejects(save(input), /DEPENDENCIES/);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, f.client.id);
+  assert.deepEqual(await db.task.findUniqueOrThrow({ where: { id: task.id } }), task);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 0);
+});
+
+test('ordinary project expense creation loses its old-client authority when a graph moves after its initial access check', options, async () => {
+  const writer = await syntheticPerson(db, 'Consulente sintetico precedente', 'consulente'), f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: writer.user.id } });
+  const destination = await db.client.create({ data: { displayName: 'Destinazione riservata sintetica', type: 'societa' } });
+  const input = await command('Project', f.project.id, { clientId: destination.id });
+  input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+  let signal!: () => void, release!: () => void, paused = false;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { project: { async findFirst({ args, query }) {
+    const row = await query(args);
+    if (!paused) { paused = true; signal(); await gate; }
+    return row;
+  } } } }) as unknown as PrismaClient;
+  const raw = { projectId: f.project.id, category: 'software', description: 'Spesa sintetica concorrente', amount: '42.50' };
+  const writing = createProjectExpenseRecord(delayed, writer.session, raw);
+  const observed = assert.rejects(writing, /PROJECT_NOT_OPERATIONAL|non accessibile/);
+  await reached;
+  try { await save(input); } finally { release(); }
+  await observed;
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 0);
+  assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, event: 'project_expense_create' } }), 0);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, destination.id);
+  await db.client.update({ where: { id: destination.id }, data: { consultantId: writer.user.id } });
+  const saved = await createProjectExpenseRecord(db, writer.session, raw);
+  assert.equal(saved.amount.toString(), '42.5');
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 1);
+});
+
+test('ordinary expense creation rechecks a revoked permission after page-time admission and before any effect', options, async () => {
+  const writer = await syntheticPerson(db, 'Consulente sintetico revocato', 'consulente'), f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: writer.user.id } });
+  let signal!: () => void, release!: () => void, paused = false;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { project: { async findFirst({ args, query }) {
+    const row = await query(args);
+    if (!paused) { paused = true; signal(); await gate; }
+    return row;
+  } } } }) as unknown as PrismaClient;
+  const writing = createProjectExpenseRecord(delayed, writer.session,
+    { projectId: f.project.id, category: 'software', description: 'Spesa sintetica senza permesso', amount: '12.00' });
+  const observed = assert.rejects(writing);
+  await reached;
+  try { await db.userPermissionOverride.create({ data: { userId: writer.user.id, permission: 'project.write', allowed: false } }); }
+  finally { release(); }
+  await observed;
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.project.id } }), 0);
+  assert.equal(await db.auditLog.count({ where: { actorId: writer.user.id, event: 'project_expense_create' } }), 0);
+});
 
 test('a new child after graph preview and an audit failure both preserve the entire original context', options, async () => {
   const f = await adminGraphFixture(db, admin.user.id);
