@@ -792,6 +792,11 @@ test('private metadata survives inline confirmation and reopens the correction a
 });
 test('a lost private metadata response reconciles after reload with one source-preserving correction',async({page})=>{
   const source=await browserPrivateMetadata(),id=source.receipt.documentId;
+  const preciseExpiry='2030-01-02T10:30:45.123Z',initial=await readAdminPrivateDocumentMetadata(db,source.person.session,id);
+  const key={version:Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION),secret:process.env.PRIVILEGED_STEP_UP_SECRET!};
+  await saveAdminPrivateDocumentMetadata(db,source.person.session,{commandId:randomUUID(),id,expectedVersion:initial.expectedVersion,
+    values:{...initial.current.values,expiresAt:preciseExpiry},reason:'Scadenza sintetica con precisione originale',confirmed:true},
+    {key,sessionToken:source.person.token,stepUpToken:createPrivilegedStepUpToken({key,userId:source.person.user.id,sessionToken:source.person.token,role:'admin'})});
   await login(page);await page.goto('/admin/private-documents/'+id);await metadataChoice(page,'Metadato con esito recuperato');
   const commandId=new URL(page.url()).searchParams.get('command')!,pattern='**/admin/private-documents/**';let lost=false,posts=0;
   await page.route(pattern,async route=>{if(route.request().method()!=='POST')return route.continue();posts++;await route.fetch();lost=true;await route.abort('failed');});
@@ -803,6 +808,14 @@ test('a lost private metadata response reconciles after reload with one source-p
   expect(await db.auditLog.count({where:{id:'admin-record:'+commandId}})).toBe(1);
   await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue('Metadato con esito recuperato');
+  expect((await readAdminPrivateDocumentMetadata(db,source.person.session,id)).current.values.expiresAt).toBe(preciseExpiry);
+  await page.getByLabel('Scadenza amministrativa',{exact:true}).fill('2040-01-02T12:00');
+  await page.getByRole('listitem').filter({hasText:'Revisione 1 ·'}).getByRole('button',{name:'Riprendi questi metadati nella bozza',exact:true}).click();
+  await metadataChoice(page,'Metadato con scadenza ripresa dalla cronologia');
+  await page.getByRole('button',{name:'Registra metadati amministrativi',exact:true}).click();
+  await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
+  const restored=await readAdminPrivateDocumentMetadata(db,source.person.session,id);
+  expect(restored.current.revision).toBe(3);expect(restored.current.values.expiresAt).toBe(preciseExpiry);
 });
 test('an interrupted private metadata attempt closes before a fresh operation and rejects the late command',async({page})=>{
   const source=await browserPrivateMetadata(),id=source.receipt.documentId;
@@ -869,7 +882,7 @@ test('draft replacement preserves target and fields through confirmation expiry 
   await confirmation.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();await expect(confirmation).toContainText('Identità confermata.');
   await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();
   await page.getByRole('link',{name:'Apri e verifica la bozza sostitutiva',exact:true}).click();
-  await expect(page).toHaveURL(new RegExp('focus='+commandId));await expect(page.getByText('Testo sostitutivo sintetico da browser',{exact:true})).toBeVisible();
+  await expect(page).toHaveURL(new RegExp('focus='+commandId));await expect(page.getByRole('textbox',{name:'Testo esatto',exact:true})).toHaveValue('Testo sostitutivo sintetico da browser');
   expect((await db.approvedCommunication.findUniqueOrThrow({where:{id:commandId}})).clientId).toBe(source.client.id);
   expect(await db.communicationVersion.findUniqueOrThrow({where:{id:version.id}})).toEqual(version);
   expect((await readAdminOperationalState(db,source.person.session,'ApprovedCommunication',source.message.id)).state).toBe('ARCHIVED');

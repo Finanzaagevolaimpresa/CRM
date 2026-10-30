@@ -4,6 +4,8 @@ Nel fascicolo cliente apri **Documenti acquisiti nel fascicolo**, poi **Correggi
 
 Modifica i campi, scrivi una motivazione e controlla il riepilogo. La conferma Admin vale trenta minuti; se scade, riconferma nello stesso modulo e poi registra la correzione. Riapri la scheda per verificare la revisione salvata. Per tornare a valori precedenti, riprendili nella bozza dalla fonte o dalla cronologia e registra una nuova correzione motivata.
 
+Il campo scadenza mostra ore e minuti. Se non lo modifichi, oppure riprendi una revisione dalla cronologia, viene conservato l’istante esatto registrato, compresi secondi e millisecondi.
+
 Una correzione invalida le vecchie selezioni del documento. Se necessario, scegli nuovamente persona, versione e download nel contesto di condivisione. Il documento resta privato. La riclassificazione non rimuove le tutele finanziarie o di riservatezza della fonte originaria. Il blocco, l’archivio e il cestino si gestiscono nel percorso **Blocca, archivia o ripristina il documento**; correggere i metadati non lo riattiva.
 
 Se la risposta si interrompe, riapri lo stesso indirizzo e scegli **Verifica esito registrato**. Se non risulta un esito, puoi chiudere quel tentativo; solo dopo la chiusura prepara una nuova operazione. La chiusura impedisce che il vecchio comando venga eseguito in ritardo.

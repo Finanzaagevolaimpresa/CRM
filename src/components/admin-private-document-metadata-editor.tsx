@@ -14,16 +14,20 @@ export function AdminPrivateDocumentMetadataEditor({data,commandId,recovering}:{
   const [expectedVersion]=useState(data.expectedVersion),[title,setTitle]=useState(data.current.values.title),
     [classification,setClassification]=useState(data.current.values.classification),[expires,setExpires]=useState(localDate(data.current.values.expiresAt)),
     [reason,setReason]=useState(''),[confirmed,setConfirmed]=useState(false),[closeConfirmed,setCloseConfirmed]=useState(false),[busy,setBusy]=useState(false);
+  const [expirySource,setExpirySource]=useState(data.current.values.expiresAt);
   const [result,setResult]=useState<MetadataResult|null>(recovering?{ok:false,uncertain:true,message:'Verifica il tentativo conservato prima di proseguire.'}:null);
   const frozen=!ready||busy||Boolean(result?.uncertain||result?.ok||result?.closed),path='/admin/private-documents/'+encodeURIComponent(data.id);
   function remember(pending:boolean){const url=new URL(window.location.href);if(pending)url.searchParams.set('decision',commandId);else url.searchParams.delete('decision');window.history.replaceState(window.history.state,'',url);}
-  function restore(values:PrivateMetadataValues){if(frozen)return;setTitle(values.title);setClassification(values.classification);setExpires(localDate(values.expiresAt));setConfirmed(false);}
+  function restore(values:PrivateMetadataValues){if(frozen)return;setTitle(values.title);setClassification(values.classification);setExpirySource(values.expiresAt);setExpires(localDate(values.expiresAt));setConfirmed(false);}
+  // datetime-local displays minutes; an untouched or restored value must retain
+  // its exact saved instant, including seconds, milliseconds and DST offset.
+  const effectiveExpiry=expires===localDate(expirySource)?expirySource:expires?new Date(expires).toISOString():null;
   async function save(){
     if(sending.current||frozen||!confirmed)return;
     sending.current=true;setBusy(true);remember(true);
     try{
       const response=await saveAdminPrivateDocumentMetadataAction({commandId,id:data.id,expectedVersion,
-        values:{title,classification,expiresAt:expires?new Date(expires).toISOString():null},reason,confirmed:true});
+        values:{title,classification,expiresAt:effectiveExpiry},reason,confirmed:true});
       setResult(response);if(!response.ok&&!response.uncertain)remember(false);
     }catch{setResult({ok:false,uncertain:true,message:'Risposta interrotta. Verifica il tentativo conservato prima di ripetere.'});}
     finally{sending.current=false;setBusy(false);}
@@ -47,7 +51,7 @@ export function AdminPrivateDocumentMetadataEditor({data,commandId,recovering}:{
         {Object.entries(labels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
       <label className="block font-semibold">Scadenza amministrativa<input className="block w-full border rounded-xl p-3" type="datetime-local" value={expires} onChange={e=>{setExpires(e.target.value);setConfirmed(false);}}/></label>
       <label className="block font-semibold">Motivazione<textarea className="block w-full border rounded-xl p-3" required minLength={3} maxLength={2000} value={reason} onChange={e=>setReason(e.target.value)}/></label>
-      <section aria-label="Riepilogo della correzione" className="rounded-xl border p-4"><p>{title} · {labels[classification]} · {expires||'senza scadenza amministrativa'}</p>
+      <section aria-label="Riepilogo della correzione" className="rounded-xl border p-4"><p>{title} · {labels[classification]} · {effectiveExpiry?new Date(effectiveExpiry).toLocaleString('it-IT'):'senza scadenza amministrativa'}</p>
         <label><input type="checkbox" required checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/> Confermo la correzione, la conservazione della fonte e l’invalidazione delle vecchie selezioni.</label></section>
       <button disabled={!confirmed} className="bg-blue-900 rounded-xl px-4 py-3 font-bold text-white">Registra metadati amministrativi</button>
     </fieldset></form>:<p>I permessi correnti consentono soltanto la consultazione.</p>}

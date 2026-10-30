@@ -37,4 +37,4 @@ Prima della produzione occorrono candidato e SQL esatti, CI richiesta verde, rie
 
 ## Limiti ancora separati
 
-Questa fase non implementa la rettifica completa di metadati/classificazione/scadenza o la sostituzione di versione del documento tecnico privato, il ricollegamento del contesto delle comunicazioni, né la riconciliazione autoritativa di un invio SMTP incerto. Questi residui dell'incarico restano espliciti. I collaudi sintetici non attestano il collaudo dell'interfaccia in produzione.
+I percorsi aggiunti successivamente sono descritti in [metadati privati](admin-private-document-metadata.md) e [contesto delle bozze](admin-draft-context.md). Restano espliciti il writer Admin di nuove versioni binarie della stessa fonte privata e la riconciliazione autoritativa di un invio SMTP incerto. La [guida complessiva](admin-master-operativita.md) distingue le funzioni disponibili dalle limitazioni residue. I collaudi sintetici non attestano il collaudo dell’interfaccia in produzione.

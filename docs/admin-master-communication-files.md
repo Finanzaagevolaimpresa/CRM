@@ -24,5 +24,5 @@ Nella risposta ricevuta o nelle impostazioni delle comunicazioni apri **Fonte e 
 - File massimo 20 MiB; contesto massimo 100 file e 200 MiB, compresi quelli revocati. Il recupero non elimina byte storici per liberare quota.
 - Le conversazioni interne richiedono la partecipazione corrente anche per un altro Admin. Non vengono aggiunti partecipanti o concessioni.
 - I percorsi per commerciali e tecnici mantengono la disponibilità e i download ammessi dal contesto; non ereditano gli editor Admin.
-- La rettifica delle fonti ricevute non introduce ancora un ciclo amministrativo autonomo di blocco/archiviazione della singola risposta. Tale copertura resta un residuo del mandato complessivo.
+- Il blocco, l’archivio e il ripristino della risposta ricevuta sono descritti nel percorso successivo di [gestione degli stati operativi](admin-operational-lifecycle.md); la fonte ricevuta e le sue prove restano conservate.
 - La registrazione di file o rettifiche non invia messaggi. Nessun invio reale è parte delle prove di questa modifica.
