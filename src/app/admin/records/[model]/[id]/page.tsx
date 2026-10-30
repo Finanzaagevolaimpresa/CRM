@@ -12,13 +12,15 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const session = await requireSession(); if (session.role !== 'admin') notFound();
   const { model, id } = await params, query = await searchParams;
   if (!adminRecordCatalogue.some(row => row.model === model)) notFound();
-  for (const key of ['draft', 'command', 'decision', 'restoreRevision']) if (query[key] !== undefined && !z.string().uuid().safeParse(query[key]).success) notFound();
+  for (const key of ['draft', 'command', 'decision', 'restoreRevision', 'copyFrom']) if (query[key] !== undefined && !z.string().uuid().safeParse(query[key]).success) notFound();
+  if (query.copyFrom && (model !== 'ServiceCatalogRevision' || id !== 'new')) notFound();
   if (!query.command || (id === 'new' && !query.draft)) {
     const next = new URLSearchParams();
     if (id === 'new') next.set('draft', String(query.draft ?? randomUUID()));
     next.set('command', String(query.command ?? randomUUID()));
     if (query.decision) next.set('decision', String(query.decision));
     if (query.restoreRevision) next.set('restoreRevision', String(query.restoreRevision));
+    if (query.copyFrom) next.set('copyFrom', String(query.copyFrom));
     redirect(`/admin/records/${model}/${id}?${next}`);
   }
   if (query.decision && query.decision !== query.command) notFound();
@@ -31,7 +33,12 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   if (receipt && (receipt.model !== model || receipt.id !== recordId)) notFound();
   const creating = id === 'new' && (!receipt || receipt.closed);
   let data;
-  try { data = await loadAdminRecord(prisma, session, model, recordId, creating, query.restoreRevision ? String(query.restoreRevision) : undefined); }
+  try { data = await loadAdminRecord(prisma, session, model, recordId, creating, query.restoreRevision ? String(query.restoreRevision) : undefined);
+    if (creating && query.copyFrom) {
+      const source = await loadAdminRecord(prisma, session, model, String(query.copyFrom));
+      data.values = { ...source.values, status: 'PUBLISHED', validUntil: '' };
+    }
+  }
   catch (error) { if (error instanceof AdminRecordError || error instanceof z.ZodError) notFound(); throw error; }
   return <div className="crm-space-y-6"><PageHeader title={data.label} description={data.deleted ? 'Scheda nel cestino: dati conservati per il ripristino.' : 'Editor amministrativo con controllo delle modifiche concorrenti e cronologia delle correzioni.'} />
     <AdminRecordEditor key={`${model}:${recordId}:${query.command}:${query.restoreRevision ?? ''}`} data={data} commandId={String(query.command)} recovering={Boolean(query.decision || receipt)} /></div>;

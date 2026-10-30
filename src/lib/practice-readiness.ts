@@ -23,12 +23,9 @@ import { lockAuthoritativeInternalSession } from "./internal-session-registry";
 import { engagementFeatureEnabled } from "./internal-engagement-mode";
 import {
   assertSyntheticCatalogDatabase,
-  catalogRevisionIsSelectable,
+  selectableStoredCatalogRevision,
 } from "./service-catalog-v2-persistence";
-import {
-  FAI_SERVICE_CATALOG_V2,
-  validateCatalogSelection,
-} from "./service-catalog-v2";
+import { validateStoredCatalogSelection } from './admin-catalog-revision';
 
 export class PracticeReadinessError extends Error {
   constructor(readonly code: "DISABLED" | "DENIED" | "CONFLICT" | "NOT_READY") {
@@ -374,9 +371,7 @@ export async function proposePracticeOfferRevision(
       const lead = intake
         ? await assertLeadOperational(tx, intake.leadId)
         : null;
-      const definition = FAI_SERVICE_CATALOG_V2.find(
-        (item) => item.code === catalogRevision?.serviceCatalog.code,
-      );
+      const definition = catalogRevision ? selectableStoredCatalogRevision(catalogRevision, new Date()) : null;
       if (
         !intake ||
         !lead ||
@@ -396,13 +391,12 @@ export async function proposePracticeOfferRevision(
         offer.validUntil <= new Date() ||
         !catalogRevision ||
         !definition ||
-        !catalogRevisionIsSelectable(definition, catalogRevision, new Date()) ||
         (input.projectId &&
           (!project || project.deletedAt || project.clientId !== client.id))
       )
         throw new PracticeReadinessError("DENIED");
-      validateCatalogSelection(
-        definition.code,
+      validateStoredCatalogSelection(
+        definition,
         input.digitalProjectType ?? undefined,
       );
       const taxable = offer.taxableAmount,
@@ -518,9 +512,7 @@ export async function createPracticeReadiness(
       const lead = intake
         ? await assertLeadOperational(tx, intake.leadId)
         : null;
-      const definition = FAI_SERVICE_CATALOG_V2.find(
-        (item) => item.code === catalogRevision?.serviceCatalog.code,
-      );
+      const definition = catalogRevision ? selectableStoredCatalogRevision(catalogRevision, new Date()) : null;
       if (
         !client ||
         client.deletedAt ||
@@ -531,8 +523,7 @@ export async function createPracticeReadiness(
         (revision.projectId &&
           (!project || project.deletedAt || project.clientId !== client.id)) ||
         !catalogRevision ||
-        !definition ||
-        !catalogRevisionIsSelectable(definition, catalogRevision, new Date())
+        !definition
       )
         throw new PracticeReadinessError("DENIED");
       const acceptedAt = new Date();

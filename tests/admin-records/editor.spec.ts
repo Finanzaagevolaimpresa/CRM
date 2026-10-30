@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { syntheticSession } from '../selective-sharing/fixtures';
 import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
@@ -10,6 +10,60 @@ import { romeDateTimeInput } from '../../src/lib/rome-date-time';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
+
+test('Admin activates and retires the reviewed notice version from its own record', async ({ page }) => {
+  const notice = await db.privacyNoticeVersion.create({ data: { noticeCode: 'SYNTHETIC_UI_' + randomUUID().replaceAll('-', '').toUpperCase(),
+    noticeVersion: 'v1', purposeCode: 'SYNTHETIC_TEST', legalBasisCode: 'SYNTHETIC_TEST',
+    evidenceKind: 'NOTICE_ACKNOWLEDGEMENT', contentHash: 'e'.repeat(64) } });
+  await login(page); await page.goto('/admin/records/PrivacyNoticeVersion/' + notice.id);
+  await page.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('UPDATE');
+  await page.getByRole('checkbox', { name: /Ho verificato il testo corrispondente/ }).check();
+  await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByText('Stato informativa: ACTIVE.', { exact: false })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('UPDATE');
+  await page.getByRole('checkbox', { name: /Confermo il ritiro da ora/ }).check();
+  await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(page.getByText('Stato informativa: RETIRED.', { exact: false })).toBeVisible();
+  expect((await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id: notice.id } })).contentHash).toBe(notice.contentHash);
+  await expect(page.getByRole('combobox', { name: 'Operazione', exact: true }).locator('option[value="UPDATE"]')).toHaveCount(0);
+});
+
+test('Admin publishes, retires and restores catalogue contents through a new usable revision', async ({ page }) => {
+  const master = await db.serviceCatalog.create({ data: { code: 'synthetic_ui_' + randomUUID().replaceAll('-', ''),
+    name: 'Servizio UI sintetico', category: 'sintetico' } });
+  await login(page); await page.goto('/admin/records/ServiceCatalogRevision/new');
+  await page.getByRole('combobox', { name: 'Servizio a catalogo', exact: true }).selectOption(master.id);
+  await page.getByRole('textbox', { name: 'Nome del servizio nella revisione', exact: true }).fill('Servizio revisionato dal browser');
+  await page.getByRole('textbox', { name: 'Descrizione del servizio nella revisione', exact: true }).fill('Descrizione sintetica operativa');
+  await page.getByRole('combobox', { name: 'Modalità del prezzo', exact: true }).selectOption('FIXED');
+  await page.getByRole('spinbutton', { name: 'Prezzo imponibile (EUR)', exact: true }).fill('99.90');
+  await page.getByRole('textbox', { name: 'Versione delle condizioni', exact: true }).fill('SYNTHETIC-UI-v1');
+  await page.getByRole('button', { name: 'Prepara la revisione del servizio scelto', exact: true }).click();
+  for (const label of ['Attività incluse','Attività escluse','Documenti e fasi','Tempi di esecuzione','Risultati da consegnare','Incarichi successivi e condizioni separate'])
+    await page.getByRole('textbox', { name: label, exact: true }).fill('Contenuto sintetico ' + label);
+  await page.getByRole('checkbox', { name: /Confermo la nuova revisione interna/ }).check();
+  await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  const original = await db.serviceCatalogRevision.findFirstOrThrow({ where: { serviceCatalogId: master.id } });
+  await expect(page.getByRole('spinbutton', { name: 'Prezzo imponibile (EUR)', exact: true })).toBeDisabled();
+  await page.getByRole('combobox', { name: 'Stato', exact: true }).selectOption('RETIRED');
+  await reason(page); await save(page);
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await page.getByRole('link', { name: 'Prepara una nuova revisione da questi contenuti', exact: true }).click();
+  await expect(page.getByRole('spinbutton', { name: 'Prezzo imponibile (EUR)', exact: true })).toHaveValue('99.9');
+  await page.getByRole('button', { name: 'Prepara la revisione del servizio scelto', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Attività incluse', exact: true })).toHaveValue('Contenuto sintetico Attività incluse');
+  await page.getByRole('button', { name: 'Conferma questi contenuti per la nuova revisione', exact: true }).click();
+  await page.getByRole('checkbox', { name: /Confermo la nuova revisione interna/ }).check();
+  await reason(page); await save(page);
+  expect(await db.serviceCatalogRevision.count({ where: { serviceCatalogId: master.id } })).toBe(2);
+  expect((await db.serviceCatalogRevision.findUniqueOrThrow({ where: { id: original.id } })).status).toBe('RETIRED');
+  await page.goto('/service-catalog?serviceCode=' + master.code);
+  await expect(page.getByRole('heading', { name: 'Selezione valida', exact: true })).toBeVisible();
+  expect(await db.serviceCatalogPublication.count()).toBe(0);
+});
 
 test('Admin creates a notice draft and annotates it after reopening without rewriting or activating it', async ({ page }) => {
   await login(page); await page.goto('/admin/records/PrivacyNoticeVersion/new');

@@ -10,24 +10,26 @@ import { canReadPublishedVideo, canDownloadPublishedVideo, resolveVideoAudience,
 import { videoCommandSchema, videoDetailsSchema, type VideoCommand, type VideoDetails } from './video-input';
 import { prepareVideoFile, savePrivateVideoFile, readPrivateVideoFile, videoStoragePath } from './video-storage';
 import { videoLibraryQuotaBytes } from './video-file-contract';
+import { loadActivePrivilegedStepUpKey } from './application-key-registry';
+import { createVideoDecision, verifyVideoDecision } from './video-decision';
 
 type Tx = Prisma.TransactionClient;
 type Proof = UpdateCredentials;
 const transactionOptions = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 } as const;
 const uuid = z.string().uuid();
 export class VideoLibraryError extends Error {
-  constructor(public readonly code: 'DENIED' | 'STALE' | 'QUOTA' | 'UNAVAILABLE') { super('VIDEO_' + code); }
+  constructor(public readonly code: 'DENIED' | 'STALE' | 'QUOTA' | 'UNAVAILABLE' | 'CLOSED') { super('VIDEO_' + code); }
 }
 function denied(): never { throw new VideoLibraryError('DENIED'); }
 function stale(): never { throw new VideoLibraryError('STALE'); }
 async function transaction<T>(db: PrismaClient, run: (tx: Tx) => Promise<T>) {
   try { return await db.$transaction(run, transactionOptions); } catch (error) { throw mapSerializableConflict(error); }
 }
-const userSelection = { id: true, name: true, role: true, active: true, deletedAt: true, recordUpdateEpoch: true,
+const userSelection = { id: true, name: true, email: true, role: true, active: true, deletedAt: true, recordUpdateEpoch: true,
   permissionOverrides: { select: { permission: true, allowed: true } } } as const;
 type CurrentPerson = Prisma.UserGetPayload<{ select: typeof userSelection }>;
 function person(row: CurrentPerson): VideoPerson {
-  return { id: row.id, name: row.name, role: row.role, active: row.active, deleted: Boolean(row.deletedAt),
+  return { id: row.id, name: row.name, email: row.email, role: row.role, active: row.active, deleted: Boolean(row.deletedAt),
     epoch: row.recordUpdateEpoch, canRead: recordUpdatePermission(row, 'video.read'),
     canManage: row.role === 'admin' && recordUpdatePermission(row, 'video.manage') };
 }
@@ -140,8 +142,9 @@ async function proposal(tx: Tx, claimed: AuthSession, input: VideoCommand, proof
   if (row.version !== input.expectedVersion || (row.state === 'ARCHIVED' && input.operation !== 'RESTORE_DRAFT')
     || (row.state !== 'ARCHIVED' && input.operation === 'RESTORE_DRAFT')) stale();
   const next = 'details' in input ? input.details : details(row);
-  // Replacing an upload is a separate draft: an old approval never follows a new file.
-  if (next.fileId !== row.fileId) stale();
+  // A replacement first becomes a private draft; an old audience never follows
+  // new bytes. Publication needs a separate preview of the new version.
+  if (next.fileId !== row.fileId && input.operation !== 'SAVE_DRAFT') stale();
   const file = await readyFile(tx, next.fileId), people = await directory(tx);
   const changesDetails = 'details' in input;
   const resolved = changesDetails && (next.selection.people.length || next.selection.areas.length)
@@ -158,36 +161,80 @@ async function proposal(tx: Tx, claimed: AuthSession, input: VideoCommand, proof
 }
 export async function previewVideo(db: PrismaClient, claimed: AuthSession, raw: unknown) {
   const input = videoCommandSchema.parse(raw);
+  const key = await loadActivePrivilegedStepUpKey(db);
+  if (!key) throw new VideoLibraryError('UNAVAILABLE');
   return transaction(db, async tx => {
     const p = await proposal(tx, claimed, input);
     const now = await p.auth.finish();
     if (input.operation === 'PUBLISH' && p.expiresAt && p.expiresAt <= now) denied();
-    return { digest: p.digest, title: p.next.title, fileName: p.file.fileName, people: p.resolved?.people ?? [],
+    const identity = { actorId: p.auth.person.id, actorEpoch: p.auth.person.epoch, sessionId: p.auth.registry.id };
+    return { digest: createVideoDecision(key, identity, input, p.digest, now), title: p.next.title, fileName: p.file.fileName, people: p.resolved?.people ?? [],
       downloadAllowed: input.operation === 'PUBLISH' && p.next.downloadAllowed,
       expiresAt: input.operation === 'PUBLISH' ? p.next.expiresAt : null };
   });
 }
 export async function confirmVideo(db: PrismaClient, claimed: AuthSession, raw: unknown, digest: string, proof: Proof) {
   const input = videoCommandSchema.parse(raw);
-  z.string().regex(/^[a-f0-9]{64}$/).parse(digest);
   return transaction(db, async tx => {
+    // Match settlement's directory/session -> command ordering.
+    await actor(tx, claimed, true, proof);
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`video-command:${input.commandId}`},0))::text`;
+    if (await tx.adminRecordRevision.findUnique({ where: { commandId: input.commandId } })) throw new VideoLibraryError('CLOSED');
     const p = await proposal(tx, claimed, input, proof);
-    if (p.digest !== digest) stale();
+    const identity = { actorId: p.auth.person.id, actorEpoch: p.auth.person.epoch, sessionId: p.auth.registry.id };
+    const decision = verifyVideoDecision(proof.key, identity, input, digest, await p.auth.finish());
+    if (p.digest !== decision.decisionHash) stale();
     if (await tx.videoCommand.findUnique({ where: { id: input.commandId } })) stale();
     const now = await p.auth.finish(), publish = input.operation === 'PUBLISH';
     if (publish && p.expiresAt && p.expiresAt <= now) denied();
     const state = publish ? 'PUBLISHED' : input.operation === 'ARCHIVE' ? 'ARCHIVED' : 'DRAFT';
     const row = await tx.videoEntry.update({ where: { id: p.row.id, version: input.expectedVersion }, data: {
-      version: { increment: 1 }, state, title: p.next.title, description: p.next.description, category: p.next.category,
+      version: { increment: 1 }, state, fileId: p.next.fileId, title: p.next.title, description: p.next.description, category: p.next.category,
       position: p.next.position, selection: p.next.selection, audience: publish ? p.resolved!.audience : [],
       directoryBinding: p.resolved?.binding ?? canonicalSha256([]), publishedById: publish ? p.auth.person.id : null,
       publisherEpoch: publish ? p.auth.person.epoch : null, downloadAllowed: publish && p.next.downloadAllowed,
       expiresAt: publish ? p.expiresAt : null, updatedAt: now,
     } });
-    await history(tx, row, { id: input.commandId, operation: input.operation, digest }, p.auth.person);
+    await history(tx, row, { id: input.commandId, operation: input.operation, digest: p.digest }, p.auth.person);
     const end = await p.auth.finish();
+    verifyVideoDecision(proof.key, identity, input, digest, end);
     if (publish && p.expiresAt && p.expiresAt <= end) denied();
     return { confirmed: true };
+  });
+}
+
+/** Wait for an in-flight command, then persist either its receipt or a terminal
+ * closure. An expired preview can be closed but cannot execute a mutation. */
+export async function settleVideoAttempt(db: PrismaClient, claimed: AuthSession, raw: unknown, token: string) {
+  const input = videoCommandSchema.parse(raw), key = await loadActivePrivilegedStepUpKey(db);
+  if (!key) throw new VideoLibraryError('UNAVAILABLE');
+  return transaction(db, async tx => {
+    const auth = await actor(tx, claimed, true);
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`video-command:${input.commandId}`},0))::text`;
+    const identity = { actorId: auth.person.id, actorEpoch: auth.person.epoch, sessionId: auth.registry.id };
+    const ticket = verifyVideoDecision(key, identity, input, token, await auth.finish(), { closing: true });
+    const recorded = await tx.videoCommand.findUnique({ where: { id: input.commandId } });
+    if (recorded) {
+      if (recorded.actorId !== auth.person.id || recorded.actorEpoch !== auth.person.epoch || recorded.videoId !== input.videoId
+        || recorded.operation !== input.operation || recorded.digest !== ticket.decisionHash) denied();
+      await auth.finish(); return { confirmed: true, closed: false };
+    }
+    const closed = await tx.adminRecordRevision.findUnique({ where: { commandId: input.commandId } });
+    if (closed) {
+      if (closed.actorId !== auth.person.id || closed.sessionId !== auth.registry.id || closed.model !== 'VideoEntry'
+        || closed.recordId !== input.videoId || closed.operation !== 'CLOSE' || closed.requestHash !== ticket.requestHash) denied();
+    } else {
+      await entry(tx, input.videoId);
+      const empty = canonicalSha256(null);
+      await tx.adminRecordRevision.create({ data: { commandId: input.commandId, actorId: auth.person.id,
+        sessionId: auth.registry.id, model: 'VideoEntry', recordId: input.videoId, operation: 'CLOSE',
+        requestHash: ticket.requestHash, beforeHash: empty, afterHash: empty, before: Prisma.JsonNull, after: Prisma.JsonNull,
+        reason: 'Tentativo video riconciliato e chiuso senza modifica o pubblicazione.' } });
+      await tx.auditLog.create({ data: { id: 'admin-record:' + input.commandId, actorId: auth.person.id,
+        event: 'admin_record_attempt_closed', entityType: 'VideoEntry', entityId: input.videoId, after: { commandId: input.commandId } } });
+      await tx.$executeRaw`SET CONSTRAINTS "AdminRecordRevision_atomic_audit" IMMEDIATE`;
+    }
+    await auth.finish(); return { confirmed: false, closed: true };
   });
 }
 export async function readVideoReceipt(db: PrismaClient, claimed: AuthSession, commandId: string) {
@@ -202,9 +249,22 @@ export async function readVideoReceipt(db: PrismaClient, claimed: AuthSession, c
 export async function readVideoSetup(db: PrismaClient, claimed: AuthSession, id: string) {
   return transaction(db, async tx => {
     const auth = await actor(tx, claimed, true), row = await entry(tx, id), file = await readyFile(tx, row.fileId);
-    const people = (await directory(tx)).filter(p => p.active && !p.deleted && p.canRead).map(({ id, name, role }) => ({ id, name, role }));
+    const people = (await directory(tx)).filter(p => p.active && !p.deleted && p.canRead).map(({ id, name, email, role }) => ({ id, name, email, role }));
+    const files = [{ id: file.id, fileName: file.fileName, sizeBytes: file.sizeBytes }];
     await auth.finish();
-    return { id: row.id, version: row.version, state: row.state as VideoPublication['state'], details: details(row), fileName: file.fileName, people };
+    return { id: row.id, version: row.version, state: row.state as VideoPublication['state'], details: details(row), fileName: file.fileName, files, people };
+  });
+}
+export async function searchVideoFiles(db: PrismaClient, claimed: AuthSession, query: string, offset: number) {
+  const search = z.string().max(160).parse(query).trim(), skip = z.number().int().min(0).max(100_000).parse(offset);
+  return transaction(db, async tx => {
+    const auth = await actor(tx, claimed, true);
+    const rows = await tx.videoAsset.findMany({ where: { state: 'READY', ...(search ? {
+      OR: [{ fileName: { contains: search, mode: 'insensitive' } }, ...(uuid.safeParse(search).success ? [{ id: search }] : [])] } : {}) },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], skip, take: 51,
+      select: { id: true, fileName: true, sizeBytes: true } });
+    await auth.finish();
+    return { files: rows.slice(0, 50), nextOffset: rows.length > 50 ? skip + 50 : null };
   });
 }
 async function admission(tx: Tx, row: VideoEntry, file: VideoAsset, recipient: VideoPerson, now: Date, download = false) {

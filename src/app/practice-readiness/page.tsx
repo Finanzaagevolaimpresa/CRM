@@ -13,6 +13,7 @@ import { Card, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { PrimaryButton } from "@/components/actions";
 import Link from "next/link";
 import { listAccessiblePracticeReadiness } from "@/lib/practice-readiness";
+import { selectableStoredCatalogRevision } from '@/lib/service-catalog-v2-persistence';
 import { canViewPracticeReadinessWork } from '@/lib/practice-readiness-access';
 import { engagementFeatureEnabled } from "@/lib/internal-engagement-mode";
 import {
@@ -72,7 +73,7 @@ export default async function Page({
     practices,
     intakes,
     offerRows,
-    revisions,
+    catalogRevisionRows,
     projectRows,
     contractRows,
     documentRows,
@@ -115,6 +116,7 @@ export default async function Page({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
   ]);
+  const revisions = catalogRevisionRows.filter(row => selectableStoredCatalogRevision(row, new Date()));
   const clientById = new Map(clientRows.map((client) => [client.id, client]));
   const projectById = new Map(
     projectRows.map((project) => [

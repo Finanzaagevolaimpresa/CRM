@@ -4,6 +4,7 @@ import { internalEngagementEnabled } from './internal-engagement-mode';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import { canonicalJson } from './canonical-json';
+import { definitionForStoredCatalogRevision } from './admin-catalog-revision';
 import { FAI_SERVICE_CATALOG, serviceCatalogRevisionHash } from './service-catalog';
 import { FAI_SERVICE_CATALOG_V2, catalogV2RevisionHash, catalogV2Storage, type CatalogV2Revision } from './service-catalog-v2';
 
@@ -42,7 +43,7 @@ export function storedRevisionMatches(service: CatalogV2Revision, row: StoredRev
   const storage = catalogV2Storage(service);
   return row.version === service.revisionVersion && row.publicName === service.name
     && row.shortDescription === service.description && row.priceMode === service.priceMode
-    && (row.netPrice === null ? null : Number(row.netPrice) * 100) === service.netPriceCents
+    && (row.netPrice === null ? null : new Prisma.Decimal(row.netPrice).mul(100).toNumber()) === service.netPriceCents
     && row.currency === 'EUR' && row.vatRateBps === 2200 && row.validFrom.toISOString() === service.validFrom
     && row.termsVersion === service.termsVersion && !row.checkoutEnabled && !row.autoClientDeliveryAllowed
     && !row.autoExternalActionAllowed && sameJson(row.operationalConditions, storage.operationalConditions)
@@ -56,6 +57,19 @@ export function catalogRevisionIsSelectable(
 ) {
   return row.serviceCatalog.active && row.status === 'PUBLISHED' && row.validFrom <= now
     && (row.validUntil === null || now < row.validUntil) && storedRevisionMatches(service, row);
+}
+export function selectableStoredCatalogRevision(row: StoredRevision & { validUntil: Date | null;
+  serviceCatalog: { code: string; active: boolean } }, now: Date) {
+  const definition = definitionForStoredCatalogRevision(row);
+  return definition && catalogRevisionIsSelectable(definition, row, now) ? definition : null;
+}
+export function availableStoredCatalogDefinitions(rows: Parameters<typeof selectableStoredCatalogRevision>[0][], now: Date) {
+  const byCode = new Map<string, CatalogV2Revision>();
+  for (const row of [...rows].sort((a,b) => b.version - a.version)) {
+    const definition = selectableStoredCatalogRevision(row, now);
+    if (definition && !byCode.has(definition.code)) byCode.set(definition.code, definition);
+  }
+  return [...byCode.values()];
 }
 
 export async function prepareServiceCatalogV2(db: Db, actorId: string | null = null) {
@@ -103,12 +117,19 @@ async function prepareCatalogRecords(db: Db, actorId: string | null, claimed?: A
       let catalog = await tx.serviceCatalog.findUnique({ where: { code: definition.code }, include: { revisions: true } });
       if (!catalog) catalog = await tx.serviceCatalog.create({ data: { code: definition.code, name: definition.name, description: definition.description, category: definition.category, basePrice: null, active: true, displayOrder: definition.displayOrder }, include: { revisions: true } });
       else if (!legacyCodes.has(definition.code) && (catalog.name !== definition.name || catalog.description !== definition.description || catalog.category !== definition.category || catalog.basePrice !== null || !catalog.active || catalog.displayOrder !== definition.displayOrder)) throw new CatalogV2PreparationError('SERVICE_CATALOG_MASTER_CONFLICT');
-      if (catalog.revisions.some(({ version }) => version !== 1 && version !== 2) || catalog.revisions.some(({ version }) => version > definition.revisionVersion)) throw new CatalogV2PreparationError('SERVICE_CATALOG_FUTURE_REVISION_CONFLICT');
+      const future = catalog.revisions.filter(({ version }) => version > definition.revisionVersion);
+      if (catalog.revisions.some(({ version }) => version < 1) || future.some(row => {
+        const decoded = definitionForStoredCatalogRevision({ ...row, serviceCatalog: catalog });
+        return !decoded || !['PUBLISHED', 'RETIRED'].includes(row.status) || !storedRevisionMatches(decoded, row);
+      })) throw new CatalogV2PreparationError('SERVICE_CATALOG_FUTURE_REVISION_CONFLICT');
       const existing = catalog.revisions.find(({ version }) => version === definition.revisionVersion);
       if (existing) {
-        if (existing.status !== 'PUBLISHED' || !storedRevisionMatches(definition, existing)) throw new CatalogV2PreparationError('SERVICE_CATALOG_V2_CONFLICT');
+        if (!['PUBLISHED', 'RETIRED'].includes(existing.status) || !storedRevisionMatches(definition, existing)) throw new CatalogV2PreparationError('SERVICE_CATALOG_V2_CONFLICT');
         continue;
       }
+      // A later administrative revision never authorizes recreating or
+      // republishing a missing historical baseline.
+      if (future.length) throw new CatalogV2PreparationError('SERVICE_CATALOG_PREVIOUS_REVISION_CONFLICT');
       const expectedPrevious = legacyCodes.has(definition.code) ? catalog.revisions.find(({ version }) => version === 1) : undefined;
       if (legacyCodes.has(definition.code) && (!expectedPrevious || expectedPrevious.status !== 'PUBLISHED')) throw new CatalogV2PreparationError('SERVICE_CATALOG_PREVIOUS_REVISION_CONFLICT');
       if (catalog.revisions.some((revision) => revision.status === 'PUBLISHED' && revision.id !== expectedPrevious?.id)) throw new CatalogV2PreparationError('SERVICE_CATALOG_PUBLISHED_REVISION_CONFLICT');

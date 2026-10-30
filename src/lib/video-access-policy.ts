@@ -4,7 +4,7 @@ import { communicationRecipientGroups } from './communication-recipient-groups';
 export const videoAreas = communicationRecipientGroups;
 export type VideoArea = keyof typeof videoAreas;
 export type VideoPerson = {
-  id: string; name: string; role: string; active: boolean; deleted: boolean;
+  id: string; name: string; email: string; role: string; active: boolean; deleted: boolean;
   epoch: number; canRead: boolean; canManage: boolean;
 };
 export type VideoSelection = { people: string[]; areas: VideoArea[] };
@@ -46,11 +46,11 @@ export function resolveVideoAudience(raw: unknown, directory: readonly VideoPers
   });
   const selection: VideoSelection = { people, areas: areas as VideoArea[] };
   const audience: VideoAudience = resolved.map(({ id, epoch, role }) => ({ id, epoch, role }));
-  const binding = digest({ selection, audience, people: resolved.map(({ id, name }) => ({ id, name })),
+  const binding = digest({ selection, audience, people: resolved.map(({ id, name, email }) => ({ id, name, email })),
     // Group changes between preview and confirmation must not use an old decision.
     directory: areas.length ? directory.map(({ id, role, active, deleted, epoch, canRead }) =>
       ({ id, role, active, deleted, epoch, canRead })).sort((a, b) => a.id.localeCompare(b.id)) : null });
-  return { selection, audience, binding, people: resolved.map(({ id, name, role }) => ({ id, name, role })) };
+  return { selection, audience, binding, people: resolved.map(({ id, name, email, role }) => ({ id, name, email, role })) };
 }
 
 export type VideoPublication = {

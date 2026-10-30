@@ -66,15 +66,15 @@ jobs:
         run: |
           npx tsc --noEmit
           npx eslint src/lib/admin-record*.ts src/lib/admin-user*.ts src/lib/user-actions.ts src/components/admin-record-editor.tsx src/components/admin-reference-select.tsx src/components/admin-user*.tsx src/app/admin/records tests/admin-record*.test.ts tests/admin-records --max-warnings 0
-          node --import tsx --test tests/admin-record-values.test.ts tests/admin-privileged-window.test.ts
+          node --import tsx --test tests/admin-record-values.test.ts tests/admin-privileged-window.test.ts tests/admin-catalog-revision.test.ts
       - name: PostgreSQL correction, lifecycle, concurrency, reconciliation and rollback
         if: matrix.target == 'postgresql'
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-records-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 49' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 49' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 51' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 51' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/postgresql.tap"
       - name: Prepare isolated browser accounts
@@ -97,7 +97,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_RECORD_EVIDENCE/playwright.json" npx playwright test --config tests/admin-records/playwright.config.ts --reporter=line,json
-          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==15 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==17 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Preserve exact source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$ADMIN_RECORD_EVIDENCE/source.txt"

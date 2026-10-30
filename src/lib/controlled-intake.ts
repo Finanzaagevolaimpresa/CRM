@@ -13,8 +13,7 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { loadSelectiveProjectScope } from './selective-project-scope';
 import { engagementFeatureEnabled } from './internal-engagement-mode';
 import { hasPermission } from './permission-evaluator';
-import { FAI_SERVICE_CATALOG_V2 } from './service-catalog-v2';
-import { assertSyntheticCatalogDatabase, catalogRevisionIsSelectable } from './service-catalog-v2-persistence';
+import { assertSyntheticCatalogDatabase, selectableStoredCatalogRevision } from './service-catalog-v2-persistence';
 
 export const CONTROLLED_INTAKE_VERSION = 'controlled-intake-v1' as const;
 export const controlledIntakeChannels = ['WPFORMS_1265', 'WPFORMS_1098', 'WPFORMS_1485', 'EMAIL'] as const;
@@ -81,17 +80,17 @@ async function selectableRevision(tx: Prisma.TransactionClient, serviceCode: str
     if (digitalProjectType) throw new ControlledIntakeError('CATALOG_INVALID');
     return null;
   }
-  const definition = FAI_SERVICE_CATALOG_V2.find(({ code }) => code === serviceCode);
-  if (!definition) throw new ControlledIntakeError('CATALOG_INVALID');
   const revision = await tx.serviceCatalogRevision.findFirst({
-    where: { serviceCatalog: { code: definition.code } },
+    where: { serviceCatalog: { code: serviceCode } },
     include: { serviceCatalog: { select: { active: true, code: true } } },
     orderBy: { version: 'desc' },
   });
+  const definition = revision ? selectableStoredCatalogRevision(revision, now) : null;
+  if (!definition) throw new ControlledIntakeError('CATALOG_INVALID');
   const validDigitalType = definition.code === 'progetti_digitali'
     ? definition.detail.digitalProjectTypes?.some(({ code }) => code === digitalProjectType)
     : !digitalProjectType;
-  if (!revision || !catalogRevisionIsSelectable(definition, revision, now) || !validDigitalType) {
+  if (!revision || !validDigitalType) {
     throw new ControlledIntakeError('CATALOG_INVALID');
   }
   return revision;

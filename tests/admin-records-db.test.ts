@@ -18,6 +18,12 @@ import { adminDossierFixture } from './admin-records/dossier-fixture';
 import { adminContextFixture, adminContextSnapshot } from './admin-records/context-fixture';
 import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
+import { adminCatalogVersion } from '../src/lib/admin-catalog-revision';
+import { catalogV2Storage } from '../src/lib/service-catalog-v2';
+import { selectableStoredCatalogRevision } from '../src/lib/service-catalog-v2-persistence';
+import { createControlledIntake } from '../src/lib/controlled-intake';
+import { proposePracticeOfferRevision } from '../src/lib/practice-readiness';
+import { prepareAdminCatalogPublication } from '../src/lib/admin-records';
 import { canReviewAiOutput, canApproveAiOutput } from '../src/lib/access-control';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences,
   type AdminRecordCommand } from '../src/lib/admin-records';
@@ -45,6 +51,56 @@ async function command(model: string, id: string, patch: Record<string, string> 
 }
 const save = (input: AdminRecordCommand, actor = admin, secondsAgo = 0) => saveAdminRecord(db, actor.session, input, proof(actor, secondsAgo));
 
+test('Admin catalogue revisions are selected by intake and offers, preserve old purchases and require a bound replacement decision', options, async () => {
+  const code = 'synthetic_admin_' + randomUUID().replaceAll('-', ''), id = randomUUID(), sourceMode = process.env.CONTROLLED_INTAKE_MODE;
+  const master = await db.serviceCatalog.create({ data: { code, name: 'Servizio sintetico', category: 'sintetico' } });
+  const detail = { inclusions: ['Attività sintetica'], exclusions: ['Invii reali'], phaseDocuments: ['Documento sintetico'],
+    timing: 'Da concordare', deliverables: ['Rapporto sintetico'], subsequentEngagements: ['Nuovo incarico separato'] };
+  const storage = catalogV2Storage({ sourceCatalogVersion: adminCatalogVersion, detail } as never);
+  const values = { serviceCatalogId: master.id, publicName: 'Revisione sintetica', shortDescription: 'Contenuti sintetici verificati',
+    priceMode: 'FIXED', netPrice: '125.50', termsVersion: 'SYNTHETIC-v1', validUntil: '',
+    operationalConditions: JSON.stringify(storage.operationalConditions), checklist: JSON.stringify(storage.checklist), status: 'PUBLISHED' };
+  const input: AdminRecordCommand = await command('ServiceCatalogRevision', id, values, 'CREATE');
+  await assert.rejects(save(input), /STALE/);
+  const binding = await prepareAdminCatalogPublication(db, admin.session, master.id);
+  input.catalogPublication = { expectedCurrentHash: binding.hash, confirmed: true };
+  await save(input); assert.equal((await save(input)).replayed, true);
+  const first = await db.serviceCatalogRevision.findUniqueOrThrow({ where: { id }, include: { serviceCatalog: true } });
+  assert.equal(first.version, 1); assert.equal(selectableStoredCatalogRevision(first, new Date())?.netPriceCents, 12550);
+  assert.equal(first.checkoutEnabled || first.autoClientDeliveryAllowed || first.autoExternalActionAllowed, false);
+  assert.equal(selectableStoredCatalogRevision({ ...first, contentHash: 'f'.repeat(64) }, new Date()), null);
+  assert.equal(selectableStoredCatalogRevision({ ...first, validUntil: new Date(0) }, new Date()), null);
+  await assert.rejects(save(await command('ServiceCatalogRevision', id, { netPrice: '1' })), /HISTORY/);
+  await assert.rejects(save(await command('ServiceCatalog', master.id, { code: 'changed_synthetic' })), /HISTORY/);
+  process.env.CONTROLLED_INTAKE_MODE = 'synthetic';
+  try {
+    const intake = await createControlledIntake(db, admin.session, { channel: 'EMAIL', sourceId: randomUUID(), sourceOccurredAt: new Date().toISOString(),
+      subjectType: 'IMPRESA', firstName: 'Solo', lastName: 'Sintetico', email: randomUUID() + '@synthetic.invalid',
+      serviceCode: code, effectiveCategory: 'sintetico', need: 'Prova isolata senza invii', indicativeBudget: null });
+    assert.equal((await db.controlledIntake.findUniqueOrThrow({ where: { id: intake.id } })).serviceRevisionId, id);
+    const client = await db.client.create({ data: { displayName: 'Cliente catalogo sintetico', type: 'societa' } });
+    await db.lead.update({ where: { id: intake.leadId }, data: { clientId: client.id } });
+    const offer = await db.commercialOffer.create({ data: { leadId: intake.leadId, clientId: client.id, title: 'Offerta sintetica',
+      taxableAmount: '125.50', vatAmount: '27.61', totalAmount: '153.11', validUntil: new Date(Date.now()+86_400_000) } });
+    const offerRevision = await proposePracticeOfferRevision(db, admin.session, { controlledIntakeId: intake.id, commercialOfferId: offer.id,
+      serviceRevisionId: id, clientId: client.id, scope: 'Solo prova', startupConditions: 'Nessun avvio',
+      requiredInitialAmount: '0', expectedOfferUpdatedAt: offer.updatedAt });
+    assert.equal(offerRevision.serviceRevisionId, id);
+    const next: AdminRecordCommand = await command('ServiceCatalogRevision', randomUUID(), { ...values, netPrice: '199.90' }, 'CREATE');
+    next.catalogPublication = { expectedCurrentHash: binding.hash, confirmed: true };
+    await assert.rejects(save(next), /STALE/);
+    next.catalogPublication.expectedCurrentHash = (await prepareAdminCatalogPublication(db, admin.session, master.id)).hash;
+    await save(next);
+    const previous = await db.serviceCatalogRevision.findUniqueOrThrow({ where: { id } });
+    assert.equal(previous.status, 'RETIRED'); assert.equal(previous.contentHash, first.contentHash);
+    assert.equal((await db.practiceOfferRevision.findUniqueOrThrow({ where: { id: offerRevision.id } })).serviceRevisionId, id);
+    assert.equal(selectableStoredCatalogRevision({ ...previous, serviceCatalog: master }, new Date()), null);
+    await save(await command('ServiceCatalogRevision', next.id, { status: 'RETIRED' }));
+    await assert.rejects(save(await command('ServiceCatalogRevision', next.id, { status: 'PUBLISHED' })), /HISTORY/);
+    assert((await listAdminRecords(db, admin.session, 'ServiceCatalogRevision', 'Revisione sintetica')).rows.some(row => row.id === id));
+  } finally { if (sourceMode === undefined) delete process.env.CONTROLLED_INTAKE_MODE; else process.env.CONTROLLED_INTAKE_MODE = sourceMode; }
+});
+
 test('privacy notice drafts and rectifications preserve immutable identity and never activate a notice', options, async () => {
   const id = randomUUID(), noticeCode = 'SYNTHETIC-' + randomUUID().replaceAll('-', '').toUpperCase();
   const values = { noticeCode, noticeVersion: 'v1', purposeCode: 'SYNTHETIC_TEST', legalBasisCode: 'SYNTHETIC_TEST',
@@ -62,6 +118,32 @@ test('privacy notice drafts and rectifications preserve immutable identity and n
   const reopened = await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', id);
   assert(reopened.fields.every(field => field.readOnly)); assert.equal(reopened.history[0].action, 'RECTIFY');
   assert.equal((await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id: secondId } })).status, 'DRAFT');
+});
+
+test('Admin notice activation and retirement are exact, replayable and monotonic without changing historical text', options, async () => {
+  const id = randomUUID(), second = randomUUID(), noticeCode = 'SYNTHETIC_' + randomUUID().replaceAll('-', '').toUpperCase();
+  const values = { noticeCode, noticeVersion: 'v1', purposeCode: 'SYNTHETIC_TEST', legalBasisCode: 'SYNTHETIC_TEST',
+    evidenceKind: 'NOTICE_ACKNOWLEDGEMENT', contentHash: 'c'.repeat(64) };
+  await save(await command('PrivacyNoticeVersion', id, values, 'CREATE'));
+  await save(await command('PrivacyNoticeVersion', second, { ...values, noticeVersion: 'v2' }, 'CREATE'));
+  const activation: AdminRecordCommand = { ...await command('PrivacyNoticeVersion', id),
+    noticeLifecycle: { action: 'ACTIVATE', contentHash: values.contentHash, reviewed: true } };
+  await assert.rejects(save({ ...activation, noticeLifecycle: { ...activation.noticeLifecycle!, contentHash: 'd'.repeat(64) } }), /HISTORY/);
+  await save(activation); assert.equal((await save(activation)).replayed, true);
+  const active = await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id } });
+  assert.equal(active.status, 'ACTIVE'); assert(active.effectiveFrom); assert.equal(active.retiredAt, null);
+  const secondActivation: AdminRecordCommand = { ...await command('PrivacyNoticeVersion', second),
+    noticeLifecycle: { action: 'ACTIVATE', contentHash: values.contentHash, reviewed: true } };
+  await assert.rejects(save(secondActivation), /ACTIVE_NOTICE/);
+  await save({ ...await command('PrivacyNoticeVersion', id), noticeLifecycle: { action: 'RETIRE', contentHash: values.contentHash, reviewed: true } });
+  const retired = await db.privacyNoticeVersion.findUniqueOrThrow({ where: { id } });
+  assert.equal(retired.status, 'RETIRED'); assert.deepEqual(retired.effectiveFrom, active.effectiveFrom);
+  assert(retired.retiredAt! >= retired.effectiveFrom!); assert.equal(retired.contentHash, values.contentHash);
+  await assert.rejects(save({ ...activation, ...await command('PrivacyNoticeVersion', id) }), /HISTORY/);
+  await save(secondActivation);
+  assert.equal((await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', id)).noticeLifecycle?.action, null);
+  assert.equal((await loadAdminRecord(db, admin.session, 'PrivacyNoticeVersion', second)).noticeLifecycle?.action, 'RETIRE');
+  assert.equal(await db.privacyEvidenceReceipt.count({ where: { noticeVersionId: { in: [id, second] } } }), 0);
 });
 
 test('single delivery revocation is durable and receipt corrections never rewrite delivery evidence', options, async () => {

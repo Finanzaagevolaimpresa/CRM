@@ -16,7 +16,7 @@ const item = (model: string, label: string, group: string, permission: Permissio
 export const adminRecordCatalogue = [
   item('PrivacyNoticeVersion', 'Informative · nuove versioni e rettifiche', 'Impostazioni operative', 'settings.manage',
     'noticeCode noticeVersion purposeCode legalBasisCode evidenceKind contentHash',
-    { create: true, href: '/legal-compliance/privacy', guidance: 'Registra una nuova versione in bozza con l’hash SHA256 del testo verificato. Identità, finalità, base giuridica e hash restano immutabili anche in bozza: per correggerli crea una nuova versione e annota la rettifica sulla precedente. Questa funzione non valida il testo, non attiva canali e non modifica le ricevute di consenso. Attivazione e ritiro mantengono il processo di validazione dedicato.' }),
+    { create: true, href: '/legal-compliance/privacy', guidance: 'Registra una nuova versione in bozza con l’hash SHA256 del testo verificato. Puoi attivarla dopo aver verificato la versione esatta o ritirare una versione attiva. Le date sono registrate al momento dell’operazione. Identità e testo restano immutabili; una versione ritirata si sostituisce con una nuova bozza. Questa funzione non valida il testo, non attiva canali e non modifica le ricevute di consenso.' }),
   item('AiAgent', 'Agenti CRM · metadati operativi', 'Impostazioni operative', 'ai_agents.write',
     'name description operationalScope requiredDataChecklist expectedOutput toneStyle',
     { href: '/settings/ai-agents', guidance: 'Ogni correzione crea una versione completa dei metadati, conservando quelle precedenti. Identità, prompt, provider, modello, attivazione e schemi restano invariati. Nessuna esecuzione viene avviata.' }),
@@ -89,6 +89,9 @@ export const adminRecordCatalogue = [
     { trash: 'soft', guidance: 'Acquisto, pagamento, avvio, chiusura e assegnazione restano nelle procedure collegate, con i rispettivi gate e prove.' }),
   item('ServiceCatalog', 'Catalogo servizi', 'Servizi e amministrazione', 'settings.manage',
     'code name description category basePrice active displayOrder', { create: true, href: '/service-catalog' }),
+  item('ServiceCatalogRevision', 'Catalogo servizi · revisioni operative', 'Servizi e amministrazione', 'settings.manage',
+    'serviceCatalogId publicName shortDescription priceMode netPrice termsVersion validUntil operationalConditions checklist status',
+    { create: true, href: '/service-catalog', guidance: 'Una nuova revisione interna entra in vigore al salvataggio e ritira le precedenti revisioni pubblicate dello stesso servizio. Le offerte e gli incarichi già registrati conservano la loro versione. Puoi ritirare una revisione; per correggerla o ripristinarla crea una nuova versione. Nessuna pubblicazione esterna firmata, checkout, consegna o operazione automatica viene attivata.' }),
   item('PracticeCommunication', 'Comunicazioni di pratica · bozze', 'Comunicazioni', 'practice_communications.write',
     'technicalPracticeId title content internalNote type channel', { trash: 'soft', guidance: 'Le note interne in bozza si correggono e ricollegano alla pratica scelta. Le comunicazioni già usate o approvate conservano contenuto e prove: registra una rettifica, oppure spostale nel cestino e ripristinale. Nessuna operazione invia messaggi o registra nuovi invii.' }),
   item('CommercialLeadSlaPolicyVersion', 'Tempi di risposta ai lead · versioni', 'Impostazioni operative', 'settings.manage',
@@ -107,6 +110,8 @@ export const adminFieldLabels: Record<string, string> = {
   leadId: 'Lead', services: 'Servizi proposti', includedActivities: 'Attività incluse', operationalConditions: 'Condizioni operative',
   sentAt: 'Data dichiarata di invio manuale', followUpAt: 'Prossimo seguito commerciale', followUpNote: 'Nota sul seguito', outcomeNote: 'Nota sull’esito',
   responseTargetSeconds: 'Tempo di risposta in secondi',
+  publicName: 'Nome del servizio nella revisione', shortDescription: 'Descrizione del servizio nella revisione',
+  priceMode: 'Modalità del prezzo', netPrice: 'Prezzo imponibile (EUR)', termsVersion: 'Versione delle condizioni',
   clientId: 'Cliente', companyId: 'Azienda', projectId: 'Progetto', clientServiceId: 'Servizio acquistato',
   promoterClientId: 'Cliente promotore', personId: 'Persona', incorporationSubjectId: 'Soggetto da costituire',
   technicalPracticeId: 'Pratica tecnica', contractId: 'Contratto', paymentId: 'Pagamento', documentId: 'Documento',
@@ -163,4 +168,5 @@ export type AdminRecordForm = { model: string; id: string; version: string; labe
   relationships: { label: string; href: string }[]; restoringRevision: string | null;
   paymentCorrection?: boolean;
   revokeDelivery?: boolean;
+  noticeLifecycle?: { status: string; action: 'ACTIVATE' | 'RETIRE' | null; contentHash: string; effectiveFrom: string | null; retiredAt: string | null };
   history: { id: string; action: string; at: string; reason: string; actor: string; canRestore: boolean }[] };

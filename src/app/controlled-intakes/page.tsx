@@ -8,8 +8,8 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { controlledIntakeChannels, controlledSubjectTypes } from '@/lib/controlled-intake';
 import { classifyAuthenticated1265, decideControlledDuplicate, recordControlledIntake } from '@/lib/controlled-intake-actions';
 import { prisma } from '@/lib/prisma';
-import { DIGITAL_PROJECT_TYPES, FAI_SERVICE_CATALOG_V2 } from '@/lib/service-catalog-v2';
-import { catalogRevisionIsSelectable } from '@/lib/service-catalog-v2-persistence';
+import { DIGITAL_PROJECT_TYPES } from '@/lib/service-catalog-v2';
+import { availableStoredCatalogDefinitions } from '@/lib/service-catalog-v2-persistence';
 import { engagementFeatureEnabled } from '@/lib/internal-engagement-mode';
 const labels: Record<string, string> = { WPFORMS_1265: 'WPForms 1265 — continuità manuale', WPFORMS_1098: 'WPForms 1098 — brief digitale', WPFORMS_1485: 'WPForms 1485 — richiesta amministrativa', EMAIL: 'Email — registrazione manuale', PERSONA: 'Persona', IMPRESA: 'Impresa', PROFESSIONISTA: 'Professionista', SOGGETTO_DA_COSTITUIRE: 'Soggetto da costituire', ASSOCIAZIONE: 'Associazione', COOPERATIVA: 'Cooperativa', ENTE: 'Ente' };
 const field = 'mt-1 w-full rounded-xl border p-3';
@@ -18,7 +18,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
   const [records, revisions, automatic1265] = await Promise.all([prisma.controlledIntake.findMany({ where: { id: { notIn: [...(session.selectiveLeadIntakeIds ?? [])] } }, include: { duplicateCandidates: true, duplicateDecision: true }, orderBy: { createdAt: 'desc' }, take: 100 }), prisma.serviceCatalogRevision.findMany({ where: { status: 'PUBLISHED' }, include: { serviceCatalog: true } }), prisma.commercialLeadInboxItem.findMany({ where: { originKind: 'BUSINESS_PROJECTION_N13', formCode: '1265', projectionLedgerId: { not: null }, lead: { deletedAt: null, AND: [leadVisibilityWhere(session)] } }, include: { lead: true }, orderBy: { createdAt: 'desc' }, take: 50 })]);
   const leads = await prisma.lead.findMany({ where: { id: { in: [...new Set(records.flatMap((record) => [record.leadId, ...record.duplicateCandidates.map((candidate) => candidate.leadId)]))] }, deletedAt: null, AND: [leadVisibilityWhere(session)] } });
   const leadById = new Map(leads.map((lead) => [lead.id, lead])); const linkedProjectionIds = new Set(records.map(({ sourceProjectionLedgerId }) => sourceProjectionLedgerId).filter(Boolean)); const automaticAvailable = automatic1265.filter((item) => item.projectionLedgerId && !linkedProjectionIds.has(item.projectionLedgerId) && canEditLead(session, item.lead)); const visible = records.filter((record) => { const lead = leadById.get(record.leadId); return lead && canViewLead(session, lead); });
-  const enabled = engagementFeatureEnabled(process.env.CONTROLLED_INTAKE_MODE); const now = new Date(); const services = FAI_SERVICE_CATALOG_V2.filter((definition) => revisions.some((revision) => revision.serviceCatalog.code === definition.code && catalogRevisionIsSelectable(definition, revision, now)));
+  const enabled = engagementFeatureEnabled(process.env.CONTROLLED_INTAKE_MODE); const now = new Date(); const services = availableStoredCatalogDefinitions(revisions, now);
   return <div className="crm-space-y-6"><PageHeader title="Acquisizioni controllate" description="Registrazione manuale: pagamenti, firma, invii e avvio richiedono operazioni separate." />
     {params.queued === '1' ? <p role="status" className="rounded-xl bg-green-50 p-3 font-semibold text-green-800">Richiesta registrata nella coda dell’amministratore. Attendi l’assegnazione per lavorarla.</p> : null}
     {params.created && visible.some(({ id }) => id === params.created) ? <p role="status" className="rounded-xl bg-green-50 p-3 font-semibold text-green-800">Richiesta registrata. L’assegnazione è visibile nella scheda.</p> : null}

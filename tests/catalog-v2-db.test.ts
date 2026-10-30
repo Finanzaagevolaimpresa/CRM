@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { catalogRevisionIsSelectable, prepareServiceCatalogV2, CatalogV2PreparationError, storedRevisionMatches } from '../src/lib/service-catalog-v2-persistence';
 import { FAI_SERVICE_CATALOG, serviceCatalogRevisionHash } from '../src/lib/service-catalog';
-import { FAI_SERVICE_CATALOG_V2, catalogV2RevisionHash } from '../src/lib/service-catalog-v2';
+import { FAI_SERVICE_CATALOG_V2, catalogV2RevisionHash, catalogV2Storage } from '../src/lib/service-catalog-v2';
+import { adminCatalogVersion } from '../src/lib/admin-catalog-revision';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from './db/ai-orchestrator-db-test-guard';
 
 const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1', destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL, sentinel: process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL, appEnvironment: process.env.APP_ENV, nodeEnvironment: process.env.NODE_ENV });
@@ -63,4 +64,24 @@ test('PostgreSQL prepares v2 atomically and idempotently without changing v1 or 
   assert.equal((await db.serviceCatalogRevision.findUniqueOrThrow({ where: { id: future.id } })).status, 'RETIRED');
   assert.equal(await db.auditLog.count({ where: { event: 'service_catalog_v2_prepare' } }), auditCount);
   await db.serviceCatalogRevision.delete({ where: { id: future.id } });
+  const administrative = { ...currentDefinition, revisionVersion: 3, sourceCatalogVersion: adminCatalogVersion,
+    validFrom: new Date().toISOString(), termsVersion: 'SYNTHETIC-ADMIN-v3', priceMode: 'FIXED' as const, netPriceCents: 29 };
+  const contents = catalogV2Storage(administrative);
+  await db.serviceCatalogRevision.update({ where: { id: currentOptimization.id }, data: { status: 'RETIRED', retiredAt: new Date() } });
+  const newer = await db.serviceCatalogRevision.create({ data: { serviceCatalogId: optimization.id, version: 3,
+    publicName: administrative.name, shortDescription: administrative.description, priceMode: 'FIXED', netPrice: new Prisma.Decimal('0.29'),
+    currency: 'EUR', vatRateBps: 2200, validFrom: new Date(administrative.validFrom), termsVersion: administrative.termsVersion,
+    operationalConditions: contents.operationalConditions, checklist: contents.checklist, status: 'PUBLISHED',
+    contentHash: catalogV2RevisionHash(administrative), publishedAt: new Date() } });
+  try {
+    const retained = await db.serviceCatalogRevision.findMany({ where: { serviceCatalogId: optimization.id }, orderBy: { version: 'asc' } });
+    assert.deepEqual(await prepareServiceCatalogV2(db), { created: 0, currentServices: 13 });
+    assert.deepEqual(await db.serviceCatalogRevision.findMany({ where: { serviceCatalogId: optimization.id }, orderBy: { version: 'asc' } }), retained);
+    assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: engagement.id } })).contractId, contract.id);
+  } finally {
+    // Restore only this isolated fixture for the native catalogue browser suite.
+    await db.serviceCatalogRevision.update({ where: { id: newer.id }, data: { status: 'RETIRED', retiredAt: new Date() } });
+    await db.serviceCatalogRevision.delete({ where: { id: newer.id } });
+    await db.serviceCatalogRevision.update({ where: { id: currentOptimization.id }, data: { status: 'PUBLISHED', retiredAt: null } });
+  }
 });

@@ -1,7 +1,14 @@
 'use server';
 import { cookies, headers } from 'next/headers';
+import { prepareAdminCatalogPublication } from './admin-records';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
+export async function prepareAdminCatalogPublicationAction(id: string) {
+  const session = await getSession();
+  if (!session) return { ok: false as const };
+  try { return { ok: true as const, value: await prepareAdminCatalogPublication(prisma, session, id) }; }
+  catch { return { ok: false as const }; }
+}
 import { getSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
@@ -47,6 +54,7 @@ export async function saveAdminRecordAction(raw: unknown): Promise<AdminSaveResu
       DEPENDENCIES: 'Il cambio del collegamento sposterebbe una scheda con dipendenze. Occorre riallineare esplicitamente i record collegati: nessun dato è stato spostato.',
       CONTEXT: 'I collegamenti selezionati non appartengono allo stesso contesto oppure un record collegato non è operativo.',
       CLOSED: 'Questo tentativo è stato chiuso senza modifiche. Riapri la scheda per preparare una nuova operazione.',
+      ACTIVE_NOTICE: 'Esiste già una versione attiva dello stesso codice e finalità. Ritirala dall’elenco delle informative, poi attiva questa versione verificata.',
     }[error.code] };
     if (error instanceof RecordUpdateError) return { ok: false, stepUp: true, message: 'Conferma o autorizzazione scaduta durante il salvataggio. Nessuna correzione è stata applicata; la bozza è conservata.' };
     if (error instanceof SerializableConflictError) return { ok: false, message: 'Un’altra operazione ha modificato lo stesso contesto. La correzione è stata annullata; confronta la scheda aggiornata con la bozza.' };

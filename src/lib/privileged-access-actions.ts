@@ -36,7 +36,7 @@ export async function establishPrivilegedStepUpInline(_previous: { ok: boolean; 
     const readiness = await privilegedAccessReadiness(session);
     if (!readiness.active || !readiness.expiresAt) return { ok: false, message: 'Conferma non verificata. Nessuna operazione avviata.' };
     return { ok: true, expiresAt: readiness.expiresAt,
-      message: 'Identità confermata. Le scelte sono conservate; scegli personalmente quando proseguire.' };
+      message: `Identità confermata. La conferma dura ${session.role === 'admin' ? '30' : '5'} minuti. Le scelte sono conservate; scegli personalmente quando proseguire.` };
   } catch { return { ok: false, message: 'Conferma non verificata. Le scelte restano disponibili; nessuna operazione avviata.' }; }
 }
 
