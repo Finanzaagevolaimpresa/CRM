@@ -3,10 +3,10 @@ import type { Permission } from './permissions';
 export type AdminRecordPolicy = {
   model: string; label: string; group: string; permission: Permission; fields: string[];
   create: boolean; trash: 'soft' | 'leaf' | null; href: string;
-  guidance?: string;
+  guidance?: string; historyOnly?: boolean;
 };
 const item = (model: string, label: string, group: string, permission: Permission, fields: string,
-  options: Partial<Pick<AdminRecordPolicy, 'create' | 'trash' | 'href' | 'guidance'>> = {}): AdminRecordPolicy => ({
+  options: Partial<Pick<AdminRecordPolicy, 'create' | 'trash' | 'href' | 'guidance' | 'historyOnly'>> = {}): AdminRecordPolicy => ({
   model, label, group, permission, fields: fields.split(/\s+/).filter(Boolean), create: false, trash: null, href: '', ...options,
 });
 
@@ -14,6 +14,12 @@ const item = (model: string, label: string, group: string, permission: Permissio
  * Provenance, signatures, receipts, transport and security controls are absent
  * from every editable allowlist. Creation is enabled only for ordinary records. */
 export const adminRecordCatalogue = [
+  item('PrivacyEvidenceReceipt', 'Ricevute privacy · rettifiche delle prove', 'Impostazioni operative', 'settings.manage',
+    'purposeCode legalBasisCode evidenceKind decision catalogVersion sourceSystem formCode formVersion sourceSubmittedAt sourceEvidenceDigest evidenceHash createdAt',
+    { historyOnly: true, href: '/legal-compliance/privacy', guidance: 'Consulta la ricevuta originale e registra una rettifica motivata collegata alla sua identità. La rettifica resta visibile nello storico; non riscrive la decisione, non crea un consenso e non modifica le autorizzazioni di contatto.' }),
+  item('ControlledIntake', 'Acquisizioni · fonte e rettifiche', 'Clienti e anagrafiche', 'lead.write',
+    'leadId channel sourceId sourceOccurredAt acquisitionMode mappingVersion payloadHash subjectType subjectName firstName lastName email phone classificationState effectiveCategory serviceRevisionId digitalProjectType need objective functions indicativeBudget timing declaredMaterials declaredEngagementReference administrativeState administrativeRequest status',
+    { historyOnly: true, href: '/controlled-intakes#intake-{id}', guidance: 'La fonte acquisita resta conservata. Annota qui una correzione della fonte; usa il lead collegato per correggere i dati correnti, assegnare, bloccare o archiviare il lavoro. Una rettifica non attesta pagamenti, completezza dei materiali, firma o avvio.' }),
   item('PrivacyNoticeVersion', 'Informative · nuove versioni e rettifiche', 'Impostazioni operative', 'settings.manage',
     'noticeCode noticeVersion purposeCode legalBasisCode evidenceKind contentHash',
     { create: true, href: '/legal-compliance/privacy', guidance: 'Registra una nuova versione in bozza con l’hash SHA256 del testo verificato. Puoi attivarla dopo aver verificato la versione esatta o ritirare una versione attiva. Le date sono registrate al momento dell’operazione. Identità e testo restano immutabili; una versione ritirata si sostituisce con una nuova bozza. Questa funzione non valida il testo, non attiva canali e non modifica le ricevute di consenso.' }),
@@ -85,8 +91,8 @@ export const adminRecordCatalogue = [
     'contractId clientId taxableAmount vatAmount totalAmount method dueDate status notes',
     { create: true, href: '/payments/{id}/collection', guidance: 'Importi e collegamenti si correggono prima dell’incasso. Storni, rimborsi e ripristini richiedono una prova documentale, una data e una dichiarazione amministrativa: conservano l’incasso originario e aggiornano lo stato dei servizi collegati. Nessuna operazione muove denaro. Per un incasso parziale del contratto registra una rata dell’importo effettivo e usa Conferma incasso; non alterare una rata già incassata.' }),
   item('ClientService', 'Servizi acquistati', 'Servizi e amministrazione', 'service.write',
-    'clientId companyId projectId practiceType requestedAmount plannedInvestment operationalNotes dueDate internalNotes',
-    { trash: 'soft', guidance: 'Acquisto, pagamento, avvio, chiusura e assegnazione restano nelle procedure collegate, con i rispettivi gate e prove.' }),
+    'clientId companyId projectId practiceType requestedAmount plannedInvestment openedAt purchasedAt operationalNotes dueDate internalNotes',
+    { trash: 'soft', guidance: 'Puoi correggere le date amministrative di apertura e acquisto conservando i valori precedenti. Questa correzione non attesta una firma, un pagamento o un avvio; i rispettivi eventi e collegamenti restano nelle procedure dedicate.' }),
   item('ServiceCatalog', 'Catalogo servizi', 'Servizi e amministrazione', 'settings.manage',
     'code name description category basePrice active displayOrder', { create: true, href: '/service-catalog' }),
   item('ServiceCatalogRevision', 'Catalogo servizi · revisioni operative', 'Servizi e amministrazione', 'settings.manage',
@@ -130,6 +136,9 @@ export const adminFieldLabels: Record<string, string> = {
   legalForm: 'Forma giuridica', atecoCode: 'Codice ATECO', atecoDescription: 'Descrizione ATECO',
   incorporationDate: 'Data costituzione', activityStartDate: 'Inizio attività', activityStatus: 'Stato attività',
   employees: 'Dipendenti', annualRevenue: 'Fatturato annuo', durcStatus: 'Stato DURC', taxRegime: 'Regime fiscale',
+  openedAt: 'Data amministrativa di apertura', purchasedAt: 'Data amministrativa di acquisto',
+  sourceSubmittedAt: 'Data dichiarata dalla fonte', sourceEvidenceDigest: 'Hash della prova fonte', evidenceHash: 'Hash della ricevuta',
+  decision: 'Decisione originale', createdAt: 'Registrata il', sourceSystem: 'Sistema fonte', formCode: 'Modulo fonte', formVersion: 'Versione del modulo',
   source: 'Fonte', leadSource: 'Canale di origine', interest: 'Interesse', commercialStatus: 'Stato commerciale',
   commercialProposal: 'Proposta commerciale', practiceType: 'Tipo pratica', targetEntity: 'Ente destinatario',
   targetPortal: 'Portale destinatario', submittedAt: 'Presentazione dichiarata', protocolNumber: 'Protocollo',

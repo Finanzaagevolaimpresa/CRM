@@ -13,17 +13,19 @@ import { adminUserVersion } from '../src/lib/admin-user-command-contract';
 import { technicalFixture, technicalTarget } from './technical-assignments/fixtures';
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../src/lib/technical-private-item-service';
 import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-item-contract';
+import { adminHistoryFixture } from './admin-records/history-fixture';
 import { paymentCorrectionFixture } from './admin-records/payment-fixture';
 import { adminDossierFixture } from './admin-records/dossier-fixture';
-import { adminContextFixture, adminContextSnapshot } from './admin-records/context-fixture';
+import { adminContextFixture, adminContextSnapshot, adminGraphFixture } from './admin-records/context-fixture';
 import { getEngagementDossierReadAccess, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 import { aiOutputAdminAuthors } from '../src/lib/ai-output-admin-authors';
+import { withProjectResources } from '../src/lib/project-resource-guard';
 import { adminCatalogVersion } from '../src/lib/admin-catalog-revision';
 import { catalogV2Storage } from '../src/lib/service-catalog-v2';
 import { selectableStoredCatalogRevision } from '../src/lib/service-catalog-v2-persistence';
 import { createControlledIntake } from '../src/lib/controlled-intake';
 import { proposePracticeOfferRevision } from '../src/lib/practice-readiness';
-import { prepareAdminCatalogPublication } from '../src/lib/admin-records';
+import { prepareAdminContextMove, prepareAdminCatalogPublication } from '../src/lib/admin-records';
 import { canReviewAiOutput, canApproveAiOutput } from '../src/lib/access-control';
 import { loadAdminRecord, saveAdminRecord, listAdminRecords, readAdminRecordReceipt, closeAdminRecordAttempt, searchAdminRecordReferences,
   type AdminRecordCommand } from '../src/lib/admin-records';
@@ -44,7 +46,7 @@ async function fixture() {
   const project = await db.project.create({ data: { clientId: client.id, title: 'Progetto sintetico', priority: 'media' } });
   return { client, project };
 }
-async function command(model: string, id: string, patch: Record<string, string> = {}, operation: AdminRecordCommand['operation'] = 'UPDATE', actor = admin) {
+async function command(model: string, id: string, patch: Record<string, string> = {}, operation: AdminRecordCommand['operation'] = 'UPDATE', actor = admin): Promise<AdminRecordCommand> {
   const form = await loadAdminRecord(db, actor.session, model, id, operation === 'CREATE');
   return { commandId: randomUUID(), model, id, expectedVersion: form.version, operation, reason: 'Rettifica sintetica isolata',
     values: ['CREATE', 'UPDATE'].includes(operation) ? { ...form.values, ...patch } : {} } satisfies AdminRecordCommand;
@@ -888,4 +890,167 @@ test('document corrections and recoverable deletion preserve the exact original 
   const manual = await command('Client', randomUUID(), { displayName: 'Anagrafica manuale sintetica', type: 'societa', status: 'attivo' }, 'CREATE');
   await save(manual); const client = await db.client.findUniqueOrThrow({ where: { id: manual.id } });
   assert.equal(client.leadId, null); assert.equal(client.salesOwnerId, null); assert.equal(client.consultantId, null);
+});
+
+test('privacy receipt rectification preserves the original refusal, receipt binding and one durable audit', options, async () => {
+  const f = await adminHistoryFixture(db, admin.user.id);
+  const form = await loadAdminRecord(db, admin.session, 'PrivacyEvidenceReceipt', f.receipt.id);
+  assert(form.fields.every(field => field.readOnly)); assert.equal(form.values.decision, 'DENIED');
+  assert(form.relationships.some(link => link.href.endsWith(f.receipt.noticeVersionId)));
+  const input = await command('PrivacyEvidenceReceipt', f.receipt.id, {}, 'RECTIFY');
+  input.reason = 'Rettifica sintetica della fonte: il rifiuto originale resta conservato.';
+  await save(input); assert.equal((await save(input)).replayed, true);
+  assert.deepEqual(await db.privacyEvidenceReceipt.findUniqueOrThrow({ where: { id: f.receipt.id } }), f.receipt);
+  assert.equal(await db.privacyEvidenceReceipt.count({ where: { websiteLeadReceiptId: f.receipt.websiteLeadReceiptId } }), 2);
+  const reopened = await loadAdminRecord(db, admin.session, 'PrivacyEvidenceReceipt', f.receipt.id);
+  assert.equal(reopened.history[0].reason, input.reason); assert.equal(reopened.history[0].canRestore, false);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: input.commandId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { id: 'admin-record:' + input.commandId } }), 1);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), operation: 'UPDATE', values: { decision: 'GRANTED' } }), /HISTORY/);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), operation: 'TRASH' }), /HISTORY/);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), values: { decision: 'GRANTED' } }), /HISTORY/);
+  const limited = await syntheticPerson(db, 'Admin senza lettura privacy');
+  await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'privacy.evidence.read', allowed: false } });
+  await assert.rejects(loadAdminRecord(db, limited.session, 'PrivacyEvidenceReceipt', f.receipt.id), /DENIED/);
+  await assert.rejects(save({ ...input, commandId: randomUUID() }, limited), /DENIED/);
+});
+
+test('controlled source annotation is separate from current lead edits and respects the parent read perimeter', options, async () => {
+  const f = await adminHistoryFixture(db, admin.user.id);
+  const originalLead = await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } });
+  const form = await loadAdminRecord(db, admin.session, 'ControlledIntake', f.intake.id);
+  assert(form.fields.every(field => field.readOnly)); assert(form.relationships.some(link => link.href === '/leads/' + f.lead.id));
+  const input = await command('ControlledIntake', f.intake.id, {}, 'RECTIFY');
+  input.reason = 'Rettifica sintetica: bisogno chiarito, senza attestare pagamento o avvio.';
+  await save(input); assert.equal((await save(input)).replayed, true);
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: f.intake.id } }), f.intake);
+  assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } }), originalLead);
+  await save(await command('Lead', f.lead.id, { notes: 'Esigenza corrente corretta separatamente' }));
+  assert.equal((await db.controlledIntake.findUniqueOrThrow({ where: { id: f.intake.id } })).need, f.intake.need);
+  assert.equal((await loadAdminRecord(db, admin.session, 'ControlledIntake', f.intake.id)).history[0].reason, input.reason);
+  await assert.rejects(save({ ...input, commandId: randomUUID(), operation: 'UPDATE', values: { started: 'true' } }), /HISTORY/);
+  const limited = await syntheticPerson(db, 'Admin senza lettura lead');
+  await db.userPermissionOverride.create({ data: { userId: limited.user.id, permission: 'lead.read', allowed: false } });
+  await assert.rejects(loadAdminRecord(db, limited.session, 'ControlledIntake', f.intake.id), /DENIED/);
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_HISTORY_AUDIT'); } } } }) as unknown as PrismaClient;
+  const failed = { ...input, commandId: randomUUID() };
+  await assert.rejects(saveAdminRecord(failing, admin.session, failed, proof()), /SYNTHETIC_HISTORY_AUDIT/);
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: failed.commandId } }), 0);
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: f.intake.id } }), f.intake);
+});
+
+test('service administrative dates can be corrected and restored without changing contract or operational facts', options, async () => {
+  const f = await adminContextFixture(db);
+  const dates = { openedAt: new Date(Date.now() - 10 * 86_400_000).toISOString(), purchasedAt: new Date(Date.now() - 9 * 86_400_000).toISOString() };
+  const input = await command('ClientService', f.service.id, dates);
+  await save(input); assert.equal((await save(input)).replayed, true);
+  const current = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } });
+  assert.equal(current.openedAt.toISOString(), dates.openedAt); assert.equal(current.purchasedAt.toISOString(), dates.purchasedAt);
+  for (const key of ['contractId', 'serviceCatalogId', 'paymentId', 'paymentStatus', 'operationalStatus', 'status', 'completedAt', 'assignedToId'] as const)
+    assert.deepEqual(current[key], f.service[key]);
+  assert.deepEqual(await db.contract.findUniqueOrThrow({ where: { id: f.contract.id } }), f.contract);
+  await assert.rejects(save(await command('ClientService', f.service.id, { purchasedAt: new Date(Date.now()+86_400_000).toISOString() })), /INVALID/);
+  const restore = await loadAdminRecord(db, admin.session, 'ClientService', f.service.id, false, input.commandId);
+  await save({ ...await command('ClientService', f.service.id), values: restore.values });
+  const restored = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } });
+  assert.equal(restored.purchasedAt.toISOString(), f.service.purchasedAt.toISOString());
+  assert.equal(restored.openedAt.toISOString(), f.service.openedAt.toISOString());
+});
+
+test('an explicit company context summary moves the ordinary graph atomically and preserves identities, versions and receipts', options, async () => {
+  const f = await adminGraphFixture(db, admin.user.id);
+  const input: AdminRecordCommand = await command('Company', f.company.id, { clientId: f.clients[1].id });
+  const prepared = await prepareAdminContextMove(db, admin.session, inputForGraph(input));
+  assert.deepEqual(prepared.blocked, []); assert.equal(prepared.rows.length, 7);
+  assert(prepared.rows.some(row => row.id === f.version.id && row.changedFields.length === 0));
+  await assert.rejects(save(input), /DEPENDENCIES/);
+  input.contextMove = { expectedGraphHash: prepared.hash, confirmed: true };
+  await save(input); assert.equal((await save(input)).replayed, true);
+  for (const [model, id] of [['Company', f.company.id], ['Project', f.project.id], ['Task', f.task.id], ['Document', f.document.id]]) {
+    assert.equal((await loadAdminRecord(db, admin.session, model, id)).values.clientId, f.clients[1].id);
+    assert.equal(await db.adminRecordRevision.count({ where: { model, recordId: id, operation: 'UPDATE' } }), 1);
+  }
+  assert.deepEqual(await db.documentVersion.findUniqueOrThrow({ where: { id: f.version.id } }), f.version);
+  assert.deepEqual(await db.projectExpense.findUniqueOrThrow({ where: { id: f.expense.id } }), f.expense);
+  assert.deepEqual(await db.deadline.findUniqueOrThrow({ where: { id: f.deadline.id } }), f.deadline);
+  assert.equal((await readAdminRecordReceipt(db, admin.session, input.commandId))?.id, f.company.id);
+  const restore = await command('Company', f.company.id, { clientId: f.clients[0].id });
+  restore.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(restore))).hash, confirmed: true };
+  await save(restore);
+  assert.equal((await loadAdminRecord(db, admin.session, 'Task', f.task.id)).values.clientId, f.clients[0].id);
+  assert.equal(await db.adminRecordRevision.count({ where: { model: 'Task', recordId: f.task.id } }), 2);
+});
+const inputForGraph = (input: AdminRecordCommand) => ({ model: input.model, id: input.id, expectedVersion: input.expectedVersion, values: input.values });
+
+test('a new child after graph preview and an audit failure both preserve the entire original context', options, async () => {
+  const f = await adminGraphFixture(db, admin.user.id);
+  const input = await command('Company', f.company.id, { clientId: f.clients[1].id });
+  input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+  await db.task.create({ data: { clientId: f.clients[0].id, companyId: f.company.id, projectId: f.project.id, title: 'Nuovo figlio dopo anteprima', type: 'manuale' } });
+  await assert.rejects(save(input), /STALE/);
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: f.company.id } })).clientId, f.clients[0].id);
+  input.contextMove.expectedGraphHash = (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash;
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_GRAPH_AUDIT'); } } } }) as unknown as PrismaClient;
+  await assert.rejects(saveAdminRecord(failing, admin.session, input, proof()), /SYNTHETIC_GRAPH_AUDIT/);
+  for (const [model, id] of [['Company', f.company.id], ['Project', f.project.id], ['Task', f.task.id], ['Document', f.document.id]]) {
+    assert.equal((await loadAdminRecord(db, admin.session, model, id)).values.clientId, f.clients[0].id);
+    assert.equal(await db.adminRecordRevision.count({ where: { model, recordId: id } }), 0);
+  }
+  await assert.rejects(save(input, admin, 1801));
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: f.company.id } })).clientId, f.clients[0].id);
+});
+
+test('graph moves expose active selective grants as blockers and never transfer access or named assignments', options, async () => {
+  const f = await fixture(), reader = await syntheticPerson(db, 'Destinatario selettivo del grafo');
+  const destination = await db.client.create({ data: { displayName: 'Destinazione sintetica', type: 'societa' } });
+  const preview = await previewSelectiveAccess(db, admin.session, { projectId: f.project.id, recipientId: reader.user.id,
+    revision: 0, fields: ['title'], documents: [], expiresAt: null });
+  await confirmSelectiveAccess(db, admin.session, preview.token, true);
+  const grant = await db.selectiveProjectGrant.findFirstOrThrow({ where: { projectId: f.project.id } });
+  const input = await command('Project', f.project.id, { clientId: destination.id });
+  const plan = await prepareAdminContextMove(db, admin.session, inputForGraph(input));
+  assert(plan.blocked.some(message => /concessioni selettive del progetto/.test(message)));
+  input.contextMove = { expectedGraphHash: plan.hash, confirmed: true };
+  await assert.rejects(save(input), /DEPENDENCIES/);
+  assert.deepEqual(await db.selectiveProjectGrant.findUniqueOrThrow({ where: { id: grant.id } }), grant);
+  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).clientId, f.client.id);
+  const g = await adminGraphFixture(db, admin.user.id);
+  await db.task.update({ where: { id: g.task.id }, data: { assignedToId: reader.user.id } });
+  const assigned = await command('Company', g.company.id, { clientId: g.clients[1].id });
+  const named = await prepareAdminContextMove(db, admin.session, inputForGraph(assigned));
+  assert(named.blocked.some(message => /incarichi nominativi/.test(message)));
+});
+
+test('practice recontextualization updates an internal draft together and rejects incompatible parent destinations', options, async () => {
+  const a = await fixture(), b = await fixture();
+  const practice = await db.technicalPractice.create({ data: { clientId: a.client.id, projectId: a.project.id,
+    title: 'Pratica sintetica da ricollegare', practiceType: 'sintetica', targetEntity: 'nessuno', createdById: admin.user.id } });
+  const draft = await db.practiceCommunication.create({ data: { technicalPracticeId: practice.id, clientId: a.client.id, projectId: a.project.id,
+    title: 'Nota sintetica interna', content: 'Nessun invio', type: 'interna', channel: 'nota_interna', status: 'bozza', createdById: admin.user.id } });
+  const invalid = await command('TechnicalPractice', practice.id, { projectId: b.project.id });
+  await assert.rejects(prepareAdminContextMove(db, admin.session, inputForGraph(invalid)), /CONTEXT/);
+  const input = await command('TechnicalPractice', practice.id, { clientId: b.client.id, projectId: b.project.id });
+  const plan = await prepareAdminContextMove(db, admin.session, inputForGraph(input)); assert.deepEqual(plan.blocked, []);
+  input.contextMove = { expectedGraphHash: plan.hash, confirmed: true }; await save(input);
+  const moved = await db.practiceCommunication.findUniqueOrThrow({ where: { id: draft.id } });
+  assert.equal(moved.clientId, b.client.id); assert.equal(moved.projectId, b.project.id); assert.equal(moved.content, draft.content);
+  assert.equal(moved.createdById, draft.createdById); assert.equal(moved.usedAt, null); assert.equal(moved.reviewedById, null);
+});
+
+test('a concurrent ordinary writer cannot save a stale child context after an administrative graph move', options, async () => {
+  const f = await adminGraphFixture(db, admin.user.id), writer = await syntheticPerson(db, 'Scrittore concorrente sintetico');
+  const input = await command('Company', f.company.id, { clientId: f.clients[1].id });
+  input.contextMove = { expectedGraphHash: (await prepareAdminContextMove(db, admin.session, inputForGraph(input))).hash, confirmed: true };
+  let signal!: () => void, release!: () => void;
+  const reached = new Promise<void>(resolve => { signal = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const delayed = db.$extends({ query: { company: { async update({ args, query }) { signal(); await gate; return query(args); } } } }) as unknown as PrismaClient;
+  const saving = saveAdminRecord(delayed, admin.session, input, proof());
+  await reached;
+  const id = randomUUID(), writing = withProjectResources(db, writer.user.id, [{ clientId: f.clients[0].id, companyId: f.company.id, projectId: f.project.id }], tx =>
+    tx.task.create({ data: { id, clientId: f.clients[0].id, companyId: f.company.id, projectId: f.project.id, title: 'Scrittura obsoleta', type: 'manuale' } }));
+  const observed = Promise.allSettled([saving, writing]); release();
+  const results = await observed;
+  assert.equal(results[0].status, 'fulfilled'); assert.equal(results[1].status, 'rejected');
+  assert.equal(await db.task.findUnique({ where: { id } }), null);
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: f.company.id } })).clientId, f.clients[1].id);
 });

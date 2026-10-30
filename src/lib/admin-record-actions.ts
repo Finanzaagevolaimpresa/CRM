@@ -1,6 +1,6 @@
 'use server';
 import { cookies, headers } from 'next/headers';
-import { prepareAdminCatalogPublication } from './admin-records';
+import { prepareAdminContextMove, prepareAdminCatalogPublication } from './admin-records';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
 export async function prepareAdminCatalogPublicationAction(id: string) {
@@ -81,4 +81,13 @@ export async function closeAdminRecordAction(input: { commandId: string; model: 
     return { ok: !receipt.closed, closed: receipt.closed, receipt,
       message: receipt.closed ? 'Tentativo riconciliato e chiuso senza modifica operativa.' : 'Operazione già registrata. Nessun nuovo salvataggio eseguito.' };
   } catch { return { ok: false, uncertain: true, message: 'Riconciliazione non disponibile. Conserva il riferimento e riprova la verifica.' }; }
+}
+
+export async function prepareAdminContextMoveAction(raw: unknown) {
+  const session = await getSession();
+  if (!session || session.role !== 'admin') return { ok: false as const, message: 'Sessione Admin non disponibile.' };
+  try { return { ok: true as const, value: await prepareAdminContextMove(prisma, session, raw) }; }
+  catch (error) { return { ok: false as const, message: error instanceof AdminRecordError && error.code === 'HISTORY'
+    ? 'Una scheda collegata conserva prove storiche. Usa la sua rettifica amministrativa: il contesto non è stato spostato.'
+    : 'Preparazione non disponibile: controlla contesti, permessi e versione corrente. La bozza è conservata.' }; }
 }

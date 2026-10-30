@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import Link from 'next/link';
 import { Badge, Card, PageHeader, Table } from '@/components/ui';
 import { permissionCodes, requirePermission, rolePermissions } from '@/lib/auth';
 
@@ -29,7 +30,7 @@ export default async function Page() {
 
   const rows = Object.entries(rolePermissions).map(([role, perms]) => [
     <Badge key="role" tone={role === 'admin' ? 'green' : role === 'direzione' ? 'purple' : 'blue'}>{role}</Badge>,
-    roleDescriptions[role] ?? 'Ruolo interno configurato nel sistema.',
+    <span key="description">{roleDescriptions[role] ?? 'Ruolo interno configurato nel sistema.'}<br/><Link className="font-bold underline" href={`/settings/users?role=${encodeURIComponent(role)}`}>Scegli un account di questo ruolo e gestisci i permessi</Link></span>,
     <span key="dossier" className="block"><span className="font-semibold">Dossier:</span> lettura {hasDossierRead(perms) ? 'abilitata' : 'non abilitata'} · scrittura {hasDossierWrite(perms) ? 'abilitata' : 'non abilitata'}<br />{describePermissions(perms)}</span>,
   ]);
 
@@ -37,13 +38,14 @@ export default async function Page() {
     <div className="crm-space-y-6">
       <PageHeader
         title="Ruoli e permessi"
-        description="Matrice dei ruoli interni FAI e dei permessi effettivi applicati server-side. Questa sezione non crea area cliente pubblica e non abilita invii automatici."
+        description="Profili di base del CRM. Scegli un account per gestire ruolo, eccezioni e accesso; le concessioni su clienti, progetti e documenti si decidono nel loro contesto."
       />
       <Card title="Matrice operativa ruoli interni">
-        <Table headers={['Ruolo', 'Cosa può vedere/fare', 'Permessi effettivi']} rows={rows} />
+        <Table headers={['Ruolo', 'Profilo e gestione account', 'Permessi di base']} rows={rows} />
       </Card>
       <Card title="Regole di sicurezza applicate">
         <ul className="list-disc crm-space-y-2 pl-5 text-sm leading-6 text-fai-gray">
+          <li>La matrice descrive il profilo di base. Le eccezioni individuali, le assegnazioni e le concessioni possono limitarne l’accesso: consulta l’account identificato anche dall’email per vedere e cambiare le sue impostazioni.</li>
           <li>Le pagine settings e audit sono protette server-side con permessi dedicati.</li>
           <li>Admin e direzione possono consultare utenti, ruoli, audit log e gestire le bozze dossier/pre-analisi e la configurazione degli agenti AI interni.</li>
           <li>Ogni ruolo può soltanto richiedere l&apos;uso dell&apos;AI nel proprio perimetro; approvazione, rifiuto, revoca e audit completo sono riservati all&apos;Admin.</li>

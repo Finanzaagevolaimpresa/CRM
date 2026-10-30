@@ -3,7 +3,7 @@ import { useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import type { AdminRecordForm } from '@/lib/admin-record-catalogue';
 import type { AdminRecordCommand } from '@/lib/admin-records';
-import { saveAdminRecordAction, verifyAdminRecordAction, closeAdminRecordAction, prepareAdminCatalogPublicationAction, type AdminSaveResult } from '@/lib/admin-record-actions';
+import { saveAdminRecordAction, verifyAdminRecordAction, closeAdminRecordAction, prepareAdminCatalogPublicationAction, prepareAdminContextMoveAction, type AdminSaveResult } from '@/lib/admin-record-actions';
 import { AdminCatalogRevisionContent } from './admin-catalog-revision-content';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 import { RomeDateTimeInput } from './rome-date-time-input';
@@ -21,8 +21,13 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
   const [catalogContentReady, setCatalogContentReady] = useState(false);
   const publishingCatalog = data.model === 'ServiceCatalogRevision' && data.create;
   const boundCatalog = catalogBinding?.serviceId === values.serviceCatalogId ? catalogBinding : null;
+  const [graphBinding, setGraphBinding] = useState<{ hash: string; blocked: string[]; rows: { model: string; id: string; label: string; changedFields: string[] }[]; draft: string } | null>(null);
+  const [graphConfirmed, setGraphConfirmed] = useState(false);
+  const boundGraph = graphBinding?.draft === JSON.stringify(values) ? graphBinding : null;
   const canUpdate = data.fields.some(field => !field.readOnly);
   const [operation, setOperation] = useState<AdminRecordCommand['operation']>(data.create ? 'CREATE' : data.deleted ? 'RESTORE' : canUpdate ? 'UPDATE' : 'RECTIFY');
+  const needsContextMove = !data.create && operation === 'UPDATE' && ['Company', 'Project', 'TechnicalPractice'].includes(data.model)
+    && ['clientId', 'companyId', 'projectId', 'clientServiceId', 'incorporationSubjectId'].some(name => values[name] !== data.values[name]);
   const [pending, setPending] = useState(false), [result, setResult] = useState<AdminSaveResult | null>(recovering
     ? { ok: false, uncertain: true, message: 'Questo riferimento contiene un tentativo da verificare. Nessun salvataggio viene ripetuto automaticamente.' } : null);
   const [confirmedClose, setConfirmedClose] = useState(false);
@@ -38,8 +43,10 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
   }
   async function submit(replay = false) {
     if (!ready || pending || (result?.uncertain && !replay)) return;
+    if (!replay && needsContextMove && (!boundGraph || boundGraph.blocked.length || !graphConfirmed)) return;
     const command = replay && submitted ? submitted : { commandId, model: data.model, id: data.id, operation,
       expectedVersion: data.version, reason, values: operation === 'CREATE' || operation === 'UPDATE' ? values : {},
+      ...(needsContextMove && boundGraph && graphConfirmed ? { contextMove: { expectedGraphHash: boundGraph.hash, confirmed: true as const } } : {}),
       ...(correctingPayment && declared ? { paymentCorrection: { evidenceVersionId, effectiveAt, confirmed: true as const } } : {}),
       ...(data.noticeLifecycle?.action && noticeReviewed && operation === 'UPDATE'
         ? { noticeLifecycle: { action: data.noticeLifecycle.action, contentHash: data.noticeLifecycle.contentHash, reviewed: true as const } } : {}),
@@ -90,6 +97,27 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
             {field.readOnly && <p className="text-sm">Valore storico conservato. Usa la rettifica o il percorso di nuova bozza indicato sopra.</p>}
           </fieldset>;
         })}</div>}
+
+        {needsContextMove && <section aria-label="Riepilogo del nuovo contesto" className="space-y-3 rounded-xl border border-amber-400 p-4">
+          <h2 className="font-bold">Schede interessate dal cambio di contesto</h2>
+          <button type="button" className="underline" onClick={async () => {
+            setPending(true); setGraphConfirmed(false);
+            try {
+              const prepared = await prepareAdminContextMoveAction({ model: data.model, id: data.id, expectedVersion: data.version, values });
+              if (prepared.ok) { setGraphBinding({ ...prepared.value, draft: JSON.stringify(values) }); setResult(null); }
+              else { setGraphBinding(null); setResult({ ok: false, message: prepared.message }); }
+            } catch { setGraphBinding(null); setResult({ ok: false, message: 'Riepilogo non disponibile. La bozza è conservata.' }); }
+            finally { setPending(false); }
+          }}>Prepara il riepilogo delle schede collegate</button>
+          {boundGraph && <>
+            <ul className="space-y-2">{boundGraph.rows.map(row => <li key={row.model + row.id}>{row.label}: {row.changedFields.join(', ') || 'collegamento conservato'}</li>)}</ul>
+            {boundGraph.blocked.map(message => <p key={message} role="alert">{message}</p>)}
+            {!boundGraph.blocked.length && <label className="flex gap-3"><input required type="checkbox" checked={graphConfirmed} onChange={event => setGraphConfirmed(event.target.checked)} />
+              Confermo il nuovo contesto selezionato e l’aggiornamento insieme delle schede elencate. Le versioni e le prove originali restano conservate.
+            </label>}
+          </>}
+        </section>}
+
         {publishingCatalog && <section className="space-y-4 rounded-xl border p-4">
           <button type="button" className="underline" disabled={!values.serviceCatalogId} onClick={async () => {
             setPending(true); setCatalogConfirmed(false); setCatalogContentReady(false);
@@ -124,7 +152,7 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
         {operation === 'TRASH' && <p>Il record e il suo contenuto vengono conservati per il ripristino. I collegamenti e le prove storiche non vengono ricreati.</p>}
         <label className="block font-semibold">Motivazione della correzione<textarea required minLength={3} maxLength={2000} className={fieldClass}
           value={reason} onChange={event => setReason(event.target.value)} /></label>
-        <button type="submit" disabled={publishingCatalog && (!boundCatalog || !catalogConfirmed || !catalogContentReady)} className="rounded-xl bg-blue-900 px-5 py-3 font-bold text-white disabled:opacity-50">{pending ? 'Registrazione…' : 'Salva operazione'}</button>
+        <button type="submit" disabled={(publishingCatalog && (!boundCatalog || !catalogConfirmed || !catalogContentReady)) || (needsContextMove && (!boundGraph || boundGraph.blocked.length > 0 || !graphConfirmed))} className="rounded-xl bg-blue-900 px-5 py-3 font-bold text-white disabled:opacity-50">{pending ? 'Registrazione…' : 'Salva operazione'}</button>
       </fieldset>
     </form>
     {result && <p role="status" className="rounded-xl border p-4">{result.message}</p>}

@@ -5,11 +5,83 @@ import { syntheticSession } from '../selective-sharing/fixtures';
 import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { adminHistoryFixture } from './history-fixture';
+import { adminContextFixture, adminGraphFixture } from './context-fixture';
 import { paymentCorrectionFixture } from './payment-fixture';
 import { romeDateTimeInput } from '../../src/lib/rome-date-time';
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
+
+
+
+test('the complete context summary survives confirmation expiry and reopens one coherent company graph', async ({ page, context }) => {
+  const actor = await db.user.findUniqueOrThrow({ where: { email: f.adminEmail } });
+  const graph = await adminGraphFixture(db, actor.id);
+  await login(page); await page.goto('/admin/records/Company/' + graph.company.id);
+  const client = page.getByRole('combobox', { name: 'Cliente', exact: true }), lookup = client.locator('..').locator('..');
+  await lookup.getByRole('textbox', { name: 'Cerca Cliente', exact: true }).fill(graph.clients[1].id);
+  await lookup.getByRole('button', { name: 'Cerca collegamenti', exact: true }).click();
+  await expect(client).toBeEnabled(); await client.selectOption(graph.clients[1].id);
+  await reason(page);
+  await expect(page.getByRole('button', { name: 'Salva operazione', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Prepara il riepilogo delle schede collegate', exact: true }).click();
+  const summary = page.getByRole('region', { name: 'Riepilogo del nuovo contesto', exact: true });
+  await expect(summary.getByText(/Progetto del gruppo sintetico/)).toBeVisible();
+  await expect(summary.getByText(/Versione documentale conservata/)).toBeVisible();
+  await page.getByRole('checkbox', { name: /Confermo il nuovo contesto selezionato/ }).check();
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
+  const confirmation = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(confirmation).toBeVisible(); await expect(client).toHaveValue(graph.clients[1].id);
+  await expect(page.getByRole('checkbox', { name: /Confermo il nuovo contesto selezionato/ })).toBeChecked();
+  expect((await db.company.findUniqueOrThrow({ where: { id: graph.company.id } })).clientId).toBe(graph.clients[0].id);
+  await confirmation.getByLabel('Password corrente', { exact: true }).fill(password);
+  await confirmation.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(confirmation).toContainText('Identità confermata.');
+  await save(page); await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
+  await expect(client).toHaveValue(graph.clients[1].id);
+  expect((await db.project.findUniqueOrThrow({ where: { id: graph.project.id } })).clientId).toBe(graph.clients[1].id);
+  expect((await db.task.findUniqueOrThrow({ where: { id: graph.task.id } })).clientId).toBe(graph.clients[1].id);
+  expect(await db.documentVersion.findUniqueOrThrow({ where: { id: graph.version.id } })).toEqual(graph.version);
+});
+
+test('Admin annotates privacy and intake sources, reopens their history and follows the current lead without changing originals', async ({ page }) => {
+  const actor = await db.user.findUniqueOrThrow({ where: { email: f.adminEmail } });
+  const source = await adminHistoryFixture(db, actor.id);
+  await login(page, f.adminEmail);
+  for (const [model, row] of [['PrivacyEvidenceReceipt', source.receipt], ['ControlledIntake', source.intake]] as const) {
+    await page.goto('/admin/records/' + model + '/' + row.id);
+    await expect(page.getByLabel('Operazione', { exact: true })).toHaveValue('RECTIFY');
+    await expect(page.getByRole('option', { name: 'Correggi i dati operativi' })).toHaveCount(0);
+    const reason = 'Rettifica sintetica persistita ' + model;
+    await page.getByLabel('Motivazione della correzione').fill(reason);
+    await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
+    await expect(page.getByRole('link', { name: 'Riapri e verifica il salvataggio' })).toBeVisible();
+    await page.getByRole('link', { name: 'Riapri e verifica il salvataggio' }).click();
+    await expect(page.getByText(reason, { exact: true })).toBeVisible();
+  }
+  await page.getByRole('link', { name: 'Apri il lead: dati correnti, assegnazione e archivio' }).click();
+  await expect(page).toHaveURL(new RegExp('/leads/' + source.lead.id + '$'));
+  expect(await db.privacyEvidenceReceipt.findUniqueOrThrow({ where: { id: source.receipt.id } })).toEqual(source.receipt);
+  expect(await db.controlledIntake.findUniqueOrThrow({ where: { id: source.intake.id } })).toEqual(source.intake);
+});
+
+test('service dates stay saved after reopening and the account role filter keeps email identity visible', async ({ page }) => {
+  const setup = await adminContextFixture(db);
+  await login(page, f.adminEmail);
+  await page.goto('/admin/records/ClientService/' + setup.service.id);
+  const corrected = new Date(Date.now() - 3 * 86_400_000); corrected.setSeconds(0, 0);
+  await page.getByLabel('Data amministrativa di acquisto · Europe/Rome', { exact: true }).fill(romeDateTimeInput(corrected));
+  await page.getByLabel('Motivazione della correzione').fill('Data amministrativa corretta da prova sintetica');
+  await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica il salvataggio' }).click();
+  await expect(page.getByLabel('Data amministrativa di acquisto · Europe/Rome', { exact: true })).toHaveValue(romeDateTimeInput(corrected));
+  expect((await db.clientService.findUniqueOrThrow({ where: { id: setup.service.id } })).contractId).toBe(setup.contract.id);
+  await page.goto('/settings/users?role=admin&q=' + encodeURIComponent(f.adminEmail));
+  await expect(page.getByText(f.adminEmail, { exact: true })).toBeVisible();
+  await expect(page.getByText(f.technicianEmail, { exact: true })).toHaveCount(0);
+});
 
 test('Admin activates and retires the reviewed notice version from its own record', async ({ page }) => {
   const notice = await db.privacyNoticeVersion.create({ data: { noticeCode: 'SYNTHETIC_UI_' + randomUUID().replaceAll('-', '').toUpperCase(),
@@ -253,8 +325,8 @@ test('an incompatible promoter is refused atomically while the complete draft re
   await page.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('urgente');
   await page.getByRole('spinbutton', { name: 'Importo richiesto', exact: true }).fill('3210.45'); await reason(page);
   const commandId = new URL(page.url()).searchParams.get('command')!;
-  await page.getByRole('button', { name: 'Salva operazione', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('I collegamenti selezionati non appartengono allo stesso contesto');
+  await page.getByRole('button', { name: 'Prepara il riepilogo delle schede collegate', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Preparazione non disponibile');
   await expect(page.getByRole('textbox', { name: 'Titolo', exact: true })).toHaveValue('Bozza conservata dopo rifiuto del contesto');
   await expect(page.getByRole('combobox', { name: 'Priorità', exact: true })).toHaveValue('urgente');
   await expect(page.getByRole('spinbutton', { name: 'Importo richiesto', exact: true })).toHaveValue('3210.45');
@@ -264,6 +336,8 @@ test('an incompatible promoter is refused atomically while the complete draft re
   expect(await db.adminRecordRevision.count({ where: { commandId } })).toBe(0);
   expect(await db.auditLog.count({ where: { id: `admin-record:${commandId}` } })).toBe(0);
   await page.getByRole('combobox', { name: 'Soggetto da costituire', exact: true }).selectOption(right.id);
+  await page.getByRole('button', { name: 'Prepara il riepilogo delle schede collegate', exact: true }).click();
+  await page.getByRole('checkbox', { name: /Confermo il nuovo contesto selezionato/ }).check();
   await save(page); await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Titolo', exact: true })).toHaveValue('Bozza conservata dopo rifiuto del contesto');
   await expect(page.getByRole('combobox', { name: 'Soggetto da costituire', exact: true })).toHaveValue(right.id);
