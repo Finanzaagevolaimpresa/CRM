@@ -23,12 +23,16 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   }
   if (query.decision && query.decision !== query.command) notFound();
   const recordId = id === 'new' ? String(query.draft) : id;
-  const receipt = query.decision ? await readAdminRecordReceipt(prisma, session, String(query.decision)) : null;
+  // A server-action revalidation can still carry the original /new URL,
+  // before the browser's decision marker reaches the server. Bind that URL to
+  // its own persisted command so a successful creation cannot become a 404.
+  const receipt = query.decision || id === 'new'
+    ? await readAdminRecordReceipt(prisma, session, String(query.decision ?? query.command)) : null;
   if (receipt && (receipt.model !== model || receipt.id !== recordId)) notFound();
   const creating = id === 'new' && (!receipt || receipt.closed);
   let data;
   try { data = await loadAdminRecord(prisma, session, model, recordId, creating, query.restoreRevision ? String(query.restoreRevision) : undefined); }
   catch (error) { if (error instanceof AdminRecordError || error instanceof z.ZodError) notFound(); throw error; }
   return <div className="crm-space-y-6"><PageHeader title={data.label} description={data.deleted ? 'Scheda nel cestino: dati conservati per il ripristino.' : 'Editor amministrativo con controllo delle modifiche concorrenti e cronologia delle correzioni.'} />
-    <AdminRecordEditor key={`${model}:${recordId}:${query.command}:${query.restoreRevision ?? ''}`} data={data} commandId={String(query.command)} recovering={Boolean(query.decision)} /></div>;
+    <AdminRecordEditor key={`${model}:${recordId}:${query.command}:${query.restoreRevision ?? ''}`} data={data} commandId={String(query.command)} recovering={Boolean(query.decision || receipt)} /></div>;
 }

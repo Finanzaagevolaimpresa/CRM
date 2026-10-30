@@ -193,7 +193,13 @@ test('create, trash and restore an expense without duplicating identity or losin
   await page.getByRole('combobox', { name: 'Categoria', exact: true }).selectOption('software');
   await page.getByRole('textbox', { name: 'Descrizione', exact: true }).fill('Voce browser sintetica');
   await page.getByRole('spinbutton', { name: 'Importo', exact: true }).fill('123.45'); await reason(page);
-  const id = new URL(page.url()).searchParams.get('draft')!; await save(page);
+  const originalNewUrl = page.url(), id = new URL(originalNewUrl).searchParams.get('draft')!; await save(page);
+  // Revalidation or reload may use the pre-submit /new URL without decision=.
+  // The exact command receipt must recover the creation, never recreate it.
+  await page.goto(originalNewUrl);
+  await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true })).toBeVisible();
+  expect(await db.projectExpense.count({ where: { id } })).toBe(1);
   await page.getByRole('link', { name: 'Riapri e verifica il salvataggio', exact: true }).click();
   await page.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('TRASH'); await reason(page); await save(page);
   await page.goto('/admin/records/ProjectExpense?trash=1&q=' + id);
