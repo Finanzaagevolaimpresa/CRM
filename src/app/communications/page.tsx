@@ -177,7 +177,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <p className="font-bold">{communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts)}</p>
       <dl className="my-3 grid gap-1 text-sm"><div><dt className="inline font-bold">Da: </dt><dd className="inline">{message.snapshot.from}</dd></div><div><dt className="inline font-bold">Reply-To: </dt><dd className="inline">{message.snapshot.replyTo}</dd></div>
         <div><dt className="inline font-bold">A: </dt><dd className="inline">{message.snapshot.to.join(', ')}</dd></div><div><dt className="inline font-bold">CC: </dt><dd className="inline">{message.snapshot.cc.join(', ') || 'Nessuna'}</dd></div><div><dt className="inline font-bold">BCC: </dt><dd className="inline">{message.snapshot.bcc.join(', ') || 'Nessuna'}</dd></div></dl>
-      <div className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
+      <div role="region" aria-label="Testo del messaggio conservato" className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
       <div className="my-4 grid gap-4">

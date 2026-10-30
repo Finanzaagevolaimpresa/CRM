@@ -882,7 +882,7 @@ test('draft replacement preserves target and fields through confirmation expiry 
   await confirmation.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();await expect(confirmation).toContainText('Identità confermata.');
   await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();
   await page.getByRole('link',{name:'Apri e verifica la bozza sostitutiva',exact:true}).click();
-  await expect(page).toHaveURL(new RegExp('focus='+commandId));await expect(page.getByRole('textbox',{name:'Testo esatto',exact:true})).toHaveValue('Testo sostitutivo sintetico da browser');
+  await expect(page).toHaveURL(new RegExp('focus='+commandId));await expect(page.getByRole('region',{name:'Testo del messaggio conservato',exact:true})).toHaveText('Testo sostitutivo sintetico da browser');
   expect((await db.approvedCommunication.findUniqueOrThrow({where:{id:commandId}})).clientId).toBe(source.client.id);
   expect(await db.communicationVersion.findUniqueOrThrow({where:{id:version.id}})).toEqual(version);
   expect((await readAdminOperationalState(db,source.person.session,'ApprovedCommunication',source.message.id)).state).toBe('ARCHIVED');
