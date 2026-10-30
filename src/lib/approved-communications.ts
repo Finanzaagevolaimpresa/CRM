@@ -452,8 +452,12 @@ export async function loadOrdinaryReplyCandidateContext(tx: Tx, claimed: AuthSes
 }
 
 export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
+  return db.$transaction(tx => saveApprovedMessageDraftInTransaction(tx, claimed, raw, runtime), { timeout: 30_000 });
+}
+
+/** Transactional composition for an Admin draft replacement. No approval or send. */
+export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parse(editSchema, raw);
-  return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.write');
     if (!['READINESS', 'TECHNICAL'].includes(input.context.kind) && current.role !== 'admin') denied();
     const scope = await contextScope(tx, current, input.context, true);
@@ -541,7 +545,27 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     const registry = await tx.internalSession.findUnique({ where: { id: current.sessionId! }, select: { expiresAt: true } });
     if (!registry || now.now.getTime() >= Math.min(current.expiresAt * 1000, registry.expiresAt.getTime(), replyAccessUntil, files.validUntil?.getTime() ?? Infinity)) denied();
     return { id: input.messageId, revision: snapshot.revision, snapshotHash: saved.snapshotHash };
-  }, { timeout: 30_000 });
+}
+
+/** Reuses current native scope, classification, source and attachment admission. */
+export async function admitAdminDraftSource(tx: Tx, claimed: AuthSession, id: string, write = false) {
+  const current = await actor(tx, claimed, 'practice_communications.read', true);
+  await adminCommunicationSourceContext(tx, current, 'ApprovedCommunication', id);
+  const detail = await messageScope(tx, current, id, write, false);
+  const eligible = detail.row.state === 'DRAFT' && !detail.row.updateDeliveryId && !detail.requestSource
+    && !detail.row.versions.some(version => version.approval)
+    && !await tx.communicationAttempt.count({ where: { messageId: id } })
+    && !await tx.ordinaryEmailAttempt.count({ where: { messageId: id } })
+    && !await tx.communicationReply.count({ where: { messageId: id } })
+    && !await tx.communicationEvent.count({ where: { messageId: id, replyId: { not: null } } });
+  if (write && (!eligible || !hasPermission(current, 'practice_communications.write'))) denied();
+  return { row: detail.row, snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, eligible };
+}
+
+export async function admitAdminDraftTarget(tx: Tx, claimed: AuthSession, context: CommunicationContext) {
+  const current = await actor(tx, claimed, 'practice_communications.write', true);
+  const scope = await contextScope(tx, current, context, true);
+  return { context, label: scope.label };
 }
 
 const transitionSchema = z.object({ messageId: uuid, expectedRevision: revision, snapshotHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();

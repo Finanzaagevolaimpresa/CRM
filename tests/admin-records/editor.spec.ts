@@ -1,3 +1,5 @@
+import {readAdminDraftReplacement,replaceAdminCommunicationDraft} from '../../src/lib/admin-draft-context';
+import {emptyCommunicationRecipientSelection} from '../../src/lib/communication-recipient-policy';
 import { storeCommunicationFile, revokeCommunicationFile } from '../../src/lib/communication-files';
 import { storedNoticeMessage, linkedOrdinaryNoticeReply } from '../record-updates/communication-fixtures';
 import { test, expect, type Page } from '@playwright/test';
@@ -824,4 +826,84 @@ test('an interrupted private metadata attempt closes before a fresh operation an
   await page.getByRole('link',{name:'Riapri e verifica i metadati',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Titolo amministrativo',exact:true})).toHaveValue('Nuova scelta dopo chiusura');
   expect(await db.adminRecordRevision.count({where:{model:'AdminPrivateDocumentMetadata',recordId:id,operation:'UPDATE'}})).toBe(1);
+});
+
+async function browserDraftContext(){
+  const user=await db.user.findUniqueOrThrow({where:{email:f.adminEmail}}),person={user,...await syntheticSession(db,user)};
+  const lead=await db.lead.create({data:{firstName:'Bozza browser sintetica',lastName:randomUUID(),assignedToId:user.id}});
+  const client=await db.client.create({data:{displayName:'Cliente sostituzione browser '+randomUUID(),type:'societa'}});
+  const source=await storedNoticeMessage(db,{leadId:lead.id,authorId:user.id});
+  await db.$executeRaw`INSERT INTO "OrdinaryEmailAuthority"(id,"userId","mailboxId",enabled) VALUES('ordinary-email',${user.id},${source.mailbox.id}::uuid,true)
+    ON CONFLICT(id) DO UPDATE SET "userId"=EXCLUDED."userId","mailboxId"=EXCLUDED."mailboxId",enabled=true,revision="OrdinaryEmailAuthority".revision+1`;
+  return {person,lead,client,...source};
+}
+async function openDraftReplacement(page:Page,source:Awaited<ReturnType<typeof browserDraftContext>>){
+  await page.goto('/communications?kind=LEAD&practice='+source.lead.id+'&focus='+source.message.id);
+  await page.getByRole('link',{name:'Correggi il contesto di questa bozza',exact:true}).click();
+  await page.getByLabel('Cerca destinazione',{exact:true}).fill(source.client.id);
+  await page.getByRole('button',{name:'Cerca contesti disponibili',exact:true}).click();
+  await page.getByRole('link',{name:source.client.displayName+' · prepara la sostituzione',exact:true}).click();
+  await expect(page.locator('[data-draft-context-command][data-interactive-ready="true"]')).toBeVisible();
+  await expect(page.locator('input[name="to"]')).toHaveValue('');
+  await expect(page.locator('input[name="attachmentVersionId"]:checked,input[name="contextFileId"]:checked')).toHaveCount(0);
+  await page.getByLabel('Mittente',{exact:true}).selectOption(source.mailbox.id);
+  await page.getByLabel('Reply-To',{exact:true}).fill(source.mailbox.address);
+  await page.locator('input[name="to"]').fill('chosen-recipient@invalid.test');
+  await page.getByLabel('Oggetto',{exact:true}).fill('Oggetto sostitutivo da browser');
+  await page.getByLabel('Testo esatto',{exact:true}).fill('Testo sostitutivo sintetico da browser');
+  await page.getByLabel('Motivazione della sostituzione',{exact:true}).fill('Correzione esplicita del contesto sintetico');
+  await page.getByRole('checkbox',{name:'Confermo il nuovo contesto, il testo e le selezioni esplicite, conservando l’originale in archivio.',exact:true}).check();
+  return (await page.locator('[data-draft-context-command]').getAttribute('data-draft-context-command'))!;
+}
+test('draft replacement preserves target and fields through confirmation expiry and reopens one persisted destination',async({page,context})=>{
+  const source=await browserDraftContext(),version=await db.communicationVersion.findFirstOrThrow({where:{messageId:source.message.id}});
+  await login(page);const commandId=await openDraftReplacement(page,source);
+  await context.clearCookies({name:'fai_crm_privileged_step_up'});
+  await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();
+  const confirmation=page.getByRole('region',{name:'Conferma identità senza lasciare il lavoro',exact:true});
+  await expect(confirmation).toBeVisible();
+  await expect(page.getByLabel('Testo esatto',{exact:true})).toHaveValue('Testo sostitutivo sintetico da browser');
+  await expect(page.locator('input[name="to"]')).toHaveValue('chosen-recipient@invalid.test');
+  await expect(page.getByLabel('Motivazione della sostituzione',{exact:true})).toHaveValue('Correzione esplicita del contesto sintetico');
+  await confirmation.getByLabel('Password corrente',{exact:true}).fill(password);
+  await confirmation.getByRole('button',{name:'Conferma identità e conserva le scelte',exact:true}).click();await expect(confirmation).toContainText('Identità confermata.');
+  await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();
+  await page.getByRole('link',{name:'Apri e verifica la bozza sostitutiva',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('focus='+commandId));await expect(page.getByText('Testo sostitutivo sintetico da browser',{exact:true})).toBeVisible();
+  expect((await db.approvedCommunication.findUniqueOrThrow({where:{id:commandId}})).clientId).toBe(source.client.id);
+  expect(await db.communicationVersion.findUniqueOrThrow({where:{id:version.id}})).toEqual(version);
+  expect((await readAdminOperationalState(db,source.person.session,'ApprovedCommunication',source.message.id)).state).toBe('ARCHIVED');
+});
+test('lost draft replacement response recovers one persisted destination without another POST',async({page})=>{
+  const source=await browserDraftContext();await login(page);const commandId=await openDraftReplacement(page,source);
+  let posts=0,lost=false;const pattern='**/*';
+  await page.route(pattern,async route=>{if(route.request().method()!=='POST')return route.continue();posts++;await route.fetch();lost=true;await route.abort('failed');});
+  await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();await expect.poll(()=>lost).toBe(true);
+  await page.unroute(pattern);await expect(page.getByRole('button',{name:'Verifica esito della sostituzione',exact:true})).toBeVisible();await page.reload();
+  await page.getByRole('button',{name:'Verifica esito della sostituzione',exact:true}).click();
+  await page.getByRole('link',{name:'Apri e verifica la bozza sostitutiva',exact:true}).click();
+  await expect(page).toHaveURL(new RegExp('focus='+commandId));
+  expect(posts).toBe(1);expect(await db.approvedCommunication.count({where:{id:commandId}})).toBe(1);
+  expect(await db.adminRecordRevision.count({where:{commandId}})).toBe(1);
+});
+test('interrupted replacement closes before a new command and a late POST cannot create a duplicate',async({page})=>{
+  const source=await browserDraftContext(),before=await readAdminDraftReplacement(db,source.person.session,source.message.id);
+  await login(page);const commandId=await openDraftReplacement(page,source),pattern='**/*';
+  await page.route(pattern,route=>route.request().method()==='POST'?route.abort('failed'):route.continue());
+  await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Verifica esito della sostituzione',exact:true})).toBeVisible();await page.unroute(pattern);await page.reload();
+  await page.getByRole('checkbox',{name:'Chiudi il tentativo soltanto se non ha prodotto una bozza.',exact:true}).check();
+  await page.getByRole('button',{name:'Riconcilia e chiudi la sostituzione',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza sostituzione');
+  const key={version:Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION),secret:process.env.PRIVILEGED_STEP_UP_SECRET!};
+  await expect(replaceAdminCommunicationDraft(db,source.person.session,{commandId,id:source.message.id,expectedVersion:before.expectedVersion,
+    reason:'Tentativo tardivo sintetico',confirmed:true,draft:{context:{kind:'CLIENT',id:source.client.id},mailboxId:source.mailbox.id,replyTo:source.mailbox.address,
+      to:['chosen-recipient@invalid.test'],cc:[],bcc:[],subject:'Oggetto sostitutivo da browser',body:'Testo sostitutivo sintetico da browser',
+      classification:'ORDINARY',attachmentVersionIds:[],contextFileIds:[],recipientSelection:emptyCommunicationRecipientSelection()}},
+    {key,sessionToken:source.person.token,stepUpToken:createPrivilegedStepUpToken({key,userId:source.person.user.id,sessionToken:source.person.token,role:'admin'})})).rejects.toThrow('CLOSED');
+  await page.getByRole('link',{name:'Prepara una nuova sostituzione',exact:true}).click();
+  const fresh=await openDraftReplacement(page,source);expect(fresh).not.toBe(commandId);
+  await page.getByRole('button',{name:'Registra bozza sostitutiva',exact:true}).click();
+  await page.getByRole('link',{name:'Apri e verifica la bozza sostitutiva',exact:true}).click();
+  expect(await db.approvedCommunication.count({where:{id:commandId}})).toBe(0);expect(await db.approvedCommunication.count({where:{id:fresh}})).toBe(1);
 });

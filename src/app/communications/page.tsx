@@ -15,6 +15,8 @@ import { OrdinaryEmailAttachmentDownload } from '@/components/ordinary-email-att
 import { CommunicationRecipients } from '@/components/communication-recipients';
 import { CommunicationFiles } from '@/components/communication-files';
 import { PreservedWorkflowForm } from '@/components/preserved-workflow-form';
+import { AdminDraftContextForm } from '@/components/admin-draft-context-form';
+import { readAdminDraftReplacement } from '@/lib/admin-draft-context';
 import { hasPermission } from '@/lib/permission-evaluator';
 import { InternalCommunicationEditor } from '@/components/internal-communication-editor';
 import { listInternalCommunications, listArchivedInternalCommunications, readCommunicationDirectory } from '@/lib/internal-communications';
@@ -40,19 +42,20 @@ function BindingFields({ context, message }: { context: CommunicationContext; me
     <input type="hidden" name="expectedRevision" value={message.currentRevision} /><input type="hidden" name="snapshotHash" value={message.snapshotHash} /></>;
 }
 type UpdateDraft = NonNullable<Data['messages'][number]['updateDraft']> & { subject?: string; body?: string; mailboxId?: string };
-function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { data: Data; snapshot?: ApprovedMessageSnapshot;
+function Draft({ data, snapshot, replySource, updateDraft, requestSource, replacement, commandId }: { data: Data; snapshot?: ApprovedMessageSnapshot;
+  replacement?: Awaited<ReturnType<typeof readAdminDraftReplacement>>; commandId?: string;
   updateDraft?: UpdateDraft;
   requestSource?: { requestId: string; sourceHash: string; mailboxId: string };
   replySource?: { id: string; contentHash: string; classification: ApprovedMessageSnapshot['classification'] } }) {
   const updateSelection = emptyCommunicationRecipientSelection();
   if (updateDraft) updateSelection.to.userIds = [updateDraft.recipientId];
-  return <PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
+  const fields = <>
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     {replySource ? <><input type="hidden" name="replySourceId" value={replySource.id} /><input type="hidden" name="replySourceHash" value={replySource.contentHash} />
       <p>Prepara una nuova bozza. Scegli mittente, destinatari e allegati; poi scrivi il testo da sottoporre ad approvazione.</p></> : null}
     {requestSource && <><input type="hidden" name="adminRequestId" value={requestSource.requestId} /><input type="hidden" name="adminRequestSourceHash" value={requestSource.sourceHash} />
       <p>Bozza collegata alla richiesta interna. Scegli destinatari, testo e allegati: il salvataggio non approva né invia email.</p></>}
-    <input type="hidden" name="messageId" value={snapshot?.messageId ?? updateDraft?.deliveryId ?? requestSource?.requestId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
+    <input type="hidden" name="messageId" value={commandId ?? snapshot?.messageId ?? updateDraft?.deliveryId ?? requestSource?.requestId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
     <label>Mittente<select required className={field} name="mailboxId" defaultValue={snapshot?.mailboxId ?? ''}>
       <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.filter(box => (!updateDraft?.mailboxId || box.id === updateDraft.mailboxId) && (!requestSource || box.id === requestSource.mailboxId)).map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
     </select></label>
@@ -67,20 +70,26 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { da
       suggestedRecipients={data.suggestedRecipients}
       initialSelection={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.recipientSelection : undefined}
       initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />}
-    <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject ?? updateDraft?.subject} /></label>
-    <label>Testo esatto<textarea aria-label="Testo esatto" required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? updateDraft?.body} /></label>
-    <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
+    <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject ?? replacement?.subject ?? updateDraft?.subject} /></label>
+    <label>Testo esatto<textarea aria-label="Testo esatto" required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? replacement?.body ?? updateDraft?.body} /></label>
+    <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replacement?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
     <fieldset className="min-w-0 rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
       {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
         defaultChecked={snapshot?.schema === 'fai.approved-email.v2' && snapshot.attachments.some(a => a.source === 'CONTEXT_FILE' && a.versionId === file.id)} />{file.fileName} · {file.sizeBytes} byte</label>)}
       {data.documents.length ? data.documents.map(doc => <div key={doc.id}><b>{doc.title}</b>{doc.versions.map(version => <label key={version.id} className="ml-3 inline-flex gap-2"><input type="checkbox" name="attachmentVersionId" value={version.id} defaultChecked={snapshot?.attachments.some(a => a.versionId === version.id)} />Versione {version.version}</label>)}</div>) : <p>Nessun documento disponibile per il tuo accesso.</p>}
     </fieldset>
     <p className="text-sm text-slate-600">Ogni modifica crea una nuova versione da approvare. Nessun destinatario viene aggiunto automaticamente.</p>
-    <PrimaryButton type="submit">{snapshot ? 'Salva nuova versione da approvare' : 'Salva bozza'}</PrimaryButton>
-  </PreservedWorkflowForm>;
+    {replacement&&<section className="rounded-xl border p-4 space-y-3"><input type="hidden" name="replacementSourceId" value={replacement.id}/><input type="hidden" name="replacementVersion" value={replacement.expectedVersion}/>
+      <p>Origine: {replacement.subject}. Destinazione: {data.label}. Rivedi testo, destinatari e allegati: la conferma archivia la fonte e salva una bozza nel contesto scelto.</p>
+      <label className="block">Motivazione della sostituzione<textarea name="replacementReason" required minLength={3} maxLength={2000} className={field}/></label>
+      <label className="block"><input name="replacementConfirmed" type="checkbox" required value="true"/> Confermo il nuovo contesto, il testo e le selezioni esplicite, conservando l’originale in archivio.</label></section>}
+    <PrimaryButton type="submit">{replacement ? 'Registra bozza sostitutiva' : snapshot ? 'Salva nuova versione da approvare' : 'Salva bozza'}</PrimaryButton>
+  </>;
+  return replacement&&commandId?<AdminDraftContextForm id={replacement.id} commandId={commandId}>{fields}</AdminDraftContextForm>
+    :<PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>{fields}</PreservedWorkflowForm>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string; replaceDraft?: string; draftCommand?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const pendingFile = query.fileCommand || query.fileId || query.fileOperation
     ? z.object({commandId:z.string().uuid(),id:z.string().uuid(),operation:z.enum(['UPLOAD','REVOKE'])}).strict()
@@ -89,7 +98,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
 
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
   if (!context.success) {
-    if (query.kind || query.practice || query.update || query.request || query.focus) notFound();
+    if (query.kind || query.practice || query.update || query.request || query.focus || query.replaceDraft || query.draftCommand) notFound();
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
     const archived = query.archived === '1';
     if (query.archived && (!archived || !authority)) notFound();
@@ -121,6 +130,13 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     catch (error) { if (isRequestUnavailable(error)) notFound(); throw error; }
     if (requestPrefill.context.kind !== context.data.kind || requestPrefill.context.id !== context.data.id) notFound();
   }
+  let replacement: Awaited<ReturnType<typeof readAdminDraftReplacement>> | undefined;
+  if(query.replaceDraft||query.draftCommand){
+    if(session.role!=='admin'||query.reply||query.update||query.request||query.focus
+      ||!z.string().uuid().safeParse(query.replaceDraft).success||!z.string().uuid().safeParse(query.draftCommand).success)notFound();
+    replacement=await readAdminDraftReplacement(prisma,session,query.replaceDraft!);
+    if(!replacement.eligible||replacement.sourceContext.kind===context.data.kind&&replacement.sourceContext.id===context.data.id)notFound();
+  }
   let data: Data;
   try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page),
     updatePrefill?.saved ? updatePrefill.deliveryId : requestPrefill?.saved ? requestPrefill.requestId : query.focus); }
@@ -146,15 +162,17 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     {query.focus && <div className="space-y-2 rounded-xl border p-3"><p>Verifica del messaggio conservato. Nessuna operazione viene ripetuta.</p>
       {!data.messages.length && <p>Il messaggio non risulta disponibile nel contesto corrente. Conserva il riferimento e verifica prima di preparare un’altra operazione.</p>}
       <Link className="underline" href={`/communications?kind=${data.context.kind}&practice=${data.context.id}`}>Torna alla timeline del contesto</Link></div>}
-    {data.canWrite && !query.focus && !updatePrefill?.saved && !requestPrefill?.saved ? <Card title={requestPrefill ? 'Bozza dalla richiesta interna' : updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
+    {data.canWrite && !query.focus && !updatePrefill?.saved && !requestPrefill?.saved ? <Card title={replacement ? 'Bozza sostitutiva nel nuovo contesto' : requestPrefill ? 'Bozza dalla richiesta interna' : updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
       {requestPrefill && <aside className="mb-4 rounded-xl border p-3"><h3 className="font-bold">{requestPrefill.requestTitle}</h3><p className="whitespace-pre-wrap break-words">{requestPrefill.requestDetails}</p><p>Indicazioni interne: rivedile prima di comporre il testo per il destinatario.</p></aside>}
       {replySource ? <aside className="mb-4 rounded-xl border p-3"><p>{replySource.sender} · {replySource.receivedAt.toISOString()}</p>
         <h3 className="font-bold">{replySource.subject}</h3><p className="whitespace-pre-wrap break-words">{replySource.body}</p>
         <p className="text-sm">Testo ricevuto dall’esterno, da valutare prima di rispondere.</p></aside> : null}
-      <Draft data={data} updateDraft={updatePrefill} requestSource={requestPrefill} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
+      <Draft data={data} replacement={replacement} commandId={query.draftCommand} updateDraft={updatePrefill} requestSource={requestPrefill} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
     </Card> : null}
     {data.messages.map(message => <Card key={message.id} title={`${message.snapshot.subject} · v${message.currentRevision}`}>
       <AdminOperationalShortcut session={session} model="ApprovedCommunication" id={message.id} state={message.lifecycleState}/>
+      {data.isAdmin&&message.operational&&message.state==='DRAFT'&&!message.updateDeliveryId&&!message.requestSource&&<Link className="block my-3 underline" href={'/admin/communication-drafts/'+message.id}>Correggi il contesto di questa bozza</Link>}
+      {data.isAdmin&&!message.operational&&<Link className="block my-3 underline" href={'/admin/communication-drafts/'+message.id}>Consulta le sostituzioni della comunicazione</Link>}
       {message.operational&&message.needsFreshVersion&&<p>La scheda è stata ripristinata. Salva una nuova versione prima di richiedere un’approvazione o preparare un invio.</p>}
       <p className="font-bold">{communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts)}</p>
       <dl className="my-3 grid gap-1 text-sm"><div><dt className="inline font-bold">Da: </dt><dd className="inline">{message.snapshot.from}</dd></div><div><dt className="inline font-bold">Reply-To: </dt><dd className="inline">{message.snapshot.replyTo}</dd></div>
