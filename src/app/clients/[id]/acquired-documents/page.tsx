@@ -21,8 +21,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <p className="break-words">{d.fileName} · versione 1</p><p>Acquisito il {new Date(d.acquiredAt).toLocaleString('it-IT')} · visibilità amministrata personalmente</p>
       <AdminOperationalShortcut session={session} model="Document" id={d.id} state={d.lifecycleState}/>
       {session.role==='admin'&&<SecondaryLink href={'/admin/private-documents/'+encodeURIComponent(d.id)}>Correggi metadati e consulta le revisioni</SecondaryLink>}
-      {d.available?<div className="flex flex-wrap gap-4">{canPreviewSelectedDocument(d) ? <a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}`} target="_blank" rel="noopener noreferrer">Visualizza documento acquisito</a> : <span>Anteprima non disponibile per questo formato.</span>}
-        <a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}?download=1`}>Scarica documento acquisito</a></div>:<p>Contenuto sospeso o scaduto. Le informazioni e le prove di acquisizione restano conservate.</p>}
+      {session.role==='admin'&&<SecondaryLink href={'/admin/private-documents/'+encodeURIComponent(d.id)+'/versions'}>Carica o ripristina una versione privata</SecondaryLink>}
+      {d.available?<div className="space-y-3">{[...d.versions].reverse().map(v=><div key={v.id} className="flex flex-wrap gap-4"><span>{v.fileName} · versione {v.version}</span>
+        {canPreviewSelectedDocument(v) ? <a className="font-semibold underline" href={'/acquired-documents/'+encodeURIComponent(d.id)+'?version='+encodeURIComponent(v.id)} target="_blank" rel="noopener noreferrer">Apri versione {v.version}</a> : <span>Anteprima non disponibile per questo formato.</span>}
+        <a className="font-semibold underline" href={'/acquired-documents/'+encodeURIComponent(d.id)+'?version='+encodeURIComponent(v.id)+'&download=1'}>Scarica versione {v.version}</a></div>)}</div>:<p>Contenuto sospeso o scaduto. Le informazioni e le prove di acquisizione restano conservate.</p>}
     </div></Card>)}
   </div>;
 }

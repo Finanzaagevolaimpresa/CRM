@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 60
     env:
       VNX03_EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      VNX03_QUALIFICATION_PROFILE: candidate-schema73
+      VNX03_QUALIFICATION_PROFILE: candidate-schema74
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,8 +79,8 @@ jobs:
             const receipt = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/${file}`, 'utf8'));
             assert.equal(receipt.sourceCommit, process.env.VNX03_EXPECTED_SOURCE_COMMIT);
             assert.equal(receipt.sourceTree, process.env.VNX03_EXPECTED_SOURCE_TREE);
-            assert.equal(receipt.profile, 'candidate-schema73');
-            assert.equal(receipt.migrations, 73);
+            assert.equal(receipt.profile, 'candidate-schema74');
+            assert.equal(receipt.migrations, 74);
             assert.equal(receipt.productionContact, false);
             if (file === 'n14-runtime.json') {
               assert.equal(receipt.adminAssignmentBrowserCompleted, true);

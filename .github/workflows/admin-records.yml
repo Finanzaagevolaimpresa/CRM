@@ -29,6 +29,10 @@ jobs:
       ADMIN_LIFECYCLE_DB_TESTS: '1'
       ADMIN_PRIVATE_METADATA_DB_TESTS: '1'
       ADMIN_DRAFT_CONTEXT_DB_TESTS: '1'
+      ADMIN_ROLE_PROFILE_DB_TESTS: '1'
+      ADMIN_OPERATIONAL_LINK_DB_TESTS: '1'
+      ADMIN_FORMALIZATION_DB_TESTS: '1'
+      ADMIN_PRIVATE_VERSION_DB_TESTS: '1'
       AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
       AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
       INTERNAL_SESSION_MODE: registry
@@ -62,16 +66,21 @@ jobs:
           node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           if [[ '${{ matrix.target }}' == migration ]]; then
-            ADMIN_RECORD_EVIDENCE="$evidence" bash scripts/admin-records/qualify-migration.sh
-            ADMIN_RECORD_EVIDENCE="$evidence" bash scripts/admin-lifecycle/qualify-migration.sh
+            ADMIN_RECORD_EVIDENCE="$evidence" bash scripts/admin-residuals/qualify-migration.sh
           else
             npm run prisma:migrate:deploy
           fi
       - name: Types, field contracts and Admin boundaries
         run: |
+          set -euo pipefail
           npx tsc --noEmit
-          npx eslint src/lib/admin-record*.ts src/lib/admin-user*.ts src/lib/admin-communication*.ts src/lib/admin-operational*.ts src/lib/admin-private-document*.ts src/lib/admin-draft*.ts src/lib/private-document-metadata.ts src/lib/selective-client-documents.ts src/lib/communication-file*.ts src/lib/user-actions.ts src/lib/engagement-dossier.ts src/lib/practice-readiness.ts src/lib/approved-communications.ts src/lib/technical-document-acquired-access.ts src/components/admin-record-editor.tsx src/components/admin-reference-select.tsx src/components/admin-user*.tsx src/components/admin-communication-file-editor.tsx src/components/admin-operational*.tsx src/components/admin-private-document-metadata-editor.tsx src/components/admin-draft-context-form.tsx src/components/communication-files.tsx src/app/admin/records src/app/admin/communication-files src/app/admin/lifecycle src/app/admin/private-documents src/app/admin/communication-drafts src/app/communications/page.tsx tests/admin-record*.test.ts tests/admin-operational-lifecycle-db.test.ts tests/admin-private-document-metadata-db.test.ts tests/admin-draft-context-db.test.ts tests/admin-lifecycle tests/admin-records --max-warnings 0
-          node --import tsx --test tests/admin-record-values.test.ts tests/admin-privileged-window.test.ts tests/admin-catalog-revision.test.ts
+          npx eslint src/lib/admin-role*.ts src/lib/admin-record*.ts src/lib/admin-user*.ts src/lib/admin-communication*.ts src/lib/admin-operational*.ts src/lib/admin-private-document*.ts src/lib/admin-draft*.ts src/lib/private-document-metadata.ts src/lib/selective-client-documents.ts src/lib/communication-file*.ts src/lib/user-actions.ts src/lib/engagement-dossier.ts src/lib/practice-readiness.ts src/lib/approved-communications.ts src/lib/technical-document-acquired-access.ts src/components/admin-role*.tsx src/components/admin-record-editor.tsx src/components/admin-reference-select.tsx src/components/admin-user*.tsx src/components/admin-communication-file-editor.tsx src/components/admin-operational*.tsx src/components/admin-private-document-metadata-editor.tsx src/components/admin-draft-context-form.tsx src/components/communication-files.tsx src/app/settings/roles src/app/settings/users src/app/admin/records src/app/admin/communication-files src/app/admin/lifecycle src/app/admin/private-documents src/app/admin/communication-drafts src/app/communications/page.tsx tests/admin-role*.test.ts tests/admin-record*.test.ts tests/admin-operational-lifecycle-db.test.ts tests/admin-private-document-metadata-db.test.ts tests/admin-draft-context-db.test.ts tests/admin-lifecycle tests/admin-records --max-warnings 0
+          npx eslint src/lib/admin-practice-formalization-store.ts src/lib/private-document-versions.ts src/lib/technical-document-acquisition-persistence.ts src/components/admin-private-document-version-editor.tsx src/app/admin/links src/app/acquired-documents src/app/clients/\[id\]/acquired-documents tests/admin-formalization*.test.ts tests/admin-private-document-versions*.test.ts tests/admin-operational-links-db.test.ts tests/admin-residuals --max-warnings 0
+          node --import tsx --test --test-reporter=tap tests/admin-record-values.test.ts tests/admin-privileged-window.test.ts tests/admin-catalog-revision.test.ts tests/admin-role-profile.test.ts tests/admin-private-document-versions.test.ts tests/admin-formalization-history.test.ts | tee "$ADMIN_RECORD_EVIDENCE/unit.tap"
+          grep -Fx '# tests 30' "$ADMIN_RECORD_EVIDENCE/unit.tap"
+          grep -Fx '# pass 30' "$ADMIN_RECORD_EVIDENCE/unit.tap"
+          grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/unit.tap"
+          grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/unit.tap"
       - name: PostgreSQL correction, lifecycle, concurrency, reconciliation and rollback
         if: matrix.target == 'postgresql'
         shell: bash
@@ -97,6 +106,26 @@ jobs:
           grep -Fx '# pass 13' "$ADMIN_RECORD_EVIDENCE/draft-context-postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/draft-context-postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/draft-context-postgresql.tap"
+          node --import tsx --test --test-reporter=tap tests/admin-role-profiles-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/role-profiles-postgresql.tap"
+          grep -Fx '# tests 12' "$ADMIN_RECORD_EVIDENCE/role-profiles-postgresql.tap"
+          grep -Fx '# pass 12' "$ADMIN_RECORD_EVIDENCE/role-profiles-postgresql.tap"
+          grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/role-profiles-postgresql.tap"
+          grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/role-profiles-postgresql.tap"
+          node --import tsx --test --test-reporter=tap tests/admin-operational-links-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/operational-links-postgresql.tap"
+          grep -Fx '# tests 9' "$ADMIN_RECORD_EVIDENCE/operational-links-postgresql.tap"
+          grep -Fx '# pass 9' "$ADMIN_RECORD_EVIDENCE/operational-links-postgresql.tap"
+          grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/operational-links-postgresql.tap"
+          grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/operational-links-postgresql.tap"
+          node --import tsx --test --test-reporter=tap tests/admin-formalization-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/formalization-postgresql.tap"
+          grep -Fx '# tests 8' "$ADMIN_RECORD_EVIDENCE/formalization-postgresql.tap"
+          grep -Fx '# pass 8' "$ADMIN_RECORD_EVIDENCE/formalization-postgresql.tap"
+          grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/formalization-postgresql.tap"
+          grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/formalization-postgresql.tap"
+          node --import tsx --test --test-reporter=tap tests/admin-private-document-versions-db.test.ts | tee "$ADMIN_RECORD_EVIDENCE/private-versions-postgresql.tap"
+          grep -Fx '# tests 12' "$ADMIN_RECORD_EVIDENCE/private-versions-postgresql.tap"
+          grep -Fx '# pass 12' "$ADMIN_RECORD_EVIDENCE/private-versions-postgresql.tap"
+          grep -Fx '# fail 0' "$ADMIN_RECORD_EVIDENCE/private-versions-postgresql.tap"
+          grep -Fx '# skipped 0' "$ADMIN_RECORD_EVIDENCE/private-versions-postgresql.tap"
       - name: Prepare isolated browser accounts
         if: matrix.target == 'browser'
         run: |
@@ -117,7 +146,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_RECORD_EVIDENCE/playwright.json" npx playwright test --config tests/admin-records/playwright.config.ts --reporter=line,json
-          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==35 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.ADMIN_RECORD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==43 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Preserve exact source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$ADMIN_RECORD_EVIDENCE/source.txt"

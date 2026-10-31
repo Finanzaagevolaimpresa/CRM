@@ -359,6 +359,8 @@ export default async function Page({
                   <StatusBadge status={p.startedAt ? "avviata" : "in_attesa"} />
                 </div>
                 <AdminOperationalShortcut session={session} model="PracticeReadiness" id={p.id} state={p.lifecycleState}/>
+                {session.role === 'admin' && p.currentFormalizationId && <p><Link className="font-bold underline" href={'/admin/links/PracticeReadiness/' + p.id}>Rettifica contratto, versione firmata e servizio collegato</Link></p>}
+                {p.administrativeFormalizationCorrection && <p>Collegamenti rettificati dall’Admin il {new Date(p.administrativeFormalizationCorrection.at).toLocaleString('it-IT')}. La formalizzazione e l’eventuale avvio originali restano nello storico; questa rettifica non registra una nuova accettazione o un nuovo avvio.</p>}
                 {!p.operational&&<p>Pratica o acquisizione sospesa amministrativamente. Le prove restano consultabili.</p>}
                 <p>Residui: {missing.join(", ") || "nessuno"}</p>
                 {canViewPayments ? <p>

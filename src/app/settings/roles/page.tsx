@@ -26,11 +26,11 @@ function hasDossierWrite(perms: readonly string[]) { return perms.includes('*') 
 function hasDossierRead(perms: readonly string[]) { return perms.includes('*') || perms.includes('dossier.read'); }
 
 export default async function Page() {
-  await requirePermission('settings.manage');
+  const session = await requirePermission('settings.manage');
 
   const rows = Object.entries(rolePermissions).map(([role, perms]) => [
     <Badge key="role" tone={role === 'admin' ? 'green' : role === 'direzione' ? 'purple' : 'blue'}>{role}</Badge>,
-    <span key="description">{roleDescriptions[role] ?? 'Ruolo interno configurato nel sistema.'}<br/><Link className="font-bold underline" href={`/settings/users?role=${encodeURIComponent(role)}`}>Scegli un account di questo ruolo e gestisci i permessi</Link></span>,
+    <span key="description">{roleDescriptions[role] ?? 'Ruolo interno configurato nel sistema.'}<br/><Link className="font-bold underline" href={`/settings/users?role=${encodeURIComponent(role)}`}>Scegli un account di questo ruolo e gestisci i permessi</Link>{session.role === 'admin' && role !== 'admin' && <><br/><Link className="font-bold underline" href={'/settings/roles/' + role}>Modifica il profilo per i nuovi account</Link></>}</span>,
     <span key="dossier" className="block"><span className="font-semibold">Dossier:</span> lettura {hasDossierRead(perms) ? 'abilitata' : 'non abilitata'} · scrittura {hasDossierWrite(perms) ? 'abilitata' : 'non abilitata'}<br />{describePermissions(perms)}</span>,
   ]);
 
@@ -38,7 +38,7 @@ export default async function Page() {
     <div className="crm-space-y-6">
       <PageHeader
         title="Ruoli e permessi"
-        description="Profili di base del CRM. Scegli un account per gestire ruolo, eccezioni e accesso; le concessioni su clienti, progetti e documenti si decidono nel loro contesto."
+        description="Profili del CRM: l’Admin può versionare i permessi per i nuovi account e applicarli esplicitamente a un account esistente. Le concessioni su clienti, progetti e documenti si decidono nel loro contesto."
       />
       <Card title="Matrice operativa ruoli interni">
         <Table headers={['Ruolo', 'Profilo e gestione account', 'Permessi di base']} rows={rows} />

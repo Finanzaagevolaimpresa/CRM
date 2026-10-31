@@ -265,7 +265,7 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 73);
+    assert.equal(data.ledger.length, 74);
     assert.equal(data.adminRecordRevisions.length, 4); assert.equal(data.adminRecordAudit.length, 4);
     assert.equal(data.adminRecordClients.length, 1); assert.equal(data.adminRecordClients[0].deletedAt, null);
     assert.equal(data.adminOperationalRevisions.length,4);assert.equal(data.adminOperationalAudit.length,4);
@@ -279,7 +279,7 @@ async function main() {
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261030100000_admin_operational_lifecycle_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261030190000_admin_residual_provenance_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
 
 export const adminUserOperation = z.enum(['CREATE', 'ROLE', 'ACTIVATE', 'DEACTIVATE', 'OVERRIDES', 'RESET_OVERRIDES',
-  'PROFILE', 'PASSWORD_RESET', 'REMOVE', 'RESTORE', 'REVOKE_SESSIONS', 'REVOKE_SESSION']);
+  'PROFILE', 'PASSWORD_RESET', 'REMOVE', 'RESTORE', 'REVOKE_SESSIONS', 'REVOKE_SESSION', 'APPLY_ROLE_PROFILE']);
 export type AdminUserOperation = z.infer<typeof adminUserOperation>;
 export const adminUserCommandIdentity = z.object({ commandId: z.string().uuid(), operation: adminUserOperation,
   userId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/) }).strict();

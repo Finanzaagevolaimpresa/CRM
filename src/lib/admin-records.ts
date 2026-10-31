@@ -218,7 +218,7 @@ async function admitPrivateItem(tx: Tx, actor: Actor, model: string, row: Row) {
 }
 /** Walk ordinary parent links before exposing or changing a child. A child
  * without clientId must not bypass an exclusion on its project or document. */
-async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Row, seen = new Set<string>()) {
+export async function assertAdminRecordContextVisible(tx: Tx, actor: Actor, model: string, row: Row, seen = new Set<string>()) {
   const key = `${model}:${row.id}`;
   if (seen.has(key)) return;
   seen.add(key);
@@ -255,6 +255,7 @@ async function assertContextVisible(tx: Tx, actor: Actor, model: string, row: Ro
     await assertContextVisible(tx, actor, String(row.entityType), parent, seen);
   }
 }
+const assertContextVisible = assertAdminRecordContextVisible;
 async function linkedRows(tx: Tx, model: string, row: Row, actor: Actor) {
   const links = new Map<string, Row>();
   const policy = adminRecordPolicy(model), fields = metadata(model).fields;
@@ -850,7 +851,7 @@ export async function closeAdminRecordAttempt(db: PrismaClient, session: AuthSes
 
 const referenceModels = ['Lead', 'Client', 'Company', 'Person', 'Project', 'TechnicalPractice', 'ClientService', 'Contract', 'Payment', 'Document', 'DocumentVersion', 'ServiceCatalog', 'GrantAssessment', 'PreAnalysis', 'IncorporationSubject', 'User'];
 const deadlineModels = ['Client', 'Project', 'TechnicalPractice', 'Task', 'ClientService'];
-async function referenceRows(tx: Tx, actor: Actor, model: string, query = '', page = 1) {
+export async function adminReferenceRows(tx: Tx, actor: Actor, model: string, query = '', page = 1) {
   if (![...referenceModels, ...deadlineModels].includes(model)) fail('INVALID');
   if (model === 'DocumentVersion') {
     if (!recordUpdatePermission(actor, 'document.download')) fail('DENIED');
@@ -894,10 +895,11 @@ export async function searchAdminRecordReferences(db: PrismaClient, session: Aut
   if (!target || ![...referenceModels, ...deadlineModels].includes(target)) fail('INVALID');
   return withSerializableTransaction(db, async tx => {
     const current = await auth(tx, session, policy);
-    const result = await referenceRows(tx, current.actor, target, input.query, input.page);
+    const result = await adminReferenceRows(tx, current.actor, target, input.query, input.page);
     await current.finish(); return result;
   });
 }
+const referenceRows = adminReferenceRows;
 async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor: Awaited<ReturnType<typeof updateActor>>['actor']) {
   const values: Record<string, string> = {}, result: AdminField[] = [];
   let editable = policy.historyOnly ? [] : [...policy.fields];
@@ -998,6 +1000,7 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
       return company && admittedRow(current.actor, company) ? [{ label: `${company.name} · ${link.role}`, href: `/companies/${company.id}` }] : [];
     });
     if (memberships.length !== relationships.length) fail('DENIED');
+    if (row && ['Lead', 'Client', 'ClientService'].includes(model)) relationships.push({ label: 'Correggi i collegamenti operativi · anteprima e storico', href: '/admin/links/' + model + '/' + id });
     if (['ControlledIntake','CommunicationReply'].includes(model) && row) relationships.push({ label: 'Blocco, archivio e ripristino', href: `/admin/lifecycle/${model}/${id}` });
     if (model === 'ControlledIntake' && row?.leadId) relationships.push({ label: 'Apri il lead: dati correnti, assegnazione e archivio', href: `/leads/${row.leadId}` });
     if (model === 'PrivacyEvidenceReceipt' && row?.noticeVersionId) relationships.push({ label: 'Apri la versione originale dell’informativa', href: `/admin/records/PrivacyNoticeVersion/${row.noticeVersionId}` });

@@ -34,7 +34,7 @@ constraint > "$evidence/constraint-after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 cmp "$evidence/constraint-before.txt" "$evidence/constraint-after-fault.txt"
 npm run prisma:migrate:deploy
-test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 73
+test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 74
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261028180000_record_deadline_reminders_v1' ORDER BY migration_name" > "$evidence/prefix70-after.txt"
 cmp "$evidence/prefix70-before.txt" "$evidence/prefix70-after.txt"
 footprint "$evidence/after.txt"
@@ -48,5 +48,5 @@ node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"
 psql "$db" -X -At -v ON_ERROR_STOP=1 -f scripts/record-reminders/schema71-structure.sql > "$evidence/structure.json"
 node scripts/record-reminders/verify-structure.mjs "$evidence/structure.json"
-printf '{"synthetic":true,"before":70,"after":73,"reminderIntroducedAt":71,"prefix70Unchanged":true,"allPriorRowsAndRelationsPreserved":true,"previousUpdatesAndReadReceiptsPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"previousCommandConstraintRestoredOnFailure":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
+printf '{"synthetic":true,"before":70,"after":74,"reminderIntroducedAt":71,"prefix70Unchanged":true,"allPriorRowsAndRelationsPreserved":true,"previousUpdatesAndReadReceiptsPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"previousCommandConstraintRestoredOnFailure":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
 cat "$evidence/proof.json"

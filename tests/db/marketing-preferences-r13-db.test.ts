@@ -51,7 +51,7 @@ test('R13 proposal creates empty ledgers without advancing the operational migra
       (SELECT count(*)::INT FROM "MarketingPreferenceEvent") AS events,
       (SELECT count(*)::INT FROM "MarketingPreferenceEpoch") AS epochs
   `);
-  assert.deepEqual(row, { migrations: 73, subjects: 0, events: 0, epochs: 0 });
+  assert.deepEqual(row, { migrations: 74, subjects: 0, events: 0, epochs: 0 });
 });
 
 test('SQL persists an anonymous block atomically and denies replay mutation and direct ledger rewriting', { skip: !enabled }, async () => {

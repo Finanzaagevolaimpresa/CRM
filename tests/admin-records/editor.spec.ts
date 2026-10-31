@@ -920,3 +920,212 @@ test('interrupted replacement closes before a new command and a late POST cannot
   await page.getByRole('link',{name:'Apri e verifica la bozza sostitutiva',exact:true}).click();
   expect(await db.approvedCommunication.count({where:{id:commandId}})).toBe(0);expect(await db.approvedCommunication.count({where:{id:fresh}})).toBe(1);
 });
+
+test('role profile choices survive confirmation expiry and the chosen preset creates a reopened account', async ({ page, context }) => {
+  await login(page); await page.goto('/settings/roles/backoffice');
+  const selection = page.getByRole('combobox', { name: 'Profilo · Modificare lead', exact: true });
+  await selection.selectOption('allow');
+  await page.getByRole('textbox', { name: 'Motivazione', exact: true }).fill('Profilo sintetico browser per nuovi account');
+  await page.getByRole('checkbox', { name: 'Confermo il profilo per i nuovi account.', exact: true }).check();
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await page.getByRole('button', { name: 'Registra profilo del ruolo', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible(); await expect(selection).toHaveValue('allow');
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await expect(selection).toHaveValue('allow');
+  await page.getByRole('button', { name: 'Registra profilo del ruolo', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica il profilo', exact: true }).click();
+  await expect(selection).toHaveValue('allow');
+  await page.goto('/settings/users');
+  const form = page.getByRole('form', { name: 'Crea utente interno', exact: true }), email = randomUUID() + '@example.test';
+  await form.getByPlaceholder('Nome', { exact: true }).fill('Account da profilo browser');
+  await form.getByPlaceholder('email@azienda.it').fill(email);
+  await form.locator('select[name="role"]').selectOption('backoffice');
+  await expect(form).toContainText('Profilo selezionato · revisione 1');
+  await form.getByPlaceholder('Password temporanea').fill(password);
+  await form.getByRole('button', { name: 'Crea utente', exact: true }).click();
+  await expect(form.getByRole('status')).toContainText('Operazione account registrata.');
+  const user = await db.user.findUniqueOrThrow({ where: { email }, include: { permissionOverrides: true } });
+  expect(user.permissionOverrides.find(value => value.permission === 'lead.write')?.allowed).toBe(true);
+  await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Applica il profilo del ruolo', exact: true })).toBeVisible();
+});
+
+test('an existing account receives the explicitly displayed profile after reconfirmation without changing another account', async ({ page, context }) => {
+  const { syntheticPerson } = await import('../selective-sharing/fixtures');
+  const target = await syntheticPerson(db, 'Profilo selezionato browser', 'backoffice'), other = await syntheticPerson(db, 'Profilo altro browser', 'backoffice');
+  await login(page); await page.goto('/settings/users/' + target.user.id);
+  const form = page.getByRole('form', { name: 'Applica profilo del ruolo', exact: true });
+  await form.getByRole('checkbox', { name: 'Confermo questa versione e la sostituzione delle eccezioni individuali.', exact: true }).check();
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await form.getByRole('button', { name: 'Applica profilo a questo account', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible();
+  await expect(form.getByRole('checkbox')).toBeChecked();
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await form.getByRole('button', { name: 'Applica profilo a questo account', exact: true }).click();
+  await expect(form.getByRole('status')).toContainText('Operazione account registrata.');
+  await page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
+  expect(await db.userPermissionOverride.findFirst({ where: { userId: target.user.id, permission: 'lead.write', allowed: true } })).not.toBeNull();
+  expect(await db.userPermissionOverride.count({ where: { userId: other.user.id } })).toBe(0);
+  expect(await db.auditLog.count({ where: { entityId: target.user.id, event: 'admin_role_profile_applied' } })).toBe(1);
+});
+
+test('lost profile response recovers one revision and an absent later attempt closes before any new command', async ({ page }) => {
+  await login(page); await page.goto('/settings/roles/commerciale');
+  await page.getByRole('combobox', { name: 'Profilo · Modificare lead', exact: true }).selectOption('deny');
+  await page.getByRole('textbox', { name: 'Motivazione', exact: true }).fill('Profilo sintetico risposta persa');
+  await page.getByRole('checkbox', { name: 'Confermo il profilo per i nuovi account.', exact: true }).check();
+  let posts = 0, lost = false; const pattern = '**/settings/roles/*';
+  await page.route(pattern, async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts++; await route.fetch(); lost = true; await route.abort('failed');
+  });
+  await page.getByRole('button', { name: 'Registra profilo del ruolo', exact: true }).click();
+  await expect.poll(() => lost).toBe(true); await page.unroute(pattern);
+  const saved = new URL(page.url()).searchParams.get('decision')!;
+  await page.reload(); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Profilo già registrato.');
+  expect(posts).toBe(1); expect(await db.adminRecordRevision.count({ where: { commandId: saved } })).toBe(1);
+  await page.getByRole('link', { name: 'Riapri e verifica il profilo', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Profilo · Modificare lead', exact: true }).selectOption('inherit');
+  await page.getByRole('textbox', { name: 'Motivazione', exact: true }).fill('Profilo sintetico tentativo interrotto');
+  await page.getByRole('checkbox', { name: 'Confermo il profilo per i nuovi account.', exact: true }).check();
+  await page.route(pattern, route => route.request().method() === 'POST' ? route.abort('failed') : route.continue());
+  await page.getByRole('button', { name: 'Registra profilo del ruolo', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Verifica esito registrato', exact: true })).toBeVisible();
+  const absent = new URL(page.url()).searchParams.get('decision')!;
+  await page.unroute(pattern); await page.reload();
+  await page.getByRole('checkbox', { name: 'Chiudi solo un tentativo privo di effetto.', exact: true }).check();
+  await page.getByRole('button', { name: 'Riconcilia e chiudi il tentativo', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza modifica.');
+  expect((await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: absent } })).operation).toBe('CLOSE');
+  expect(await db.adminRecordRevision.count({ where: { model: 'AdminRoleProfile', recordId: 'commerciale', operation: 'UPDATE' } })).toBe(1);
+});
+
+async function chooseOperationalReference(page: Page, label: string, id: string) {
+  const select = page.getByRole('combobox', { name: label, exact: true }), wrapper = select.locator('..').locator('..');
+  if (id) {
+    await wrapper.getByRole('textbox', { name: 'Cerca ' + label, exact: true }).fill(id);
+    await wrapper.getByRole('button', { name: 'Cerca collegamenti', exact: true }).click();
+    await expect(select).toBeEnabled();
+  }
+  await select.selectOption(id);
+}
+async function confirmOperationalPreview(page: Page, reason: string) {
+  await page.getByRole('button', { name: 'Prepara anteprima dei collegamenti', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Confermo tutti i collegamenti mostrati e la conservazione delle prove storiche.', exact: true }).check();
+  await page.getByRole('textbox', { name: 'Motivazione', exact: true }).fill(reason);
+}
+test('reciprocal lead and client links survive reconfirmation and reopen with the chosen operational relationship', async ({ page, context }) => {
+  const lead = await db.lead.create({ data: { firstName: 'Browser', lastName: 'Collegamento sintetico' } });
+  const client = await db.client.create({ data: { displayName: 'Cliente collegamento browser ' + randomUUID(), type: 'societa' } });
+  await login(page); await page.goto('/admin/links/Lead/' + lead.id);
+  await chooseOperationalReference(page, 'Cliente operativo', client.id);
+  await confirmOperationalPreview(page, 'Rettifica sintetica dal browser');
+  await expect(page.getByRole('region', { name: 'Riepilogo collegamenti' })).toContainText(client.displayName);
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await page.getByRole('button', { name: 'Registra rettifica dei collegamenti', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
+  await expect(inline).toBeVisible(); await expect(page.getByRole('combobox', { name: 'Cliente operativo', exact: true })).toHaveValue(client.id);
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
+  await page.getByRole('button', { name: 'Registra rettifica dei collegamenti', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica i collegamenti', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Cliente operativo', exact: true })).toHaveValue(client.id);
+  expect((await db.client.findUniqueOrThrow({ where: { id: client.id } })).leadId).toBe(lead.id);
+  await chooseOperationalReference(page, 'Cliente operativo', '');
+  await confirmOperationalPreview(page, 'Scollegamento esplicito sintetico');
+  await page.getByRole('button', { name: 'Registra rettifica dei collegamenti', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica i collegamenti', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Cliente operativo', exact: true })).toHaveValue('');
+  expect((await db.client.findUniqueOrThrow({ where: { id: client.id } })).leadId).toBeNull();
+});
+test('lost operational-link response recovers one atomic relationship and never retries blindly', async ({ page }) => {
+  const lead = await db.lead.create({ data: { firstName: 'Browser', lastName: 'Recupero collegamento' } });
+  const client = await db.client.create({ data: { displayName: 'Cliente recupero browser ' + randomUUID(), type: 'societa' } });
+  await login(page); await page.goto('/admin/links/Lead/' + lead.id);
+  await chooseOperationalReference(page, 'Cliente operativo', client.id); await confirmOperationalPreview(page, 'Esito collegamento sintetico');
+  let completed = false, posts = 0; const pattern = '**/admin/links/**';
+  await page.route(pattern, async route => { if (route.request().method() !== 'POST') return route.continue(); posts++; await route.fetch(); completed = true; await route.abort('failed'); });
+  await page.getByRole('button', { name: 'Registra rettifica dei collegamenti', exact: true }).click();
+  await expect.poll(() => completed).toBe(true); const commandId = new URL(page.url()).searchParams.get('decision')!;
+  await page.unroute(pattern); await page.reload();
+  await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Rettifica già registrata.');
+  expect(posts).toBe(1); expect(await db.adminRecordRevision.count({ where: { commandId } })).toBe(1);
+  expect((await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).clientId).toBe(client.id);
+});
+test('an existing signed practice exposes the current contract correction and keeps its original start evidence', async ({ page }) => {
+  const user = await db.user.findUniqueOrThrow({ where: { email: f.adminEmail } }), person = await syntheticSession(db, user);
+  const source = await lifecycleReadinessFixture(db, person.session), practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: source.practice.id } });
+  const contract = await db.contract.findUniqueOrThrow({ where: { id: practice.contractId! } });
+  const alternative = await db.contract.create({ data: { clientId: contract.clientId, projectId: contract.projectId, contractNumber: randomUUID(),
+    serviceName: contract.serviceName, taxableAmount: contract.taxableAmount, vatAmount: contract.vatAmount, totalAmount: contract.totalAmount,
+    status: 'firmato', signedAt: contract.signedAt, signedDocumentId: contract.signedDocumentId } });
+  await login(page); await page.goto('/admin/links/PracticeReadiness/' + practice.id);
+  await chooseOperationalReference(page, 'Contratto firmato', alternative.id); await confirmOperationalPreview(page, 'Rettifica incarico browser sintetico');
+  await page.getByRole('button', { name: 'Registra rettifica dei collegamenti', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica i collegamenti', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Contratto firmato', exact: true })).toHaveValue(alternative.id);
+  const current = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  expect(current.startEvidence).toEqual(practice.startEvidence); expect(current.currentFormalizationId).toBe(practice.currentFormalizationId);
+  await page.getByRole('link', { name: 'Torna ai dati della scheda', exact: true }).click();
+  await expect(page.locator('#practice-' + practice.id)).toContainText('Collegamenti rettificati dall’Admin');
+});
+test('private binary upload survives confirmation expiry and restoration creates a reopened third version', async ({ page, context }) => {
+  const source = await browserPrivateMetadata(), id = source.receipt.documentId;
+  await login(page); await page.goto('/admin/private-documents/' + id + '/versions');
+  await page.getByLabel('Nuovo file · massimo 25 MB', { exact: true }).setInputFiles({ name: 'browser-versione.txt', mimeType: 'text/plain', buffer: Buffer.from('BYTE_BROWSER_VERSIONE_2') });
+  await page.getByLabel('Motivazione', { exact: true }).fill('Versione sintetica browser');
+  await page.getByRole('checkbox', { name: 'Confermo la nuova versione, la conservazione delle precedenti e l’invalidazione delle vecchie selezioni.', exact: true }).check();
+  await context.clearCookies({ name: 'fai_crm_privileged_step_up' });
+  await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click();
+  const inline = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true }); await expect(inline).toBeVisible();
+  await expect(page.getByText('Scelta: browser-versione.txt · 23 byte', { exact: true })).toBeVisible();
+  await inline.getByLabel('Password corrente', { exact: true }).fill(password);
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click(); await expect(inline).toContainText('Identità confermata.');
+  await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica le versioni', exact: true }).click();
+  await expect(page.getByText('Versione 2 · browser-versione.txt', { exact: true })).toBeVisible();
+  const href = await page.getByRole('link', { name: 'Scarica versione 2', exact: true }).getAttribute('href');
+  const bytes = await page.request.get(href!); expect(bytes.status()).toBe(200); expect((await bytes.body()).toString()).toBe('BYTE_BROWSER_VERSIONE_2');
+  await page.getByLabel('Oppure riprendi una versione precedente', { exact: true }).selectOption(source.receipt.versionId);
+  await page.getByLabel('Motivazione', { exact: true }).fill('Ripristino sintetico dei byte originali');
+  await page.getByRole('checkbox', { name: 'Confermo la nuova versione, la conservazione delle precedenti e l’invalidazione delle vecchie selezioni.', exact: true }).check();
+  await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica le versioni', exact: true }).click();
+  const restored = await page.getByRole('link', { name: 'Scarica versione 3', exact: true }).getAttribute('href');
+  expect(await (await page.request.get(restored!)).body()).toEqual(source.bytes);
+  expect(await db.documentVersion.count({ where: { documentId: id } })).toBe(3);
+});
+test('a lost private binary response is reconciled once and an absent upload is terminally closed', async ({ page }) => {
+  const source = await browserPrivateMetadata(), id = source.receipt.documentId, path = '/admin/private-documents/' + id + '/versions', pattern = '**/admin/private-documents/*/versions*';
+  async function choose() {
+    await page.getByLabel('Nuovo file · massimo 25 MB', { exact: true }).setInputFiles({ name: 'recupero.txt', mimeType: 'text/plain', buffer: Buffer.from('RECUPERO_SINTETICO') });
+    await page.getByLabel('Motivazione', { exact: true }).fill('Caricamento sintetico interrotto');
+    await page.getByRole('checkbox', { name: 'Confermo la nuova versione, la conservazione delle precedenti e l’invalidazione delle vecchie selezioni.', exact: true }).check();
+  }
+  await login(page); await page.goto(path); await choose();
+  let completed = false, posts = 0;
+  await page.route(pattern, async route => { if (route.request().method() !== 'POST') return route.continue(); posts++; await route.fetch(); completed = true; await route.abort('failed'); });
+  await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click(); await expect.poll(() => completed).toBe(true);
+  await page.unroute(pattern); await page.reload(); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Versione già registrata.'); expect(posts).toBe(1);
+  expect(await db.documentVersion.count({ where: { documentId: id } })).toBe(2);
+  await page.getByRole('link', { name: 'Riapri e verifica le versioni', exact: true }).click(); await choose();
+  await page.route(pattern, route => route.request().method() === 'POST' ? route.abort('failed') : route.continue());
+  await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Verifica esito registrato', exact: true })).toBeVisible();
+  const absent = new URL(page.url()).searchParams.get('decision')!; await page.unroute(pattern); await page.reload();
+  await page.getByRole('checkbox', { name: 'Chiudi il tentativo soltanto se non ha prodotto una versione.', exact: true }).check();
+  await page.getByRole('button', { name: 'Riconcilia e chiudi il tentativo', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Tentativo chiuso senza versione registrata.');
+  expect((await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: absent } })).operation).toBe('CLOSE');
+  expect(await db.documentVersion.count({ where: { documentId: id } })).toBe(2);
+});
