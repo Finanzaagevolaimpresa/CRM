@@ -61,7 +61,7 @@ export function AdminOperationalLinkEditor({ data, commandId: initialCommandId, 
       <button className="block underline" disabled={busy} onClick={() => void reconcile()}>Verifica esito registrato</button>
       <label><input type="checkbox" checked={closeConfirmed} onChange={e => setCloseConfirmed(e.target.checked)}/> Chiudi soltanto se il tentativo non ha prodotto una rettifica.</label>
       <button className="block underline" disabled={busy || !closeConfirmed} onClick={() => void reconcile(true)}>Riconcilia e chiudi il tentativo</button></section>}
-    {(result?.ok || result?.closed) && <Link className="block font-bold underline" href={path}>Riapri e verifica i collegamenti</Link>}
+    {(result?.ok || result?.closed) && <a className="block font-bold underline" href={path}>Riapri e verifica i collegamenti</a>}
     <section className="space-y-3"><h2 className="font-bold">Cronologia delle rettifiche</h2>{data.history.map(h => <div className="border rounded-xl p-3 space-y-2" key={h.commandId}>
       <p>{new Date(h.at).toLocaleString('it-IT')} · {h.actor} · {h.reason}</p>
       <details><summary className="cursor-pointer underline">Identificativi e collegamenti conservati nella rettifica</summary>

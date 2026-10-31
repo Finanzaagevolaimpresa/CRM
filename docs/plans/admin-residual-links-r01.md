@@ -64,6 +64,14 @@ Richiede schema73 e il checksum qualificato della migrazione precedente; non ris
 Prima di qualsiasi esecuzione produttiva: candidato esatto, CI richiesta verde, riesame indipendente pertinente, qualificazione SQL isolata, backup/ripristino fresco e piano deploy/rollback esatto.
 Il rollback applicativo deve essere compatibile con le nuove versioni già presenti: il precedente lettore limitato a una versione non costituisce un rollback funzionale completo dopo l’uso di L03. L’eventuale ripristino DB rimane un’operazione qualificata separata.
 
+La qualificazione R05 costruisce un’immagine di ritorno distinta: base PR245 più lettori compatibili, schema74 e dipendenze corrette, senza esporre i nuovi editor L01–L04. `scripts/admin-residuals/compose-compatibility.mjs` produce commit e tree deterministici senza cambiare HEAD, indice o branch. Manifesto, archivio sorgente e immagini sono conservati nell’artefatto CI. La prova attraversa candidato → avvio negato con sessioni precedenti → revoca sintetica esplicita → immagine compatibile → ripresa del candidato. Verifica i byte delle versioni1 e2, isolamento, rettifica corrente con formalizzazione originale conservata e permessi individuali dopo un nuovo login. Il ritorno conserva i dati e la consultazione; i nuovi editor restano sospesi fino alla ripresa del candidato. Questa è la procedura predisposta, non un PASS anticipato.
+
+## Correzione della dipendenza di lint
+
+La CI del primo candidato ha rilevato GHSA-g3hv-75wg-m249 in minimatch. Il lock usa soltanto la versione11.0.1 corretta; nessuna eccezione viene aggiunta a npm audit o OSV. L’adattatore `scripts/lint-minimatch-compat.mjs` espone ai plugin di lint il vecchio export CommonJS chiamabile usando il nuovo motore. Per l’unico consumatore di `makeRe`, eslint-plugin-import/no-internal-modules, espone il metodo `test` del matcher: non ricrea un generatore di espressioni regolari. È una compatibilità circoscritta agli strumenti installati, da riqualificare a ogni aggiornamento. Il test esercita realmente le regole React e import, oltre a confrontare i risultati con l’API ESM della versione corretta.
+
+Fonte primaria: https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249.
+
 ## Prove predisposte e limiti dell’attestazione
 
 Nuovi test: 4 unitari profili, 6 unitari integrità versioni, 7 unitari provenienza delle rettifiche; 12 PostgreSQL profili, 9 collegamenti, 8 formalizzazione, 12 versioni; 8 casi browser aggiuntivi complessivi rispetto a PR245 (3 profili e 5 collegamenti/versioni).

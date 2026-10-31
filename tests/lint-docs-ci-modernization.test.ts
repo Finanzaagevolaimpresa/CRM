@@ -24,7 +24,7 @@ test('N08 CI resolves Node from the repository and preserves the full release ga
   assert.match(ci, /cache-dependency-path:\s*package-lock\.json/);
   assert.match(ci, /run:\s*npm run typecheck/);
   assert.match(ci, /run:\s*npm run lint/);
-  assert.match(ci, /Verify historical schema44 then apply current schema73/);
+  assert.match(ci, /Verify historical schema44 then apply current schema74/);
   assert.match(ci, /Run PostgreSQL integration tests/);
   assert.match(ci, /Docker production application and worker packaging smoke test/);
   assert.match(ci, /N05 synthetic backup, full restore and N-1 rollback drill/);

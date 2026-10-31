@@ -788,7 +788,10 @@ test('private metadata survives inline confirmation and reopens the correction a
   expect({...after,selectiveEpoch:original.selectiveEpoch}).toEqual(original);expect(after.selectiveEpoch).toBe(original.selectiveEpoch+2);
   expect(await db.adminRecordRevision.count({where:{model:'AdminPrivateDocumentMetadata',recordId:id,operation:'UPDATE'}})).toBe(2);
   await page.getByRole('link',{name:'Torna ai documenti acquisiti',exact:true}).click();
-  await expect(page.getByRole('link',{name:'Scarica documento acquisito',exact:true})).toBeVisible();
+  const download = page.getByRole('link',{name:'Scarica versione 1',exact:true});
+  await expect(download).toHaveAttribute('href','/acquired-documents/'+id+'?version='+source.receipt.versionId+'&download=1');
+  const response = await page.request.get((await download.getAttribute('href'))!);
+  expect(response.status()).toBe(200); expect(await response.body()).toEqual(source.bytes);
 });
 test('a lost private metadata response reconciles after reload with one source-preserving correction',async({page})=>{
   const source=await browserPrivateMetadata(),id=source.receipt.documentId;
@@ -1092,7 +1095,7 @@ test('private binary upload survives confirmation expiry and restoration creates
   await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click(); await expect(inline).toContainText('Identità confermata.');
   await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click();
   await page.getByRole('link', { name: 'Riapri e verifica le versioni', exact: true }).click();
-  await expect(page.getByText('Versione 2 · browser-versione.txt', { exact: true })).toBeVisible();
+  await expect(page.getByRole('article').filter({ hasText: 'Versione 2 · browser-versione.txt' })).toBeVisible();
   const href = await page.getByRole('link', { name: 'Scarica versione 2', exact: true }).getAttribute('href');
   const bytes = await page.request.get(href!); expect(bytes.status()).toBe(200); expect((await bytes.body()).toString()).toBe('BYTE_BROWSER_VERSIONE_2');
   await page.getByLabel('Oppure riprendi una versione precedente', { exact: true }).selectOption(source.receipt.versionId);
@@ -1118,7 +1121,11 @@ test('a lost private binary response is reconciled once and an absent upload is 
   await page.unroute(pattern); await page.reload(); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Versione già registrata.'); expect(posts).toBe(1);
   expect(await db.documentVersion.count({ where: { documentId: id } })).toBe(2);
-  await page.getByRole('link', { name: 'Riapri e verifica le versioni', exact: true }).click(); await choose();
+  const recordedCommand = new URL(page.url()).searchParams.get('command');
+  await page.getByRole('link', { name: 'Riapri e verifica le versioni', exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get('command')).not.toBe(recordedCommand);
+  expect(new URL(page.url()).searchParams.has('decision')).toBe(false);
+  await choose();
   await page.route(pattern, route => route.request().method() === 'POST' ? route.abort('failed') : route.continue());
   await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Verifica esito registrato', exact: true })).toBeVisible();

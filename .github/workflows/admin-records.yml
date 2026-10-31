@@ -62,7 +62,8 @@ jobs:
           evidence="$RUNNER_TEMP/admin-records"
           mkdir -p "$evidence"
           echo "ADMIN_RECORD_EVIDENCE=$evidence" >> "$GITHUB_ENV"
-          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$evidence/synthetic-files" >> "$GITHUB_ENV"
+          export LOCAL_DOCUMENT_STORAGE_ROOT="$evidence/synthetic-files"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$LOCAL_DOCUMENT_STORAGE_ROOT" >> "$GITHUB_ENV"
           node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           if [[ '${{ matrix.target }}' == migration ]]; then

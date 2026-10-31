@@ -72,7 +72,7 @@ export function AdminRoleProfileEditor({ data, commandId: initialCommandId, reco
       <label><input type="checkbox" checked={closeConfirmed} onChange={event => setCloseConfirmed(event.target.checked)}/> Chiudi solo un tentativo privo di effetto.</label>
       <button disabled={busy || !closeConfirmed} className="block underline" onClick={() => void reconcile(true)}>Riconcilia e chiudi il tentativo</button>
     </section>}
-    {(result?.ok || result?.closed) && <Link className="block underline" href={path}>Riapri e verifica il profilo</Link>}
+    {(result?.ok || result?.closed) && <a className="block underline" href={path}>Riapri e verifica il profilo</a>}
     <button disabled={frozen} className="underline" onClick={() => restore({ overrides: [] })}>Riprendi la base del sistema nella bozza</button>
     <section className="space-y-3"><h2 className="font-bold">Cronologia · {data.totalRevisions} revisioni</h2>
       {data.history.map(row => <div className="rounded-xl border p-3" key={row.commandId}>
