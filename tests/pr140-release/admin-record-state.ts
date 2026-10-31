@@ -20,6 +20,8 @@ const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.CI, 'true'); await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   assert(process.env.R05_ADMIN_RECORD_RECOVERY_FIXTURE);
+  process.env.PRACTICE_READINESS_MODE = 'synthetic';
+  process.env.CONTROLLED_INTAKE_MODE = 'synthetic';
   process.env.PRIVILEGED_ACCESS_MODE = 'enforced';
   const owner = await db.user.findUniqueOrThrow({ where: { id: 'release-owner' } });
   const admin = await syntheticPerson(db, 'Synthetic Admin correction author', 'admin', owner.passwordHash);

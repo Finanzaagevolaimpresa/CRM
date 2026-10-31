@@ -72,6 +72,8 @@ La CI del primo candidato ha rilevato GHSA-g3hv-75wg-m249 in minimatch. Il lock 
 
 Fonte primaria: https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249.
 
+Anche l’immagine compatibile legge i profili salvati quando prepara e registra un nuovo account: il ritorno non ripristina silenziosamente i permessi compilati precedenti. Restano assenti i nuovi editor di collegamenti, versioni private e profili globali. I file del consumo del profilo per gli account sono quelli esatti del candidato, già coperti dai test PostgreSQL e browser; R05 verifica il riepilogo della revisione nel runtime di ritorno.
+
 ## Prove predisposte e limiti dell’attestazione
 
 Nuovi test: 4 unitari profili, 6 unitari integrità versioni, 7 unitari provenienza delle rettifiche; 12 PostgreSQL profili, 9 collegamenti, 8 formalizzazione, 12 versioni; 8 casi browser aggiuntivi complessivi rispetto a PR245 (3 profili e 5 collegamenti/versioni).

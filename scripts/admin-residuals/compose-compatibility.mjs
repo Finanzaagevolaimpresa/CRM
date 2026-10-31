@@ -18,6 +18,9 @@ const binding = JSON.parse(read('scripts/admin-residuals/schema-binding.json'));
 assert.equal(binding.baseline, baseline);
 assert.equal(hash(read('prisma/migrations/' + binding.migration + '/migration.sql')), binding.migrationSha256);
 const paths = [
+  'src/lib/admin-role-profile-contract.ts', 'src/lib/admin-role-profile-store.ts',
+  'src/lib/admin-user-command-contract.ts', 'src/lib/admin-user-commands.ts', 'src/lib/user-actions.ts',
+  'src/components/admin-role-profile-account.tsx', 'src/app/settings/users/page.tsx',
   'package.json', 'package-lock.json', 'eslint.config.mjs', 'scripts/lint-minimatch-compat.mjs',
   'src/lib/private-document-versions.ts', 'src/lib/technical-document-acquisition-persistence.ts',
   'src/lib/technical-document-acquired-access.ts', 'src/lib/selective-client-documents.ts',
@@ -51,13 +54,14 @@ try {
     GIT_COMMITTER_NAME: 'FAI Compatibility Builder', GIT_COMMITTER_EMAIL: 'compatibility@invalid.test',
     GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
   const commit = git(['-c', 'commit.gpgSign=false', 'commit-tree', tree, '-p', baseline],
-    { env: commitEnv, input: 'Compatibility readers for Admin residual candidate ' + candidate + '\n\nRetain schema74 provenance and prior individual permissions; new residual writers are absent.\n' });
+    { env: commitEnv, input: 'Compatibility readers for Admin residual candidate ' + candidate + '\n\nRetain schema74 provenance, individual permissions and stored profiles for new accounts; new residual editors are absent.\n' });
   assert.equal(git(['rev-parse', commit + '^{tree}']), tree);
   const changed = git(['diff-tree', '--no-commit-id', '--name-only', '-r', baseline, commit, '--', ...paths]).split('\n').filter(Boolean);
   assert.deepEqual(changed.sort(), [...paths].sort());
   console.log(JSON.stringify({ protocol: 'ADMIN_RESIDUAL_COMPATIBILITY_SOURCE_V1', baseline, baselineTree,
     candidate, candidateTree: git(['rev-parse', candidate + '^{tree}']), commit, tree, schema: 74, sqlSha256: binding.migrationSha256,
-    files, newResidualWritersExposed: false, originalSourceRowsRewritten: false, productionContact: false }));
+    files, linkAndPrivateVersionEditorsExposed: false, roleProfileEditorExposed: false,
+    accountCreationUsesStoredProfiles: true, originalSourceRowsRewritten: false, productionContact: false }));
 } finally {
   assert.equal(dirname(temporary), resolve(tmpdir()));
   assert(temporary.startsWith(join(tmpdir(), 'fai-admin-compat-index-')));

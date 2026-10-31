@@ -42,9 +42,10 @@ export function AdminPrivateDocumentVersionEditor({ data, commandId: initialComm
     <form className="space-y-4" onSubmit={e => { e.preventDefault(); void save(); }}><fieldset disabled={frozen} className="space-y-4">
       <label className="block font-semibold">Nuovo file · massimo 25 MB<input type="file" accept={documentUploadExtensions.join(',')} className="block w-full border rounded-xl p-3"
         onChange={e => { setFile(e.target.files?.[0] ?? null); setRestore(''); setConfirmed(false); }}/></label>
-      <label className="block font-semibold">Oppure riprendi una versione precedente<select className="block w-full border rounded-xl p-3" value={restoreVersionId}
+      <label className="block font-semibold" htmlFor="private-version-restore">Oppure riprendi una versione precedente</label>
+      <select id="private-version-restore" className="block w-full border rounded-xl p-3" value={restoreVersionId}
         onChange={e => { setRestore(e.target.value); setConfirmed(false); }}><option value="">Usa il nuovo file scelto</option>
-        {data.versions.map(v => <option key={v.versionId} value={v.versionId}>Versione {v.version} · {v.fileName}</option>)}</select></label>
+        {data.versions.map(v => <option key={v.versionId} value={v.versionId}>Versione {v.version} · {v.fileName}</option>)}</select>
       <p>Scelta: {restoreVersionId ? 'ripristino della versione ' + data.versions.find(v => v.versionId === restoreVersionId)?.version : file ? file.name + ' · ' + file.size + ' byte' : 'nessun file'}</p>
       <label className="block font-semibold">Motivazione<textarea required minLength={3} maxLength={2000} className="block w-full border rounded-xl p-3" value={reason} onChange={e => setReason(e.target.value)}/></label>
       <label className="block"><input type="checkbox" required checked={confirmed} onChange={e => setConfirmed(e.target.checked)}/> Confermo la nuova versione, la conservazione delle precedenti e l’invalidazione delle vecchie selezioni.</label>

@@ -38,6 +38,11 @@ test('schema74 candidate, compatible return and resume preserve corrections, exa
   await expect(practice).toContainText('contratto ' + f.originalContractId);
   await expect(practice.locator('p').filter({ hasText: /^Residui:/ })).not.toContainText('incarico_formalizzato');
   await expect(practice.locator('select[name="contractId"] option[value="' + f.currentContractId + '"]')).toHaveCount(1);
+  await page.goto(origin + '/settings/users');
+  const creation = page.getByRole('form', { name: 'Crea utente interno', exact: true });
+  await creation.getByRole('combobox', { name: 'Ruolo', exact: true }).selectOption('commerciale');
+  await expect(creation).toContainText('Profilo selezionato · revisione 1:');
+  await expect(creation.locator('input[name="roleProfileVersion"]')).toHaveValue(/^[a-f0-9]{64}$/);
   await page.context().clearCookies();await page.goto(origin+'/login');
   await page.locator('[data-interactive-ready="true"]').waitFor({state:'attached'});
   await page.getByLabel('Email',{exact:true}).fill(f.metadataAdminEmail);
