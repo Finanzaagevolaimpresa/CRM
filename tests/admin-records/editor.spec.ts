@@ -1084,6 +1084,7 @@ test('an existing signed practice exposes the current contract correction and ke
 test('private binary upload survives confirmation expiry and restoration creates a reopened third version', async ({ page, context }) => {
   const source = await browserPrivateMetadata(), id = source.receipt.documentId;
   await login(page); await page.goto('/admin/private-documents/' + id + '/versions');
+  await expect(page.getByLabel('Nuovo file · massimo 25 MB', { exact: true })).toBeEnabled();
   await page.getByLabel('Nuovo file · massimo 25 MB', { exact: true }).setInputFiles({ name: 'browser-versione.txt', mimeType: 'text/plain', buffer: Buffer.from('BYTE_BROWSER_VERSIONE_2') });
   await page.getByLabel('Motivazione', { exact: true }).fill('Versione sintetica browser');
   await page.getByRole('checkbox', { name: 'Confermo la nuova versione, la conservazione delle precedenti e l’invalidazione delle vecchie selezioni.', exact: true }).check();
@@ -1110,7 +1111,9 @@ test('private binary upload survives confirmation expiry and restoration creates
 test('a lost private binary response is reconciled once and an absent upload is terminally closed', async ({ page }) => {
   const source = await browserPrivateMetadata(), id = source.receipt.documentId, path = '/admin/private-documents/' + id + '/versions', pattern = '**/admin/private-documents/*/versions*';
   async function choose() {
+    await expect(page.getByLabel('Nuovo file · massimo 25 MB', { exact: true })).toBeEnabled();
     await page.getByLabel('Nuovo file · massimo 25 MB', { exact: true }).setInputFiles({ name: 'recupero.txt', mimeType: 'text/plain', buffer: Buffer.from('RECUPERO_SINTETICO') });
+    await expect(page.getByText('Scelta: recupero.txt · 18 byte', { exact: true })).toBeVisible();
     await page.getByLabel('Motivazione', { exact: true }).fill('Caricamento sintetico interrotto');
     await page.getByRole('checkbox', { name: 'Confermo la nuova versione, la conservazione delle precedenti e l’invalidazione delle vecchie selezioni.', exact: true }).check();
   }
