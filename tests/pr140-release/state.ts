@@ -62,10 +62,15 @@ async function main() {
   } else if (mode === 'footprint') {
     const adminFixture = JSON.parse(readFileSync(process.env.R05_ADMIN_RECORD_RECOVERY_FIXTURE!, 'utf8')) as {
       commandIds: string[]; closedId: string; clientId: string;lifecycleIntakeId:string;lifecycleCommands:string[];lifecycleClosedId:string;
-      metadataId:string;metadataCommands:string[];metadataClosedId:string };
+      metadataId:string;metadataCommands:string[];metadataClosedId:string;
+      residualCommands:string[];profileUserId:string;originalFormalizationId:string;privateVersionId:string;privateVersionSha256:string };
     const adminCommandIds = [...adminFixture.commandIds, adminFixture.closedId];
     const lifecycleCommandIds=[...adminFixture.lifecycleCommands,adminFixture.lifecycleClosedId];
     const metadataCommandIds=[...adminFixture.metadataCommands,adminFixture.metadataClosedId];
+    const residualVersion = await db.documentVersion.findUniqueOrThrow({ where: { id: adminFixture.privateVersionId } });
+    const residualBytes = await readPrivateDocumentBounded(residualVersion.storagePath, 1024 * 1024);
+    const residualSha256 = createHash('sha256').update(residualBytes).digest('hex');
+    assert.equal(residualSha256, adminFixture.privateVersionSha256);
     assert.equal(adminCommandIds.length, 4); assert.equal(new Set(adminCommandIds).size, 4);
     const videoAssets = await db.videoAsset.findMany({ orderBy: { id: 'asc' } });
     const videoFiles = [];
@@ -123,6 +128,12 @@ async function main() {
     }
     const data = {
       adminRecordRevisions: await db.adminRecordRevision.findMany({ where: { commandId: { in: adminCommandIds } }, orderBy: { commandId: 'asc' } }),
+      adminResidualRevisions: await db.adminRecordRevision.findMany({ where: { commandId: { in: adminFixture.residualCommands } }, orderBy: { commandId: 'asc' } }),
+      adminResidualAudit: await db.auditLog.findMany({ where: { id: { in: adminFixture.residualCommands.map(id => 'admin-record:' + id) } }, orderBy: { id: 'asc' } }),
+      adminResidualProfile: [await db.user.findUniqueOrThrow({ where: { id: adminFixture.profileUserId }, select: { id: true, role: true, active: true,
+        permissionOverrides: { orderBy: { permission: 'asc' } } } })],
+      adminOriginalFormalization: [await db.practiceFormalization.findUniqueOrThrow({ where: { id: adminFixture.originalFormalizationId } })],
+      adminResidualPrivateFile: [{ id: residualVersion.id, sha256: residualSha256, sizeBytes: residualBytes.length }],
       adminRecordAudit: await db.auditLog.findMany({ where: { id: { in: adminCommandIds.map(id => `admin-record:${id}`) } }, orderBy: { id: 'asc' } }),
       adminRecordClients: await db.client.findMany({ where: { id: adminFixture.clientId }, orderBy: { id: 'asc' } }),
       adminPrivateMetadataRevisions:await db.adminRecordRevision.findMany({where:{commandId:{in:metadataCommandIds}},orderBy:{commandId:'asc'}}),
@@ -265,8 +276,10 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 73);
+    assert.equal(data.ledger.length, 74);
     assert.equal(data.adminRecordRevisions.length, 4); assert.equal(data.adminRecordAudit.length, 4);
+    assert.equal(data.adminResidualRevisions.length, 4); assert.equal(data.adminResidualAudit.length, 4);
+    assert.equal(data.adminResidualProfile[0].permissionOverrides.find(row => row.permission === 'lead.read')?.allowed, false);
     assert.equal(data.adminRecordClients.length, 1); assert.equal(data.adminRecordClients[0].deletedAt, null);
     assert.equal(data.adminOperationalRevisions.length,4);assert.equal(data.adminOperationalAudit.length,4);
     assert.equal(data.adminPrivateMetadataRevisions.length,4);assert.equal(data.adminPrivateMetadataAudit.length,4);
@@ -279,7 +292,7 @@ async function main() {
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261030100000_admin_operational_lifecycle_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261030190000_admin_residual_provenance_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);

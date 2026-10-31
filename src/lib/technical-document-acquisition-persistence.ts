@@ -6,6 +6,7 @@ import { technicalAssignmentClock, TechnicalAssignmentError, type TechnicalAssig
 import { readTechnicalDocumentAcquisitionRecord, technicalDocumentAcquisitionReceipt,
   type TechnicalDocumentAcquisitionRecord } from './technical-document-acquisition-journal';
 import { technicalDocumentCanonicalRows, technicalDocumentCanonicalProjection } from './technical-document-acquisition-projection';
+import { readPrivateDocumentVersions } from './private-document-versions';
 
 type Tx = Prisma.TransactionClient;
 type Reader = Pick<TechnicalAssignmentTransaction, 'key'>;
@@ -40,11 +41,13 @@ export async function loadTechnicalDocumentAcquisition(tx: Tx, state: Reader, co
   const versions = await tx.documentVersion.findMany({ where: { documentId: r.documentId } });
   const audit = await tx.auditLog.findUnique({ where: { id: r.commandId }, select: { id: true, actorId: true,
     event: true, entityType: true, entityId: true, before: true, after: true, createdAt: true } });
-  if (!document || document.selectiveEpoch < 2 || versions.length !== 1
+  const originalVersion = versions.find(v => v.id === r.versionId);
+  if (!document || document.selectiveEpoch < 2 || !originalVersion
     || canonicalJson(json({ ...document, selectiveEpoch: 1 })) !== canonicalJson(json(expected.document))
-    || canonicalJson(json(versions[0])) !== canonicalJson(json(expected.version))
+    || canonicalJson(json(originalVersion)) !== canonicalJson(json(expected.version))
     || canonicalJson(json(audit)) !== canonicalJson(json(expected.audit))) return fail();
-  return { record: saved, source: source.record, document, version: versions[0] };
+  const administrativeVersions = await readPrivateDocumentVersions(tx, document.id, commandId, originalVersion, versions, r.actorId);
+  return { record: saved, source: source.record, document, version: originalVersion, administrativeVersions };
 }
 
 export async function technicalAcquisitionForSubmission(tx: Tx, submissionCommandId: string) {

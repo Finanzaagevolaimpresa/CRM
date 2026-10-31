@@ -41,6 +41,7 @@ export function AdminPrivateDocumentMetadataEditor({data,commandId,recovering}:{
   function summary(values:PrivateMetadataValues){return <p>{values.title} · {labels[values.classification]} · {values.expiresAt?'scadenza '+new Date(values.expiresAt).toLocaleString('it-IT'):'senza scadenza amministrativa'}</p>;}
   return <div className="space-y-5" data-interactive-ready={ready}>
     <nav className="flex flex-wrap gap-4"><Link className="underline" href={'/clients/'+encodeURIComponent(data.clientId)+'/acquired-documents'}>Torna ai documenti acquisiti</Link>
+      <Link className="underline" href={'/admin/private-documents/'+encodeURIComponent(data.id)+'/versions'}>Carica, consulta o ripristina una versione</Link>
       <Link className="underline" href={'/admin/lifecycle/Document/'+encodeURIComponent(data.id)}>Blocca, archivia o ripristina il documento</Link></nav>
     <section className="rounded-xl border p-4 space-y-2"><h2 className="font-bold">Metadati correnti · revisione {data.current.revision}</h2>{summary(data.current.values)}
       <p>{data.fileName} · contenuto originale versione 1</p><p>La correzione invalida le precedenti selezioni. La visibilità resta privata e ogni nuova condivisione richiede destinatario e versione espliciti.</p>

@@ -16,6 +16,7 @@ import { lockAuthoritativeInternalSession, revokeInternalSession } from './inter
 import { createInternalUserWithAudit, activateInternalUserWithAudit, deactivateInternalUserWithAudit,
   updateInternalUserRoleWithAudit, updatePermissionOverridesWithAudit, resetPermissionOverridesWithAudit, removeInternalUserWithAudit } from './user-privilege-service';
 import { mapSerializableConflict } from './serializable';
+import { loadAdminRoleProfile } from './admin-role-profile-store';
 
 type Tx = Prisma.TransactionClient;
 export class AdminUserCommandError extends Error {
@@ -70,6 +71,7 @@ export async function executeAdminUserCommand(db: PrismaClient, actor: AuthSessi
   const targetSession = input.operation === 'REVOKE_SESSION' ? z.string().uuid().parse(values.sessionId) : null;
   if (input.operation === 'REMOVE') z.literal(true).parse(values.retainHistory);
   if (input.operation === 'RESTORE') z.literal(true).parse(values.restoreInactive);
+  if (input.operation === 'APPLY_ROLE_PROFILE') z.literal(true).parse(values.confirmed);
   // Own profile/password/session changes retain their dedicated logout flow.
   if (['PROFILE', 'PASSWORD_RESET', 'REMOVE', 'RESTORE', 'REVOKE_SESSIONS', 'REVOKE_SESSION'].includes(input.operation) && input.userId === actor.userId) fail('DENIED');
   const requestHash = createHmac('sha256', proof.key.secret).update(JSON.stringify({ domain: 'FAI_ADMIN_USER_COMMAND_V1', input, values })).digest('hex');
@@ -87,8 +89,25 @@ export async function executeAdminUserCommand(db: PrismaClient, actor: AuthSessi
     if (adminUserVersion(before) !== input.expectedVersion || (input.operation === 'CREATE' ? Boolean(before)
       : input.operation === 'RESTORE' ? !before?.deletedAt : !before || before.deletedAt)) fail('STALE');
     let result: { ok: boolean; value?: unknown };
-    if (created) result = await createInternalUserWithAudit(tx, actor, { id: input.userId, name: created.name, email: created.email,
-      role: created.role, active: created.active ?? true, passwordHash: passwordHash! });
+    if (created) {
+      const preset = await loadAdminRoleProfile(tx, created.role);
+      if ((values.roleProfileVersion != null || (preset.current?.revision ?? 0) > 0) && values.roleProfileVersion !== preset.version) fail('STALE');
+      result = await createInternalUserWithAudit(tx, actor, { id: input.userId, name: created.name, email: created.email,
+        role: created.role, active: created.active ?? true, passwordHash: passwordHash! });
+      if (result.ok && preset.current && preset.current.revision > 0) {
+        result = await updatePermissionOverridesWithAudit(tx, actor, input.userId, preset.current.overrides);
+        if (result.ok) await tx.auditLog.create({ data: { actorId: actor.userId, event: 'admin_role_profile_applied', entityType: 'User', entityId: input.userId,
+          after: { role: created.role, profileRevision: preset.current.revision, profileHash: preset.version, existingAccount: false } } });
+      }
+    }
+    else if (input.operation === 'APPLY_ROLE_PROFILE') {
+      if (!before || before.role === 'admin') fail('DENIED');
+      const preset = await loadAdminRoleProfile(tx, before.role);
+      if (values.roleProfileVersion !== preset.version) fail('STALE');
+      result = await updatePermissionOverridesWithAudit(tx, actor, input.userId, preset.current!.overrides);
+      if (result.ok) await tx.auditLog.create({ data: { actorId: actor.userId, event: 'admin_role_profile_applied', entityType: 'User', entityId: input.userId,
+        after: { role: before.role, profileRevision: preset.current!.revision, profileHash: preset.version, existingAccount: true } } });
+    }
     else if (input.operation === 'ROLE') result = await updateInternalUserRoleWithAudit(tx, actor, input.userId, role!);
     else if (input.operation === 'ACTIVATE') result = await activateInternalUserWithAudit(tx, actor, input.userId);
     else if (input.operation === 'DEACTIVATE') result = await deactivateInternalUserWithAudit(tx, actor, input.userId);

@@ -17,6 +17,7 @@ test('M4 exact schema binding rejects changed prefix, schema, DDL and an extra m
     for (const [path, code] of [
       ['prisma/schema.prisma', 'M4_SCHEMA_HASH'],
       ['prisma/migrations/20261030100000_admin_operational_lifecycle_v1/migration.sql', 'LIFECYCLE_MIGRATION_HASH'],
+      ['prisma/migrations/20261030190000_admin_residual_provenance_v1/migration.sql', 'RESIDUAL_MIGRATION_HASH'],
       ['prisma/migrations/20261029190000_admin_record_revisions_v1/migration.sql', 'ADMIN_MIGRATION_HASH'],
       ['prisma/migrations/20261022110000_selective_lead_edit_v1/migration.sql', 'LEAD_EDIT_MIGRATION_HASH'],
       ['prisma/migrations/20261021220000_selective_client_person_fields_v1/migration.sql', 'PERSON_MIGRATION_HASH'],

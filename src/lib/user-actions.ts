@@ -10,9 +10,10 @@ import { adminUserCommandIdentity, adminUserOperation, type AdminUserCommandStat
 import { AdminUserCommandError, executeAdminUserCommand, reconcileAdminUserCommand } from './admin-user-commands';
 import { RecordUpdateError } from './record-update-contract';
 import { SerializableConflictError } from './serializable';
+import { RoleProfileError } from './admin-role-profile-contract';
 
 const codes = { CREATE: 'USER_CREATE', ACTIVATE: 'USER_ACTIVATE', DEACTIVATE: 'USER_DEACTIVATE', ROLE: 'USER_ROLE_UPDATE',
-  OVERRIDES: 'USER_PERMISSION_OVERRIDE_UPDATE', RESET_OVERRIDES: 'USER_PERMISSION_OVERRIDE_RESET',
+  OVERRIDES: 'USER_PERMISSION_OVERRIDE_UPDATE', RESET_OVERRIDES: 'USER_PERMISSION_OVERRIDE_RESET', APPLY_ROLE_PROFILE: 'USER_PERMISSION_OVERRIDE_UPDATE',
   PROFILE: 'USER_ACCOUNT_UPDATE', PASSWORD_RESET: 'USER_ACCOUNT_UPDATE', REMOVE: 'USER_ACCOUNT_UPDATE',
   RESTORE: 'USER_ACCOUNT_UPDATE', REVOKE_SESSIONS: 'USER_ACCOUNT_UPDATE', REVOKE_SESSION: 'USER_ACCOUNT_UPDATE' } as const;
 export async function submitAdminUserCommand(form: FormData): Promise<AdminUserCommandState> {
@@ -24,7 +25,8 @@ export async function submitAdminUserCommand(form: FormData): Promise<AdminUserC
     await requireEnforcedPrivilegedMutation(session, codes[operation], { inline: true });
     const key = await loadActivePrivilegedStepUpKey(prisma), store = await cookies();
     if (!key) return { ok: false, message: 'Conferma privilegiata non disponibile. Nessun comando eseguito.' };
-    const values = operation === 'CREATE' ? { name: form.get('name'), email: form.get('email'), password: form.get('password'), role: form.get('role'), active: form.get('active') === 'on' }
+    const values = operation === 'CREATE' ? { name: form.get('name'), email: form.get('email'), password: form.get('password'), role: form.get('role'), active: form.get('active') === 'on', roleProfileVersion: form.get('roleProfileVersion') }
+      : operation === 'APPLY_ROLE_PROFILE' ? { roleProfileVersion: form.get('roleProfileVersion'), confirmed: form.get('confirmed') === 'on' }
       : operation === 'ROLE' ? { role: form.get('role') }
       : operation === 'OVERRIDES' ? { overrides: Array.from(form.entries()).filter(([name]) => name.startsWith('permission:')).map(([name, value]) => ({ permission: name.slice(11), value })) }
       : operation === 'PROFILE' ? { name: form.get('name'), email: form.get('email') }
@@ -41,6 +43,7 @@ export async function submitAdminUserCommand(form: FormData): Promise<AdminUserC
   } catch (error) {
     if (error instanceof PrivilegedAdmissionRequired) return error.formState;
     if (error instanceof ZodError) return { ok: false, message: 'Controlla i campi. La password iniziale richiede almeno 12 caratteri e al massimo 72 byte.' };
+    if (error instanceof RoleProfileError) return { ok: false, message: 'Il profilo di ruolo non è utilizzabile. Verifica la sua cronologia; nessun account modificato.' };
     if (error instanceof AdminUserCommandError) return { ok: false, closed: error.code === 'CLOSED', message: error.code === 'STALE'
       ? 'Lo stato dell’account è cambiato. Le scelte sono conservate: confronta la scheda aggiornata prima di preparare un nuovo comando.'
       : error.code === 'CLOSED' ? 'Questo tentativo è stato chiuso senza modifica. Riapri la scheda per una nuova operazione.'

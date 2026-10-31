@@ -15,6 +15,9 @@ import { readTechnicalUploadPrivateFile } from './technical-upload-storage';
 import { documentPreviewMime } from './document-preview';
 import { assertOperationalActive, readOperationalState } from './admin-operational-state';
 import { readPrivateDocumentMetadata,effectivePrivateDocument } from './private-document-metadata';
+import { readPrivateDocumentBounded } from './storage';
+import { documentUploadMaxBytes } from './document-upload-contract';
+import { createHash } from 'node:crypto';
 
 type Tx = Prisma.TransactionClient;
 const deny = (): never => { throw new TechnicalAssignmentError('DENIED'); };
@@ -57,6 +60,13 @@ async function technicalAcquisitionBasis(tx: Tx, authorityId: string, document: 
 export async function selectedTechnicalAcquisition(tx: Tx, authorityId: string, document: Document) {
   return technicalAcquisitionBasis(tx, authorityId, document, false);
 }
+export function acquiredVersionDocument(saved: NonNullable<Awaited<ReturnType<typeof selectedTechnicalAcquisition>>>, versionId: string) {
+  if (saved.version.id === versionId) return saved.effectiveDocument;
+  const addition = saved.administrativeVersions.additions.find(item => item.version.id === versionId);
+  if (!addition) return null;
+  return { ...saved.effectiveDocument, fileName: addition.file.fileName, mimeType: addition.file.mimeType, sizeBytes: addition.file.sizeBytes,
+    checksum: addition.file.sha256, storagePath: addition.version.storagePath };
+}
 
 /** Metadata/history admission only. This does not serve bytes or a recipient grant. */
 export async function adminTechnicalAcquisitionHistory(tx: Tx, authorityId: string, document: Document) {
@@ -86,14 +96,16 @@ export async function listPersonalAcquiredDocuments(db: PrismaClient, claimed: A
         const lifecycle = await readOperationalState(tx, 'Document', document.id);
         const effective=saved.effectiveDocument;
         result.push({ lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, available: (!lifecycle || lifecycle.state === 'ACTIVE') && (!effective.validUntil || effective.validUntil > await technicalAssignmentClock(tx)), id: document.id, title: effective.title, fileName: document.fileName, mimeType: document.mimeType, versionId: saved.version.id,
-          classification: saved.metadata.current.values.classification,metadataRevision:saved.metadata.current.revision,acquiredAt: saved.record.receipt.recordedAt });
+          classification: saved.metadata.current.values.classification,metadataRevision:saved.metadata.current.revision,acquiredAt: saved.record.receipt.recordedAt,
+          versions: [{ id: saved.version.id, version: 1, fileName: document.fileName, mimeType: document.mimeType },
+            ...saved.administrativeVersions.additions.map(v => ({ id: v.version.id, version: v.version.version, fileName: v.file.fileName, mimeType: v.file.mimeType }))] });
       } catch { /* A stale private record does not become an ordinary document. */ }
     }
     return result;
   });
 }
 
-export async function readPersonalAcquiredDocument(db: PrismaClient, claimed: AuthSession, documentId: string) {
+export async function readPersonalAcquiredDocument(db: PrismaClient, claimed: AuthSession, documentId: string, versionId?: string | null) {
   return withTechnicalAssignmentManagementRead(db, claimed, 'Project', null, async (tx, state) => {
     const identity = await tx.document.findUnique({ where: { id: documentId } });
     if (!identity || !hasPermission(state.current, 'document.download')) return deny();
@@ -102,8 +114,14 @@ export async function readPersonalAcquiredDocument(db: PrismaClient, claimed: Au
       || (saved.record.receipt.reference.kind === 'TechnicalPractice' && isSelectivePractice(state.current, saved.record.receipt.reference.targetId))
       || (identity.containsSensitiveData && !hasPermission(state.current, 'document.sensitive.read'))
       || !await canAccessFinancialDocument(tx, state.current, identity)) return deny();
-    const r = saved.source, bytes = await readTechnicalUploadPrivateFile({ storageKey: r.storageKey, sha256: r.contentSha256, sizeBytes: r.sizeBytes });
+    const selected = acquiredVersionDocument(saved, versionId ?? saved.version.id);
+    if (!selected) return deny();
+    const r = saved.source;
+    const bytes = !versionId || versionId === saved.version.id
+      ? await readTechnicalUploadPrivateFile({ storageKey: r.storageKey, sha256: r.contentSha256, sizeBytes: r.sizeBytes })
+      : await readPrivateDocumentBounded(selected.storagePath, documentUploadMaxBytes);
+    if (bytes.length !== selected.sizeBytes || createHash('sha256').update(bytes).digest('hex') !== selected.checksum) return deny();
     await selectedTechnicalAcquisition(tx, state.current.userId, identity);
-    return { bytes, fileName: identity.fileName, previewMime: documentPreviewMime(identity.fileName, bytes) };
+    return { bytes, fileName: selected.fileName, previewMime: documentPreviewMime(selected.fileName, bytes) };
   });
 }

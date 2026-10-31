@@ -8,13 +8,10 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 head="$(git rev-parse HEAD)"
 tree="$(git rev-parse HEAD^{tree})"
-recovery_head="$head"
-recovery_tree="$tree"
-[[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-# Schema72 also retains Admin correction history and closed-command receipts. Qualify only
-# a restart of this exact candidate; an older binary is never a safe rollback.
+# PR245 alone cannot read schema74 private versions and corrected formalizations.
+# Build the exact historical application with the reviewed compatibility readers.
 node scripts/m4/verify-schema.mjs
-git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
+git diff --exit-code "$head" -- $(git ls-tree -r --name-only "$head" -- prisma/migrations)
 node scripts/vnx00a-build-context-guard.mjs
 prefix="fai-crm-r05-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 evidence="$RUNNER_TEMP/$prefix-evidence"
@@ -26,8 +23,16 @@ if docker network inspect "$prefix" >/dev/null 2>&1; then exit 1; fi
 if docker volume inspect "$prefix-documents" >/dev/null 2>&1; then exit 1; fi
 mkdir -p "$evidence" "$source_candidate" "$source_recovery"
 printf 'R05_EVIDENCE_DIR=%s\n' "$evidence" >> "$GITHUB_ENV"
+node scripts/admin-residuals/compose-compatibility.mjs "$head" > "$evidence/compatibility-source.json"
+recovery_head="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).commit' "$evidence/compatibility-source.json")"
+recovery_tree="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).tree' "$evidence/compatibility-source.json")"
+[[ "$recovery_head" =~ ^[a-f0-9]{40}$ && "$recovery_tree" =~ ^[a-f0-9]{40}$ && "$recovery_head" != "$head" ]]
+[[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
+git diff --exit-code "$head" "$recovery_head" -- prisma/migrations prisma/schema.prisma
 git archive "$head" | tar -x -C "$source_candidate"
-git archive "$recovery_head" | tar -x -C "$source_recovery"
+git archive "$recovery_head" | gzip -n > "$evidence/compatibility-source.tar.gz"
+tar -xzf "$evidence/compatibility-source.tar.gz" -C "$source_recovery"
+sha256sum "$evidence/compatibility-source.json" "$evidence/compatibility-source.tar.gz" > "$evidence/compatibility-source.sha256"
 candidate_image="fai-crm:r05-candidate-$head"
 recovery_image="fai-crm:r05-recovery-$recovery_head"
 docker build -f "$source_candidate/Dockerfile.prod.example" --build-arg SOURCE_COMMIT="$head" --build-arg SOURCE_TREE="$tree" -t "$candidate_image" "$source_candidate"
@@ -281,6 +286,6 @@ cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA73_ADMIN_LIFECYCLE_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":73,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"reminderInstantsReadReceiptsCancellationAndCurrentSourceDenialPreserved":true,"adminCorrectionsRestoreHistoryAndClosedReceiptsPreserved":true,"operationalHoldsRestoreHistoryAndClosedReceiptsPreserved":true,"privateDocumentMetadataCorrectionsAndClosedReceiptsPreserved":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA74_ADMIN_RESIDUAL_COMPATIBLE_RETURN_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":74,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":false,"schema74CompatibilityReadersQualified":true,"newResidualEditorsSuspendedDuringReturn":true,"accountCreationUsesStoredProfiles":true,"privateVersionBytesAndIsolationPreserved":true,"correctedFormalizationAndOriginalEvidencePreserved":true,"explicitRoleProfilePermissionsPreserved":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"reminderInstantsReadReceiptsCancellationAndCurrentSourceDenialPreserved":true,"adminCorrectionsRestoreHistoryAndClosedReceiptsPreserved":true,"operationalHoldsRestoreHistoryAndClosedReceiptsPreserved":true,"privateDocumentMetadataCorrectionsAndClosedReceiptsPreserved":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"

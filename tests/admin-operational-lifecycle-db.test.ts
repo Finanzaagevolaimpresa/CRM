@@ -33,8 +33,8 @@ before(async()=>{
   const sql=readFileSync(resolve(import.meta.dirname,'../prisma/migrations',migration,'migration.sql'),'utf8').replaceAll('\r\n','\n');
   const ledger=await db.$queryRaw<Array<{migration_name:string;checksum:string}>>`SELECT migration_name,checksum
     FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name`;
-  assert.equal(ledger.length,73);assert.equal(ledger.at(-1)?.migration_name,migration);
-  assert.equal(ledger.at(-1)?.checksum,createHash('sha256').update(sql).digest('hex'),'CURRENT_LIFECYCLE_SQL_REQUIRED');
+  assert.equal(ledger.length,74);assert.equal(ledger.at(-2)?.migration_name,migration);
+  assert.equal(ledger.at(-2)?.checksum,createHash('sha256').update(sql).digest('hex'),'CURRENT_LIFECYCLE_SQL_REQUIRED');
   const existing=await db.selectiveAccessAuthority.findFirst();
   if(existing){const user=await db.user.findUniqueOrThrow({where:{id:existing.userId}});admin={user,...await syntheticSession(db,user)};}
   else admin=await syntheticAuthority(db);

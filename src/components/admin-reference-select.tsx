@@ -3,8 +3,9 @@ import { useRef, useState } from 'react';
 import type { AdminField } from '@/lib/admin-record-catalogue';
 import { searchAdminRecordReferencesAction } from '@/lib/admin-record-actions';
 
-export function AdminReferenceSelect({ model, field, value, entityType, onChange }: {
+export function AdminReferenceSelect({ model, field, value, entityType, onChange, lookup }: {
   model: string; field: AdminField; value: string; entityType?: string; onChange: (value: string) => void;
+  lookup?: (input: { model: string; field: string; query: string; page: number }) => Promise<{ options: NonNullable<AdminField['options']>; hasNext: boolean } | { error: string }>;
 }) {
   const initial = (field.options ?? []).filter(option => !field.dependsOn || option.group === entityType);
   const [options, setOptions] = useState(initial), [query, setQuery] = useState(''), [page, setPage] = useState(1);
@@ -14,7 +15,7 @@ export function AdminReferenceSelect({ model, field, value, entityType, onChange
     if (pending.current || (field.dependsOn && !entityType)) return;
     pending.current = true; setBusy(true); setError('');
     try {
-      const result = await searchAdminRecordReferencesAction({ model, field: field.name, query, page: next,
+      const result = await (lookup ?? searchAdminRecordReferencesAction)({ model, field: field.name, query, page: next,
         ...(entityType ? { entityType } : {}) });
       if ('error' in result) { setError(result.error); return; }
       setOptions(current => [...current.filter(option => option.value === value && !result.options.some(found => found.value === value)), ...result.options]);

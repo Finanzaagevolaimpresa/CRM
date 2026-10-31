@@ -24,13 +24,13 @@ async function transaction<T>(db:PrismaClient,work:(tx:Tx)=>Promise<T>){
   try{return await db.$transaction(async tx=>{const result=await work(tx);await tx.$executeRaw`SET CONSTRAINTS ALL IMMEDIATE`;return result;},
     {isolationLevel:'Serializable',timeout:30000});}catch(error){throw mapSerializableConflict(error);}
 }
-async function authority(tx:Tx,session:AuthSession,proof?:UpdateCredentials){
+export async function adminPrivateDocumentAuthority(tx:Tx,session:AuthSession,proof?:UpdateCredentials){
   const current=await updateActor(tx,session,proof);
   if(current.actor.role!=='admin'||!recordUpdatePermission(current.actor,'document.download')
     ||proof&&!recordUpdatePermission(current.actor,'document.upload'))deny();
   return current;
 }
-async function source(tx:Tx,current:Authority,id:string,write=false){
+export async function adminPrivateDocumentSource(tx:Tx,current:Authority,id:string,write=false){
   await tx.$queryRaw(Prisma.sql`SELECT id FROM "Document" WHERE id=${id} ${write?Prisma.sql`FOR UPDATE`:Prisma.sql`FOR SHARE`}`);
   const document=await tx.document.findUnique({where:{id}});
   if(!document?.clientId)return deny();
@@ -39,6 +39,7 @@ async function source(tx:Tx,current:Authority,id:string,write=false){
     ||saved.record.receipt.reference.kind==='TechnicalPractice'&&isSelectivePractice(current.actor,saved.record.receipt.reference.targetId))return deny();
   return {document,saved,profile:saved.metadata,expectedVersion:digest({document,metadata:saved.metadata.current})};
 }
+const authority=adminPrivateDocumentAuthority,source=adminPrivateDocumentSource;
 async function journal(tx:Tx,current:Authority,input:{commandId:string;id:string;reason:string},requestHash:string,
   operation:'UPDATE'|'CLOSE',before:unknown,after:unknown){
   const beforeHash=digest(before),afterHash=digest(after);

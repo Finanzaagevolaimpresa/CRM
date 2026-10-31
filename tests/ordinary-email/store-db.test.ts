@@ -143,7 +143,7 @@ function fault(mode: 'error' | 'delay' | 'outcome-error'): PrismaClient {
 
 test('ordinary store uses schema71 and has a real native minimizer', options, async () => {
   const [count] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::integer AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(count.count, 73);
+  assert.equal(count.count, 74);
   const [value] = await db.$queryRaw<Array<{ present: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='AuditLog_redaction_n04_v1' AND tgenabled='O') AS present`;
   assert.equal(value.present,true);
 });
@@ -190,6 +190,9 @@ test('operational activation denies stale evidence, wrong scope, identity, targe
     `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261030100000_admin_operational_lifecycle_v1'`,
     `UPDATE "_prisma_migrations" SET finished_at=NULL WHERE migration_name='20261030100000_admin_operational_lifecycle_v1'`,
     `DELETE FROM "_prisma_migrations" WHERE migration_name='20261030100000_admin_operational_lifecycle_v1'`,
+    `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261030190000_admin_residual_provenance_v1'`,
+    `UPDATE "_prisma_migrations" SET finished_at=NULL WHERE migration_name='20261030190000_admin_residual_provenance_v1'`,
+    `DELETE FROM "_prisma_migrations" WHERE migration_name='20261030190000_admin_residual_provenance_v1'`,
     `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261029190000_admin_record_revisions_v1'`,
     `UPDATE "_prisma_migrations" SET finished_at=NULL WHERE migration_name='20261029190000_admin_record_revisions_v1'`,
     `DELETE FROM "_prisma_migrations" WHERE migration_name='20261029190000_admin_record_revisions_v1'`,

@@ -27,6 +27,7 @@ import {
   selectableStoredCatalogRevision,
 } from "./service-catalog-v2-persistence";
 import { validateStoredCatalogSelection } from './admin-catalog-revision';
+import { currentPracticeFormalization } from './admin-practice-formalization-store';
 
 export class PracticeReadinessError extends Error {
   constructor(readonly code: "DISABLED" | "DENIED" | "CONFLICT" | "NOT_READY") {
@@ -937,7 +938,7 @@ async function resolvePrerequisites(
   const [
     revision,
     acceptance,
-    formalization,
+    originalFormalization,
     contract,
     document,
     documentVersion,
@@ -983,6 +984,7 @@ async function resolvePrerequisites(
       orderBy: { id: "asc" },
     }),
   ]);
+  const formalization = await currentPracticeFormalization(tx, practice, originalFormalization);
   const terminal = practice.materials.filter((row) => !row.successor);
   const materialRows = [] as Array<{
     itemId: string;
@@ -1167,6 +1169,7 @@ export async function startPractice(
         offerSnapshotHash: state.revision!.payloadHash,
         acceptanceId: state.acceptance!.id,
         formalizationId: state.formalization!.id,
+        administrativeFormalizationCorrectionId: state.formalization!.administrativeCorrection?.commandId ?? null,
         contractId: state.contract!.id,
         signedDocumentVersionId: state.documentVersion!.id,
         clientServiceId: state.clientService!.id,
@@ -1583,6 +1586,7 @@ export async function listAccessiblePracticeReadiness(
             materials,
             linkableServices,
             formalizations: canReadContracts ? formalizations : [],
+            administrativeFormalizationCorrection: canReadContracts ? prerequisites.formalization?.administrativeCorrection ?? null : null,
             prerequisites: {
               missing: [...(!operational ? ['BLOCCO_AMMINISTRATIVO'] : []), ...new Set(prerequisites.missing.map(code =>
                 (code === 'accredito_iniziale' && !canReadPayments) || (code === 'incarico_formalizzato' && !canReadContracts)
