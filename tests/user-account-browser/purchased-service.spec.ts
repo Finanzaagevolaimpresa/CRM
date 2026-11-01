@@ -96,7 +96,7 @@ test('paid service UI: Admin handoff, individual acceptance, classified material
   await tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true }).click();
   await expect.poll(() => db.auditLog.count({ where: { entityId: receipt.receipt.technicalPracticeId, event: 'responsibility_accepted' } })).toBe(1);
   await tech.goto(practicePath);
-  expect((await tech.request.get('/documents/' + f.documents[2].id + '/download')).status()).toBe(403);
+  expect((await tech.request.get('/documents/' + f.documents[2].id + '/download')).status()).toBe(404);
   const adminUser = await db.user.findUniqueOrThrow({ where: { id: f.admin.id } });
   await classifySyntheticTechnicalVersion(db, { user: adminUser, ...await syntheticSession(db, adminUser) }, f.documents[2].version.id);
   await tech.reload(); await expect(tech.getByText(f.documents[2].title, { exact: true })).toBeVisible();
