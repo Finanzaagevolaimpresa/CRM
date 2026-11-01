@@ -25,7 +25,7 @@ export async function TechnicalAssignmentManagementPage({ target: raw, query }: 
     <SecondaryLink href={target.data.kind === 'Project' ? `/projects/${target.data.targetId}` : `/technical-office/practices/${target.data.targetId}`}>Torna alla scheda</SecondaryLink>
     {hasPermission(session, 'service.write') && !session.permissionOverrides.some(p => p.permission === 'service.write' && !p.allowed)
       && <SecondaryLink href={`${technicalManagementPath(data.target)}/create`}>Crea attività o checklist privata</SecondaryLink>}
-    <TechnicalAssignmentManagement key={`${data.target.kind}:${data.target.targetId}:${data.recipient?.id}:${data.recipient?.epoch}:${data.contextSha256}`}
+    <TechnicalAssignmentManagement key={`${data.target.kind}:${data.target.targetId}:${data.recipient?.id}:${data.recipient?.epoch}:${data.contextSha256}:${data.revision}`}
       data={data} initialCommandId={randomUUID()} revocationCommandId={randomUUID()} catalogueAction={searchTechnicalWorkItemCatalogue}
       documentCatalogueAction={searchTechnicalDocumentCatalogue}
       recoverCommandId={recover?.success ? recover.data : undefined} previewAction={prepareTechnicalAssignment}

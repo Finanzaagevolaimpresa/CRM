@@ -1,0 +1,11 @@
+# Consultazione e modifica di un incarico tecnico registrato
+
+Dal progetto o dalla pratica, apri **Gestisci incarichi tecnici e perimetri**. Ogni incarico mostra destinatario ed email, responsabilità, revisione, scadenza, campi leggibili e modificabili, operazioni, versioni documentali e download, attività/checklist e limiti del deposito privato. Un incarico revocato o scaduto resta consultabile come decisione storica; il riepilogo non attesta da solo accesso corrente.
+
+**Gestisci l’incarico di questa persona** riprende le scelte registrate per quel destinatario. La scadenza resta quella originale. Le versioni fuori pagina e i riferimenti non presenti nel catalogo corrente restano espliciti, con i loro identificativi e la scelta di download; non vengono sostituiti con versioni nuove o rimossi automaticamente. I metadati descrittivi vengono riusati solo quando corrispondono alla stessa versione e alla stessa impronta. La verifica completa avviene nell’anteprima e nella conferma sul server.
+
+Per una correzione, cambia soltanto le scelte necessarie, inserisci la motivazione, controlla l’anteprima e conferma personalmente. Si aggiorna lo stesso incarico conservando lo storico; aprire o ricaricare la pagina non modifica dati. Le scelte di incarichi revocati non inizializzano un nuovo conferimento. Una nuova revisione del grant ricarica il modulo sullo stato corrente; la riconferma privilegiata senza cambio di revisione conserva la bozza.
+
+Il commerciale e il tecnico vedono soltanto il loro perimetro effettivamente ammesso. La presenza di Priorità o Responsabile tecnico nel catalogo Admin non li concede: devono figurare nella decisione registrata. Il riepilogo non aggiunge documenti o versioni future e non esegue prese in carico, invii o download.
+
+La modifica riguarda presentazione e inizializzazione del modulo. Non modifica schema, reader di autorizzazione, anteprime firmate, conferma personale, revoca o writer dei grant. I test verificano conservazione esatta dei riferimenti e delle quote, assenza di rinnovo o ampliamento, riapertura senza scritture e sostituzione sintetica con le stesse versioni. Il ritorno al codice precedente conserva tutti i dati e lo storico, ma ripristina il limite di consultazione e il modulo inizialmente vuoto.

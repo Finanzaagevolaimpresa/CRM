@@ -5,7 +5,7 @@ import { selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 import { startTransition, useActionState, useEffect, useState, useSyncExternalStore } from 'react';
 import type { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
 import type { previewTechnicalAssignment, readTechnicalAssignmentOutcome } from '@/lib/technical-assignment-service';
-import { technicalActionLabels, technicalFieldLabels, technicalManagementPath, technicalResponsibilityLabels } from '@/lib/technical-assignment-display';
+import { technicalActionLabels, technicalManagementPath, technicalResponsibilityLabels } from '@/lib/technical-assignment-display';
 import type { TechnicalAssignmentReference } from '@/lib/technical-assignment-decision';
 import { technicalAssignmentCommand, type TechnicalAssignmentSelection } from '@/lib/technical-assignment-contract';
 import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
@@ -13,12 +13,14 @@ import { TechnicalWorkItemChoices, type ItemChoices, type TechnicalItemCatalogue
 import { selectedTechnicalWorkItemGrants } from '@/lib/technical-work-item-catalog';
 import { selectedTechnicalDocuments, type TechnicalDocumentChoices as DocumentChoices } from '@/lib/technical-document-catalog';
 import { TechnicalDocumentChoices, type TechnicalDocumentCatalogueAction } from './technical-document-choices';
-import { TechnicalUploadProfileFields, emptyUploadProfile, uploadProfileFromChoices } from './technical-upload-profile-fields';
+import { TechnicalUploadProfileFields, uploadProfileFromChoices } from './technical-upload-profile-fields';
 import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
 import { RomeDateTimeInput } from './rome-date-time-input';
 import { operationalRomeTime as when } from '@/lib/operational-time';
 import { settleTechnicalAssignmentAction } from '@/lib/technical-assignment-actions';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
+import { retainedTechnicalAssignmentEditor } from '@/lib/technical-assignment-editor';
+import { TechnicalAssignmentRetainedSummary } from './technical-assignment-retained-summary';
 
 type Data = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>;
 type Outcome = Awaited<ReturnType<typeof readTechnicalAssignmentOutcome>>;
@@ -125,15 +127,18 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   data: Data; initialCommandId: string; revocationCommandId: string; recoverCommandId?: string;
   catalogueAction: TechnicalItemCatalogueAction; documentCatalogueAction: TechnicalDocumentCatalogueAction }) {
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
-  const [responsibility, setResponsibility] = useState<TechnicalAssignmentSelection['responsibility']>('supporto');
-  const [readable, setReadable] = useState<string[]>([]), [editable, setEditable] = useState<string[]>([]);
-  const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>([]);
-  const [chosenDocuments, setDocuments] = useState<DocumentChoices>({});
+  const [original] = useState(() => retainedTechnicalAssignmentEditor({ kind: data.target.kind,
+    recipientId: data.recipient?.id ?? null, assignmentId: data.currentAssignmentId,
+    assignments: data.assignments, documents: data.documentOptions, workItems: data.workItemOptions }));
+  const [responsibility, setResponsibility] = useState<TechnicalAssignmentSelection['responsibility']>(original.responsibility);
+  const [readable, setReadable] = useState<string[]>(original.readable), [editable, setEditable] = useState<string[]>(original.editable);
+  const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>(original.actions);
+  const [chosenDocuments, setDocuments] = useState<DocumentChoices>(original.documents);
   const [documentCatalogueReady, setDocumentCatalogueReady] = useState(data.documentCatalogueAvailable);
-  const [chosenItems, setItems] = useState<ItemChoices>({});
+  const [chosenItems, setItems] = useState<ItemChoices>(original.workItems);
   const [catalogueReady, setCatalogueReady] = useState(data.workItemCatalogueAvailable);
-  const [uploadChoices, setUploadChoices] = useState(emptyUploadProfile);
-  const [expires, setExpires] = useState(''), [reason, setReason] = useState(''), [revokeReason, setRevokeReason] = useState('');
+  const [uploadChoices, setUploadChoices] = useState(original.upload);
+  const [expires, setExpires] = useState(original.expires), [reason, setReason] = useState(''), [revokeReason, setRevokeReason] = useState('');
   const [commandId, setCommand] = useState(initialCommandId), [generation, setGeneration] = useState(0);
   const [revokeCommandId, setRevokeCommandId] = useState(revocationCommandId);
   const [previewGeneration, setPreviewGeneration] = useState(-1), [submitted, setSubmitted] = useState(false);
@@ -150,7 +155,8 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       readableFields: readable, editableFields: editable, expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : '',
       documents: selectedTechnicalDocuments(chosenDocuments),
       workItems: selectedTechnicalWorkItemGrants(chosenItems, chosenActions) }, reason } : null;
-  const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
+  const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible
+    && chosenActions.every(action => data.allowedActions.includes(action)) && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   // useActionState retains its previous response while preparing the next one.
@@ -180,6 +186,9 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
     {recoverCommandId && reference && <Recovery reference={reference} commandId={recoverCommandId} action={actions.receiptAction} />}
     {data.recipient && <>
       <h2 className="break-words text-xl font-bold">{data.recipient.name} · {data.recipient.email}</h2>
+      {original.retained && <p>Le scelte registrate sono riportate nel modulo, comprese le versioni fuori dalla pagina corrente.
+        La modifica prepara una sostituzione completa: nessun accesso cambia prima dell’anteprima e della tua conferma.
+        Scadenze e riferimenti sono conservati e saranno ricontrollati; nessun rinnovo automatico.</p>}
       {!data.recipientEligible && <p role="status">Un nuovo incarico non è disponibile con lo stato, i permessi o le selezioni di lettura correnti. Gli accessi esistenti non vengono ampliati.</p>}
       {data.recipientEligible && !data.cataloguesUnavailable && <form action={prepare} onSubmit={event => {
         event.preventDefault();
@@ -192,8 +201,8 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
           <label className="block font-semibold">Responsabilità<select className={control} value={responsibility}
             onChange={event => setResponsibility(event.target.value as TechnicalAssignmentSelection['responsibility'])}>
             {Object.entries(technicalResponsibilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-          <fieldset><legend className="font-bold">Operazioni consentite</legend><div className="grid gap-3 sm:grid-cols-2">{data.allowedActions.map(action => <label className="flex items-center gap-2 rounded-xl border p-3" key={action}>
-            <input type="checkbox" checked={chosenActions.includes(action)} onChange={event => { setActions(old => event.target.checked ? [...old, action] : old.filter(item => item !== action)); if (!event.target.checked && action === 'update_fields') setEditable([]); }} />{technicalActionLabels[action]}</label>)}</div></fieldset>
+          <fieldset><legend className="font-bold">Operazioni consentite</legend><div className="grid gap-3 sm:grid-cols-2">{Array.from(new Set([...data.allowedActions, ...chosenActions])).map(action => <label className="flex items-center gap-2 rounded-xl border p-3" key={action}>
+            <input type="checkbox" checked={chosenActions.includes(action)} onChange={event => { setActions(old => event.target.checked ? [...old, action] : old.filter(item => item !== action)); if (!event.target.checked && action === 'update_fields') setEditable([]); }} />{technicalActionLabels[action]}{!data.allowedActions.includes(action) && <span> · Non più proponibile: rimuovi questa operazione per preparare la sostituzione.</span>}</label>)}</div></fieldset>
           <fieldset><legend className="font-bold">Informazioni da mostrare e campi modificabili</legend><div className="grid gap-3 sm:grid-cols-2">{data.fieldCatalogue.map(field => <div className="space-y-2 rounded-xl border p-3" key={field.key}>
             <label className="flex items-center gap-2"><input type="checkbox" checked={readable.includes(field.key)} onChange={event => { setReadable(old => event.target.checked ? [...old, field.key] : old.filter(item => item !== field.key)); if (!event.target.checked) setEditable(old => old.filter(item => item !== field.key)); }} />{field.label}</label>
             {field.editable && <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={!readable.includes(field.key) || !chosenActions.includes('update_fields')} checked={editable.includes(field.key)} onChange={event => setEditable(old => event.target.checked ? [...old, field.key] : old.filter(item => item !== field.key))} />Consenti la modifica</label>}
@@ -235,9 +244,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       {!data.assignments.length && <p>Nessun incarico registrato.</p>}
       {data.assignments.map(assignment => <article key={assignment.id} className="min-w-0 space-y-2 rounded-xl border p-4">
         <h3 className="break-words font-bold">{assignment.recipientName} · {assignment.recipientEmail}</h3>
-        <p>{technicalResponsibilityLabels[assignment.selection.responsibility]} · {assignment.revokedAt ? 'Revocato' : 'Permessi verificati a ogni apertura e salvataggio'} · scadenza {when(assignment.selection.expiresAt)}</p>
-        <p>Campi: {assignment.selection.readableFields.map(field => technicalFieldLabels[field]).join(', ')}</p>
-        <p>Operazioni: {assignment.selection.actions.map(action => technicalActionLabels[action]).join(', ')}</p>
+        <TechnicalAssignmentRetainedSummary assignment={assignment} observedAt={data.observedAt} />
         <a className="font-semibold underline" aria-disabled={blocked} href={blocked ? undefined : `${technicalManagementPath(data.target)}?recipient=${encodeURIComponent(assignment.recipientId)}`}>Gestisci l’incarico di questa persona</a>
         {!assignment.revokedAt && assignment.selection.uploadProfile && <p><a className="font-semibold underline" href={technicalUploadReviewPath({ ...data.target, recipientId: assignment.recipientId })}>Revisiona i documenti depositati</a></p>}
       </article>)}
