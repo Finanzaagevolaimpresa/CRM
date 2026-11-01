@@ -84,6 +84,16 @@ async function readManagementSnapshot(db: PrismaClient, claimed: AuthSession,
     }
     const documentCatalogue = pageTechnicalDocuments(admittedDocuments, documentQuery);
     const selected = recipientId ? await lockTechnicalAssignmentRecord(tx, { ...target, recipientId }, 'read') : null;
+    // The current recipient is independent of the bounded overview. Validate
+    // its retained journal even when it falls outside the first 200 entries or
+    // when catalogues are unavailable. An unreadable decision must never look
+    // like an empty selection ready to replace an existing revision.
+    if (selected && !readRetainedTechnicalAssignmentJournal(
+      await loadTechnicalAssignmentJournal(tx, selected), state.key, await technicalAssignmentClock(tx))) {
+      throw new TechnicalAssignmentError('UNAVAILABLE');
+    }
+    const selectedAssignment = selected ? { id: selected.id, recipientId: selected.recipientId,
+      revision: selected.revision, selection: selected.payload.selection, revokedAt: selected.revokedAt } : null;
     let workItems = { options: [] as Awaited<ReturnType<typeof listTechnicalWorkItemOptions>>['options'], query: itemQuery, hasNext: false };
     let workItemCatalogueAvailable = includeCatalogues;
     if (includeCatalogues && eligible) {
@@ -103,7 +113,7 @@ async function readManagementSnapshot(db: PrismaClient, claimed: AuthSession,
       fieldCatalogue: technicalFieldCatalogue(target.kind),
       people: people.slice(0, 200).filter(row => admitsTechnicalRolePermission(row, target.kind))
         .map(row => ({ id: row.id, name: row.name, email: row.email })), peopleLimited: people.length > 200,
-      assignments, assignmentsLimited: refs.length > 200, documentOptions: documentCatalogue.options,
+      assignments, selectedAssignment, assignmentsLimited: refs.length > 200, documentOptions: documentCatalogue.options,
       documentsLimited: !documentCatalogueAvailable, documentCatalogue, documentCatalogueAvailable,
       cataloguesUnavailable: !includeCatalogues,
       workItemOptions: workItems.options, workItemCatalogue: workItems, workItemCatalogueAvailable,

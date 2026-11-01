@@ -6,6 +6,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticSession } from '../selective-sharing/fixtures';
 import { assignTechnical, revokeTechnical } from './fixtures';
+import { seedAssignmentOverviewBoundary } from './pagination-fixture';
 import { createTechnicalAssignmentPreview } from '../../src/lib/technical-assignment-preview';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_EVIDENCE!, password = process.env.TECHNICAL_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminId: string; adminEmail: string;
@@ -478,14 +479,14 @@ test('expired Admin confirmation preserves the full draft, renews inline and com
   await ac.close();
 });
 
-test('Admin reopens the exact retained grant and replaces only chosen fields while preserving selected versions', async ({ browser }) => {
+test('Admin reopens the exact retained grant beyond 200 entries and replaces only chosen fields while preserving selected versions', async ({ browser }) => {
+  test.setTimeout(240000);
   const row = f.rows[9], ac = await browser.newContext(), tc = await browser.newContext();
   const admin = await ac.newPage(), tech = await tc.newPage();
   await login(admin, f.adminEmail, true); await assign(admin, row, row.techA);
   await admin.goto(management(row) + '?recipient=' + row.techA.id);
   const opened = JSON.parse(await admin.locator('input[name="command"]').first().inputValue());
   const saved = opened.selection;
-  const n = await assignments(row);
   await expect(admin.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
   await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
   await expect(admin.getByLabel('Avanzamento comunicabile al cliente', { exact: true })).toBeChecked();
@@ -494,7 +495,14 @@ test('Admin reopens the exact retained grant and replaces only chosen fields whi
   await expect(admin.getByText(/Download concesso/, { exact: false })).toHaveCount(1);
   expect(saved.documents).toHaveLength(2);
   expect(saved.documents.map((d: { allowDownload: boolean }) => d.allowDownload)).toEqual([false, true]);
+  const snapshot = await seedAssignmentOverviewBoundary(db, f.adminId,
+    { kind: 'TechnicalPractice', targetId: row.practiceId }, row.techA.id);
+  expect(snapshot.selectedAssignment!.selection).toEqual(saved);
+  const n = await assignments(row); expect(n).toBe(201);
   await admin.reload();
+  await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toHaveValue(row.techA.id);
+  await expect(admin.getByRole('region', { name: 'Incarico corrente fuori elenco', exact: true })
+    .getByRole('heading', { name: 'Versioni documentali registrate · 2', exact: true })).toBeVisible();
   expect(JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).selection).toEqual(saved);
   expect(await assignments(row)).toBe(n);
   await admin.getByLabel('Priorità', { exact: true }).check();

@@ -129,7 +129,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [original] = useState(() => retainedTechnicalAssignmentEditor({ kind: data.target.kind,
     recipientId: data.recipient?.id ?? null, assignmentId: data.currentAssignmentId,
-    assignments: data.assignments, documents: data.documentOptions, workItems: data.workItemOptions }));
+    selectedAssignment: data.selectedAssignment, documents: data.documentOptions, workItems: data.workItemOptions }));
   // Keep the draft bound to the revision it was opened from. Revalidation after
   // saving must preserve the action receipt, never silently rebase old choices.
   const [openedRevision] = useState(data.revision);
@@ -184,9 +184,12 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       {resumption.needsConfirmation && <InlinePrivilegedConfirmation />}</div>}
     <form method="get" action={technicalManagementPath(data.target)} className="space-y-3">
       <label className="block font-semibold">Persona da incaricare<select name="recipient" className={control} defaultValue={data.recipient?.id ?? ''} disabled={blocked} required>
-        <option value="">Seleziona una persona</option>{data.people.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email}</option>)}</select></label>
+        <option value="">Seleziona una persona</option>
+        {data.recipient && !data.people.some(person => person.id === data.recipient!.id)
+          && <option value={data.recipient.id}>{data.recipient.name} · {data.recipient.email}</option>}
+        {data.people.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email}</option>)}</select></label>
       <button className={button} disabled={blocked}>Apri scelte per la persona</button>
-      {data.peopleLimited && <p>Elenco limitato alle prime 200 persone. Nessuna persona esclusa dall’elenco viene incaricata.</p>}
+      {data.peopleLimited && <p>Elenco limitato alle prime 200 persone; la persona già aperta resta identificata separatamente. Nessun incarico viene creato dalla consultazione.</p>}
     </form>
     {recoverCommandId && reference && <Recovery reference={reference} commandId={recoverCommandId} action={actions.receiptAction} />}
     {data.recipient && <>
@@ -245,6 +248,12 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       {preparedRevoke && <div onSubmitCapture={event => { if ((event.target as HTMLFormElement).elements.namedItem('confirmed')) setSubmitted(true); }}>
         <Confirm key={preparedRevoke.token} {...actions} preview={preparedRevoke} blocked={blocked} onRejected={resume} /></div>}
     </>}
+    {data.selectedAssignment && !data.assignments.some(row => row.id === data.selectedAssignment!.id) && <section
+      className="space-y-3 rounded-xl border p-4" aria-label="Incarico corrente fuori elenco">
+      <h2 className="text-xl font-bold">Incarico della persona aperta · fuori dai primi 200</h2>
+      <p>{data.recipient?.name} · {data.recipient?.email}</p>
+      <TechnicalAssignmentRetainedSummary assignment={data.selectedAssignment} observedAt={data.observedAt} />
+    </section>}
     <section className="space-y-3"><h2 className="text-xl font-bold">Incarichi registrati su questo record</h2>
       {!data.assignments.length && <p>Nessun incarico registrato.</p>}
       {data.assignments.map(assignment => <article key={assignment.id} className="min-w-0 space-y-2 rounded-xl border p-4">

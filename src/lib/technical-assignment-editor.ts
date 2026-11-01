@@ -4,15 +4,19 @@ import { technicalWorkItemOptionKey, type TechnicalWorkItemChoices, type Technic
 
 type RetainedAssignment = { id: string; recipientId: string; revokedAt: Date | string | null; selection: TechnicalAssignmentSelection };
 type Input = { kind: TechnicalAssignmentSelection['kind']; recipientId: string | null; assignmentId: string | null;
-  assignments: RetainedAssignment[]; documents: TechnicalDocumentOption[]; workItems: TechnicalWorkItemOption[] };
+  selectedAssignment: RetainedAssignment | null; documents: TechnicalDocumentOption[]; workItems: TechnicalWorkItemOption[] };
 
 /** Copy the retained decision, not the current catalogue. Off-page or no-longer
  * admitted references remain explicit until the operator removes them. Preview
  * and confirmation must still validate every reference and current authority. */
 export function retainedTechnicalAssignmentEditor(input: Input) {
-  const record = input.assignments.find(row => row.id === input.assignmentId && row.recipientId === input.recipientId
-    && row.selection.userId === input.recipientId && row.selection.kind === input.kind && !row.revokedAt);
-  const selection = record?.selection;
+  const record = input.selectedAssignment;
+  if (input.assignmentId === null ? record !== null : !record || record.id !== input.assignmentId
+    || record.recipientId !== input.recipientId || record.selection.userId !== input.recipientId
+    || record.selection.kind !== input.kind) {
+    throw new Error('TECHNICAL_ASSIGNMENT_RETAINED_SELECTION_UNAVAILABLE');
+  }
+  const selection = record && !record.revokedAt ? record.selection : undefined;
   const documents: TechnicalDocumentChoices = {}, workItems: TechnicalWorkItemChoices = {};
   for (const doc of selection?.documents ?? []) {
     const metadata = input.documents.find(row => row.documentId === doc.documentId && row.fileId === doc.fileId

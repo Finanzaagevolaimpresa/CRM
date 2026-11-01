@@ -3,7 +3,7 @@ import { technicalActionLabels, technicalFieldLabels, technicalResponsibilityLab
 import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
 import { operationalRomeTime as when } from '@/lib/operational-time';
 
-type Assignment = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>['assignments'][number];
+type Assignment = Pick<Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>['assignments'][number], 'selection' | 'revision' | 'revokedAt'>;
 export function TechnicalAssignmentRetainedSummary({ assignment, observedAt }: { assignment: Assignment; observedAt: string }) {
   const s = assignment.selection;
   const status = assignment.revokedAt ? 'Revocato'
