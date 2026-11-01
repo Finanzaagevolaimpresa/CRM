@@ -122,12 +122,12 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
 test('M4 readiness direct URLs and draft submissions follow the current originating lead assignment', async ({ browser }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.M4_BROWSER_CONFIRMED).toBe('1');
   const passwordHash = (await db.user.findUniqueOrThrow({ where: { id: f.adminId } })).passwordHash;
-  const a = await db.user.create({ data: { email: 'm4-browser-client-owner@invalid.test', name: 'Synthetic client owner', role: 'consulente', passwordHash, active: true } });
-  const b = await db.user.create({ data: { email: 'm4-browser-lead-owner@invalid.test', name: 'Synthetic lead owner', role: 'consulente', passwordHash, active: true } });
+  const a = await db.user.create({ data: { email: 'm4-browser-client-owner@invalid.test', name: 'Synthetic client owner', role: 'commerciale', passwordHash, active: true } });
+  const b = await db.user.create({ data: { email: 'm4-browser-lead-owner@invalid.test', name: 'Synthetic lead owner', role: 'commerciale', passwordHash, active: true } });
   const r = await readinessCommunicationFixture(db, a.id, b.id), target = `/communications?kind=READINESS&practice=${r.practice.id}`;
   expect(r.practice.projectId).toBeNull(); expect(r.practice.clientServiceId).toBeNull();
   const own = await db.technicalPractice.create({ data: { clientId: r.client.id, title: 'Synthetic own context', practiceType: 'test',
-    targetEntity: 'Synthetic', technicalOwnerId: a.id, createdById: f.adminId } });
+    targetEntity: 'Synthetic', commercialOwnerId: a.id, createdById: f.adminId } });
   const ac = await browser.newContext(), bc = await browser.newContext(), ap = await ac.newPage(), bp = await bc.newPage();
   await login(ap, 'client-owner'); await login(bp, 'lead-owner');
   const subject = 'M4_PRIVATE_READINESS_SUBJECT', body = 'M4_PRIVATE_READINESS_BODY', recipient = 'private-readiness@invalid.test';

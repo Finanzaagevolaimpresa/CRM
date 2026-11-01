@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
     "test": "node --import tsx --test tests/*.test.ts",

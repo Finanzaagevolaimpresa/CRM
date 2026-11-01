@@ -6,7 +6,9 @@ Il comando ordinario del candidato è:
 npm run dev -- --hostname 127.0.0.1 --port 3052
 ```
 
-Lo script `dev` di `package.json` esegue `next dev --webpack`. Il comando usa quindi lo stesso compilatore delle prove locali, senza richiedere un flag aggiunto a mano. `src/instrumentation.ts` importa registro sessioni e Prisma soltanto nel ramo esplicito `NEXT_RUNTIME === "nodejs"`; mantiene i controlli ordinari di attivazione del registro e del modo legacy.
+Lo script `dev` di `package.json` esegue `next dev --turbopack`. Il comando usa quindi la modalità supportata verificata con le dipendenze ripristinate su C:, senza richiedere un flag aggiunto a mano. Nel seguito PR249 è stato riprodotto un ricaricamento del client HMR Webpack durante la navigazione: quelle prove restano distinte dalle successive verifiche Turbopack. Non è stata applicata alcuna patch al framework installato. `src/instrumentation.ts` importa registro sessioni e Prisma soltanto nel ramo esplicito `NEXT_RUNTIME === "nodejs"`; mantiene i controlli ordinari di attivazione del registro e del modo legacy.
+
+Nel cambio di compilatore va usata una cache di sviluppo nuova. Sul checkout MSI la precedente `.next/dev` è stata conservata, a runner fermo, come `.next/dev.before-turbopack-r04`; Next ha rigenerato la propria cache al successivo avvio ordinario. Nessun sorgente, dipendenza, archivio documentale o dato DB viene rimosso. Il primo avvio sulla cache già usata aveva prodotto ricaricamenti ripetuti di Login ed è registrato come FAIL; i tre casi completi di handoff con cache nuova e test originali sono PASS. Questo non attribuisce un esito positivo alla prova fallita né dimostra la causa interna della cache.
 
 Sul checkout MSI qualificato le dipendenze operative sono su C: e le sorgenti rimangono quelle del candidato. L'archivio su E: viene conservato. Non occorrono variabili globali, modifiche al provider o riparazioni Docker per avviare questo comando.
 

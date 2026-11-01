@@ -29,6 +29,7 @@ jobs:
       PORT: '3042'
       INTERNAL_SESSION_MODE: registry
       LOGIN_THROTTLE_MODE: disabled
+      PRIVILEGED_ACCESS_MODE: enforced
       PRIVILEGED_STEP_UP_MODE: enforced
       PRIVILEGED_STEP_UP_KEY_VERSION: '1'
       PRIVILEGED_STEP_UP_SECRET: synthetic-financial-privacy-stepup-key-not-production

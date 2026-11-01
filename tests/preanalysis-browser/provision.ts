@@ -11,18 +11,24 @@ async function main() {
   assert.ok(password && password.length >= 24);
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({ data: [
-    { id: ids.owner, email: 'preanalysis-owner@invalid.test', name: 'Admin Preanalisi', passwordHash, role: 'admin' },
+    { id: ids.owner, email: 'preanalysis-owner@invalid.test', name: 'Direzione Preanalisi', passwordHash, role: 'direzione' },
     { id: ids.foreign, email: 'preanalysis-foreign@invalid.test', name: 'Consulente Estraneo', passwordHash, role: 'consulente' },
     { id: ids.noRead, email: 'preanalysis-no-read@invalid.test', name: 'Consulente Senza Dossier', passwordHash, role: 'consulente' },
-    { id: ids.readOnly, email: 'preanalysis-read-only@invalid.test', name: 'Revisore Sola Lettura', passwordHash, role: 'revisore' },
+    { id: ids.readOnly, email: 'preanalysis-read-only@invalid.test', name: 'Commerciale Sola Lettura', passwordHash, role: 'commerciale' },
     { id: ids.overrideDenied, email: 'preanalysis-override-denied@invalid.test', name: 'Backoffice Override Negato ABAC', passwordHash, role: 'backoffice' },
     { id: 'preanalysis-perimeter-admin', email: 'preanalysis-perimeter-admin@invalid.test', name: 'Admin Perimetro Sintetico', passwordHash, role: 'admin' },
   ] });
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: ids.owner, permission: 'dossier.read', allowed: true },
+    { userId: ids.owner, permission: 'project.write', allowed: true },
+    { userId: ids.readOnly, permission: 'dossier.read', allowed: true },
+    { userId: ids.readOnly, permission: 'project.read', allowed: true },
+  ] });
   await db.userPermissionOverride.create({ data: { userId: ids.noRead, permission: 'dossier.read', allowed: false } });
   await db.userPermissionOverride.create({ data: { userId: ids.overrideDenied, permission: 'project.write', allowed: true } });
-  await db.client.create({ data: { id: ids.client, type: 'societa', displayName: 'Cliente Sintetico Preanalisi', consultantId: ids.owner } });
+  await db.client.create({ data: { id: ids.client, type: 'societa', displayName: 'Cliente Sintetico Preanalisi', salesOwnerId: ids.readOnly } });
   await db.clientReadGrant.create({ data: { userId: ids.readOnly, clientId: ids.client, active: true, createdById: 'preanalysis-perimeter-admin', updatedById: 'preanalysis-perimeter-admin' } });
-  await db.project.create({ data: { id: ids.project, clientId: ids.client, title: 'Progetto Sintetico Preanalisi', consultantId: ids.owner } });
+  await db.project.create({ data: { id: ids.project, clientId: ids.client, title: 'Progetto Sintetico Preanalisi' } });
   process.stdout.write('{"preanalysisBrowserProvision":"ready"}\n');
 }
 void main().catch(() => { process.stderr.write('PREANALYSIS_BROWSER_PROVISION_FAILED\n'); process.exitCode = 1; }).finally(() => db.$disconnect());

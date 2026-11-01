@@ -107,7 +107,7 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await waitForPreAnalysisForm(page);
   const beforeRevocation = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
   const auditBeforeRevocation = await db.auditLog.count({ where: { entityId: recordId } });
-  await db.userPermissionOverride.create({ data: { userId: 'preanalysis-browser-owner', permission: 'dossier.read', allowed: false } });
+  await db.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed: false } });
   await page.locator('textarea[name="internalSummary"]').fill('TESTO DOPO REVOCA');
   await expect(page.locator('textarea[name="internalSummary"]')).toHaveValue('TESTO DOPO REVOCA');
   await page.getByRole('button', { name: 'Salva modifiche' }).click();
@@ -116,7 +116,7 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await expect(page.locator('textarea[name="internalSummary"]')).toHaveValue('TESTO DOPO REVOCA');
   expect((await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } })).internalSummary).toBe(beforeRevocation.internalSummary);
   expect(await db.auditLog.count({ where: { entityId: recordId } })).toBe(auditBeforeRevocation);
-  await db.userPermissionOverride.delete({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } } });
+  await db.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed: true } });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
@@ -125,11 +125,12 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
 
   const protectedRecord = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
   const protectedAuditCount = await db.auditLog.count({ where: { entityId: recordId } });
-  // The reviewer receives this exact project; a profile consultation alone is
-  // insufficient. Reassignment also withdraws the previous owner's read access.
-  await db.project.update({ where: { id: 'preanalysis-browser-project' }, data: { consultantId: 'preanalysis-browser-read-only' } });
+  // Revocation is independent of the separate commercial read-only owner.
+  // Making that reader a technical consultant would correctly deny these notes.
+  await db.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed: false } });
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Pre-analisi non trovata' })).toBeVisible();
+  await expect(page).toHaveURL(`${app}/dashboard`);
+  await expect(page.locator('[data-preanalysis-field="internalSummary"]')).toHaveCount(0);
   for (const identity of [
     { email: 'preanalysis-read-only@invalid.test', label: 'read-only' },
   ]) {
@@ -157,24 +158,24 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   const unassignedContext = await browser.newContext(); const unassigned = await unassignedContext.newPage();
   await login(unassigned, 'preanalysis-override-denied@invalid.test');
   await unassigned.goto(`${app}/preanalyses/new?clientId=preanalysis-browser-client&projectId=preanalysis-browser-project`);
-  await expect(unassigned.getByRole('heading', { name: 'Contesto non accessibile' })).toBeVisible();
+  await expect(unassigned.getByRole('heading', { name: '404', exact: true })).toBeVisible();
   await expect(unassigned.locator('textarea')).toHaveCount(0);
   await unassigned.goto(`${app}/preanalyses/${recordId}`);
-  await expect(unassigned.getByRole('heading', { name: 'Pre-analisi non trovata' })).toBeVisible();
+  await expect(unassigned.getByRole('heading', { name: '404', exact: true })).toBeVisible();
   await expect(unassigned.locator('[data-preanalysis-field="internalSummary"]')).toHaveCount(0);
   await unassignedContext.close();
 
   const foreignContext = await browser.newContext(); const foreign = await foreignContext.newPage();
   await login(foreign, 'preanalysis-foreign@invalid.test');
   await foreign.goto(`${app}/preanalyses/${recordId}`);
-  await expect(foreign.getByRole('heading', { name: 'Pre-analisi non trovata' })).toBeVisible();
+  await expect(foreign.getByRole('heading', { name: '404', exact: true })).toBeVisible();
   const noReadContext = await browser.newContext(); const noRead = await noReadContext.newPage();
   await login(noRead, 'preanalysis-no-read@invalid.test');
   await noRead.goto(`${app}/projects/preanalysis-browser-project`);
   await expect(noRead.getByText('Sintesi inventata')).toHaveCount(0);
   await expect(noRead.getByRole('link', { name: 'Crea pre-analisi' })).toHaveCount(0);
   await noRead.goto(`${app}/preanalyses/${recordId}`);
-  await expect(noRead).toHaveURL(`${app}/dashboard`);
+  await expect(noRead.getByRole('heading', { name: '404', exact: true })).toBeVisible();
 
   const persisted = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
   writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, tamperedPostDenied: true, tamperedPostAtomic: true, permissionRevokedAfterOpenDenied: true, permissionRevokedAfterOpenAtomic: true, readOnlyUiDenied: true, writeOverrideAbacUiDenied: true, unassignedBackofficeReadDenied: true, restrictedReadPreserved: true, restrictedUiAtomic: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });

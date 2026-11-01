@@ -84,6 +84,10 @@ async function record(session: AuthSession, route: string, props: Props) {
 export async function TechnicalSafeNavigation({ route, session, props }: { route: string; session: AuthSession; props: Props }) {
   if (route === '/projects/[id]' || route === '/technical-office/practices/[id]') return record(session, route, props);
   const raw = await props.searchParams ?? {};
+  // A revoked area permission denies the whole ordinary entry point. A valid
+  // selective assignment is still rechecked on its own dedicated route.
+  if ((route === '/technical-office' || route === '/technical-office/practices') && !hasPermission(session, 'technical.read')) notFound();
+  if (route === '/projects' && !hasPermission(session, 'project.read')) notFound();
   if (route === '/dashboard') return <OperationalTechnicalDashboard session={session} view={raw.view} />;
   if (route === '/technical-office') return <OperationalTechnicalHome session={session} />;
   if (route === '/projects' || route === '/technical-office/practices') return <OperationalWorkList session={session}
