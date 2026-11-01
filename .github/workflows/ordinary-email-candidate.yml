@@ -76,6 +76,17 @@ jobs:
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"
           sha256sum prisma/migrations/20261017120000_ordinary_email_v1/migration.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
+      - name: Authoritative recovery without another transport
+        env:
+          ORDINARY_RECOVERY_DB_TESTS: '1'
+          LOCAL_DOCUMENT_STORAGE_ROOT: ${{ runner.temp }}/ordinary-recovery-documents
+        run: |
+          mkdir -p "$LOCAL_DOCUMENT_STORAGE_ROOT"
+          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/ordinary-email-reconciliation/recovery-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/recovery-database.tap"
+          grep -Fx '# tests 10' "$RUNNER_TEMP/ordinary-email/recovery-database.tap"
+          grep -Fx '# pass 10' "$RUNNER_TEMP/ordinary-email/recovery-database.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/recovery-database.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/recovery-database.tap"
       - name: Lead client and internal contexts, native directory races and private files
         shell: bash
         env:

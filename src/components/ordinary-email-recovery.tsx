@@ -5,18 +5,26 @@ import { previewOrdinaryRecoveryAction, confirmOrdinaryRecoveryAction } from '@/
 import type { OrdinaryRecoveryResult } from '@/lib/ordinary-email-reconciliation-contract';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
+async function safeConfirm(previous: OrdinaryRecoveryResult, form: FormData): Promise<OrdinaryRecoveryResult> {
+  try { return await confirmOrdinaryRecoveryAction(previous, form); }
+  catch { return { status: 'CHECK_CURRENT' }; }
+}
+async function safePreview(previous: OrdinaryRecoveryResult, form: FormData): Promise<OrdinaryRecoveryResult> {
+  try { return await previewOrdinaryRecoveryAction(previous, form); }
+  catch { return { status: 'UNAVAILABLE' }; }
+}
 const initial: OrdinaryRecoveryResult = { status: 'UNAVAILABLE' };
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const label = (outcome: 'ACCEPTED' | 'NOT_SENT') => outcome === 'ACCEPTED' ? 'Accettata dal server SMTP' : 'Non inviata · osservazione autorevole';
 export function OrdinaryEmailRecovery({ messageId, attemptId }: { messageId: string; attemptId: string }) {
-  const [preview, prepare, preparing] = useActionState(previewOrdinaryRecoveryAction,initial);
-  const [result, confirm, confirming] = useActionState(confirmOrdinaryRecoveryAction,initial);
+  const [preview, prepare, preparing] = useActionState(safePreview,initial);
+  const [result, confirm, confirming] = useActionState(safeConfirm,initial);
   const [reason, setReason] = useState('');
   const [submittedToken, setSubmittedToken] = useState<string | null>(null);
   const recorded = result.status === 'RECORDED' ? result : preview.status === 'RECORDED' ? preview : null;
   const ready = preview.status === 'READY' ? preview : null;
-  const blocked = confirming || !!recorded || (ready?.token === submittedToken && result.status !== 'STEP_UP_REQUIRED');
-  return <section aria-label="Riconciliazione esito SMTP" className="my-4 space-y-3 rounded-xl border border-amber-300 p-4">
+  const blocked = confirming || !!recorded || ready?.token === submittedToken;
+  return <section data-recovery-attempt={attemptId} aria-label="Riconciliazione esito SMTP" className="my-4 space-y-3 rounded-xl border border-amber-300 p-4">
     <h3 className="font-bold">Verifica e riconcilia questo tentativo</h3>
     <p>Si consulta la prova conservata dal trasporto. Nessun messaggio viene inviato o ripetuto e nessuna ricevuta precedente viene riscritta.</p>
     <form action={prepare}>

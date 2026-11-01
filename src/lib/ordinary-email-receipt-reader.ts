@@ -14,7 +14,7 @@ export async function readAdmittedOrdinaryEmailReceipts(tx: Prisma.TransactionCl
   if (tables.present === 0) return [];
   if (tables.present !== 6) throw new Error('ORDINARY_EMAIL_RECEIPTS_UNAVAILABLE');
   const reconciliation = tables.recovery ? Prisma.sql`jsonb_build_object('id',r."id",'sourceHash',r."sourceHash",
-    'recordedAt',r."createdAt",'originalOutcome',o."outcome")` : Prisma.sql`NULL`;
+    'recordedAt',r."createdAt",'originalOutcome',CASE WHEN r."previousOutcomeId" IS NOT NULL THEN o."outcome" ELSE NULL END)` : Prisma.sql`NULL`;
   const rows = await tx.$queryRaw<Array<Record<string, unknown>>>`SELECT a."id",v."revision",v."snapshotHash",a."state",a."createdAt",
     ${tables.recovery ? Prisma.sql`COALESCE(r."outcome",o."outcome")` : Prisma.sql`o."outcome"`} AS "outcome",
     ${tables.recovery ? Prisma.sql`COALESCE(r."createdAt",o."createdAt")` : Prisma.sql`o."createdAt"`} AS "recordedAt",

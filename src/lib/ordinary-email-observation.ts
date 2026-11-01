@@ -30,7 +30,7 @@ function mac(lease: OrdinaryAttemptLease, observation: OrdinaryTransportObservat
   // Its binding survives rotation of the current interactive confirmation key.
   return createHmac('sha256', lease.leaseId).update('fai.ordinary-observation.v1\n' + canonicalJson(observation)).digest('hex');
 }
-export function sealOrdinaryObservation(lease: OrdinaryAttemptLease, request: OrdinaryAttemptRequest,
+export function sealOrdinaryObservation(lease: OrdinaryAttemptLease, request: Pick<OrdinaryAttemptRequest, 'attemptId' | 'intentHash' | 'mimeHash' | 'envelopeHash'>,
   result: OrdinarySmtpResult, observedAt: Date): SealedOrdinaryObservation {
   if (request.attemptId !== lease.attemptId) throw new Error('ORDINARY_OBSERVATION_BINDING');
   const observation = ordinaryObservationSchema.parse({ protocol: 'FAI_ORDINARY_TRANSPORT_OBSERVATION_V1',

@@ -233,6 +233,7 @@ async function main() {
       ordinaryDecision: await db.ordinaryEmailDecision.findMany({ orderBy: { id: 'asc' } }),
       ordinaryAttempt: await db.ordinaryEmailAttempt.findMany({ orderBy: { id: 'asc' } }),
       ordinaryClaim: await db.ordinaryEmailClaim.findMany({ orderBy: { id: 'asc' } }),
+      ordinaryReconciliation: await db.ordinaryEmailReconciliation.findMany({ orderBy: { id: 'asc' } }),
       ordinaryOutcome: await db.ordinaryEmailOutcome.findMany({ orderBy: { id: 'asc' } }),
       ordinaryInboundStream: await db.ordinaryEmailInboundStream.findMany({ orderBy: { id: 'asc' } }),
       ordinaryInboundBatch: await db.ordinaryEmailInboundBatch.findMany({ orderBy: { id: 'asc' } }),
@@ -276,7 +277,7 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 74);
+    assert.equal(data.ledger.length, 75);
     assert.equal(data.adminRecordRevisions.length, 4); assert.equal(data.adminRecordAudit.length, 4);
     assert.equal(data.adminResidualRevisions.length, 4); assert.equal(data.adminResidualAudit.length, 4);
     assert.equal(data.adminResidualProfile[0].permissionOverrides.find(row => row.permission === 'lead.read')?.allowed, false);
@@ -348,10 +349,12 @@ async function main() {
     assert.equal(data.ordinaryAuthority.length, 1);
     assert.equal(data.ordinaryAuthority[0].enabled, true);
     assert.equal(data.ordinaryChannel[0].enabled, false);
-    assert.deepEqual(data.ordinaryAttempt.map(row=>row.state).sort(), ['ACCEPTED','CLAIMED','RESERVED','UNCERTAIN']);
+    assert.deepEqual(data.ordinaryAttempt.map(row=>row.state).sort(), ['ACCEPTED','ACCEPTED','CLAIMED','RESERVED']);
     assert.equal(data.ordinaryDecision.length, 4);
     assert.equal(data.ordinaryClaim.length, 3);
     assert.equal(data.ordinaryOutcome.length, 2);
+    assert.equal(data.ordinaryReconciliation.length,1);assert.equal(data.ordinaryReconciliation[0].outcome,'ACCEPTED');
+    assert.equal(data.ordinaryOutcome.find(o=>o.id===data.ordinaryReconciliation[0].previousOutcomeId)?.outcome,'UNCERTAIN');
     assert.equal(data.ordinaryInboundStream.length, 1);
     assert.equal(data.ordinaryInboundStream[0].cursor, '103');
     assert.equal(data.ordinaryInboundStream[0].cursorVersion, 2);

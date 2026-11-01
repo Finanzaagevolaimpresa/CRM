@@ -6,7 +6,8 @@ SET LOCAL statement_timeout = '30s';
 DO $$ BEGIN
   IF (SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL) <> 74
     OR NOT EXISTS (SELECT 1 FROM "_prisma_migrations"
-      WHERE migration_name='20261030190000_admin_residual_provenance_v1' AND finished_at IS NOT NULL AND rolled_back_at IS NULL)
+      WHERE migration_name='20261030190000_admin_residual_provenance_v1' AND finished_at IS NOT NULL AND rolled_back_at IS NULL
+        AND checksum='48782f5b5562a3bb5b9a90d3b5d9ee8982228bc23f8b44a82bf2c6a8b019bd28')
     OR to_regclass('public."OrdinaryEmailReconciliation"') IS NOT NULL THEN
     RAISE EXCEPTION 'ORDINARY_EMAIL_RECONCILIATION_SCHEMA74_REQUIRED';
   END IF;

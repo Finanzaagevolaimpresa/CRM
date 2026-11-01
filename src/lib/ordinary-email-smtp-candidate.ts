@@ -184,7 +184,8 @@ export async function transmitOrdinaryEmailCandidate(
     if (result.outcome !== 'UNCERTAIN') { try { await command('QUIT', [221]); } catch {} }
     return result;
   } catch {
-    const failure: OrdinarySmtpResult = { outcome: contentSubmitted ? 'UNCERTAIN' : 'NOT_SENT', phase, ...(replyCode === undefined ? {} : { replyCode }) };
+    const failedPhase = phase as Phase;
+    const failure: OrdinarySmtpResult = { outcome: contentSubmitted ? 'UNCERTAIN' : 'NOT_SENT', phase: !contentSubmitted && failedPhase === 'CONTENT' ? 'DATA' : failedPhase, ...(replyCode === undefined ? {} : { replyCode }) };
     await observe(failure);
     return failure;
   } finally {

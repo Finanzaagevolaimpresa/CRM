@@ -22,7 +22,7 @@ type Credentials = { sessionToken: string; stepUpToken: string | undefined };
 type Row = { id: string; state: string; decisionId: string; versionId: string; decision: unknown; decisionHash: string;
   envelopeHash: string; claimId: string | null; claimCreatedAt: Date | null; claimExpiresAt: Date | null;
   outcomeId: string | null; originalOutcome: string | null };
-type Reconciliation = { id: string; outcome: 'ACCEPTED' | 'NOT_SENT'; sourceHash: string; createdAt: Date };
+type Reconciliation = { id: string; outcome: 'ACCEPTED' | 'NOT_SENT'; sourceHash: string; createdAt: Date; reason: string };
 function deny(): never { throw new Error('ORDINARY_RECOVERY_DENIED'); }
 const clock = async (tx: Tx) => (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0].now;
 async function load(tx: Tx, claimed: AuthSession, raw: unknown, runtime: Runtime) {
@@ -38,7 +38,7 @@ async function load(tx: Tx, claimed: AuthSession, raw: unknown, runtime: Runtime
     LEFT JOIN "OrdinaryEmailOutcome" o ON o."attemptId"=a."id"
     WHERE a."id"=${reference.attemptId}::uuid AND a."messageId"=${reference.messageId}::uuid FOR UPDATE OF a`;
   if (!row || canonicalSha256(row.decision) !== row.decisionHash) deny();
-  const [recorded] = await tx.$queryRaw<Reconciliation[]>`SELECT "id","outcome","sourceHash","createdAt"
+  const [recorded] = await tx.$queryRaw<Reconciliation[]>`SELECT "id","outcome","sourceHash","createdAt","reason"
     FROM "OrdinaryEmailReconciliation" WHERE "attemptId"=${row.id}::uuid`;
   if (recorded && recorded.outcome !== row.state) deny();
   return { reference, context, row, recorded };
@@ -53,7 +53,9 @@ function stateHash(value: Loaded) {
     originalOutcomeId: value.row.outcomeId, originalOutcome: value.row.originalOutcome,
     currentRevision: value.context.row.currentRevision, snapshotHash: value.context.version.snapshotHash });
 }
-async function evidence(value: Loaded, runtime: Runtime, now: Date) {
+type Evidence = { reason: Extract<OrdinaryRecoveryResult, { status: 'WAITING' }>['reason'] }
+  | (ReturnType<typeof verifyOrdinaryObservation> & { sealed: Awaited<ReturnType<typeof readOrdinaryObservation>> });
+async function evidence(value: Loaded, runtime: Runtime, now: Date): Promise<Evidence> {
   const row = value.row;
   if (row.state === 'RESERVED' && !row.claimId) return { reason: 'RESERVED_WITHOUT_CLAIM' as const };
   if (!['CLAIMED','UNCERTAIN'].includes(row.state)) return { reason: 'ALREADY_FINAL' as const };
@@ -103,7 +105,7 @@ export async function previewStoredOrdinaryRecovery(db: Db, claimed: AuthSession
       outcome: source.observation.outcome, issuedAt: issuedAt.toISOString(), expiresAt };
     return { status: 'READY', token: signOrdinaryRecoveryPreview(payload,runtime.key), commandId: payload.commandId,
       outcome: payload.outcome, sourceHash: source.sourceHash, observedAt: source.observation.observedAt, expiresAt };
-  }, { timeout: 30_000 });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }
 
 /** Exact, idempotent Admin reconciliation. The browser cannot supply an outcome
@@ -119,7 +121,7 @@ export async function confirmStoredOrdinaryRecovery(db: Db, claimed: AuthSession
       || preview.messageId !== input.messageId || preview.attemptId !== input.attemptId) deny();
     if (value.recorded) {
       if (value.recorded.id !== preview.commandId || value.recorded.sourceHash !== preview.sourceHash
-        || value.recorded.outcome !== preview.outcome) deny();
+        || value.recorded.outcome !== preview.outcome || value.recorded.reason !== input.reason) deny();
       return recordedResult(value.recorded);
     }
     const source = await evidence(value,runtime,now);
@@ -149,8 +151,8 @@ export async function confirmStoredOrdinaryRecovery(db: Db, claimed: AuthSession
       entityType: 'ApprovedCommunication', entityId: input.messageId, event: 'ordinary_email_reconciled', after: audit } });
     const finalClock = await personal(tx,value,runtime,credentials);
     verifyOrdinaryRecoveryPreview(input.token,runtime.key,finalClock);
-    const [saved] = await tx.$queryRaw<Reconciliation[]>`SELECT "id","outcome","sourceHash","createdAt" FROM "OrdinaryEmailReconciliation"
+    const [saved] = await tx.$queryRaw<Reconciliation[]>`SELECT "id","outcome","sourceHash","createdAt","reason" FROM "OrdinaryEmailReconciliation"
       WHERE "id"=${preview.commandId}::uuid`;
     return recordedResult(saved);
-  }, { timeout: 30_000 });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
 import { saveApprovedMessageDraft } from '../../src/lib/approved-communications';
+import { sealOrdinaryObservation } from '../../src/lib/ordinary-email-observation';
 import { canonicalSha256 } from '../../src/lib/canonical-json';
 
 // Persistence/restart fixtures, not evidence of a real send or authorization.
@@ -26,13 +28,13 @@ async function main() {
     const version=await db.communicationVersion.findUniqueOrThrow({where:{messageId_revision:{messageId:saved.id,revision:1}}});
     const decisionId=randomUUID(),attemptId=randomUUID();
     const decision={protocol:'FAI_ORDINARY_EMAIL_PERSONAL_DECISION_V1',decisionId,messageId:saved.id,actorId:user.id,
-      sessionId:session.id,draftHash:saved.snapshotHash,draftRevision:1,syntheticPersistenceOnly:true};
+      sessionId:session.id,draftHash:saved.snapshotHash,draftRevision:1,intentHash:canonicalSha256('synthetic-intent'),mimeHash:canonicalSha256('synthetic-mime'),syntheticPersistenceOnly:true};
     const hash=canonicalSha256(decision);
     await db.ordinaryEmailDecision.create({data:{id:decisionId,messageId:saved.id,versionId:version.id,actorId:user.id,sessionId:session.id,
       decision,decisionHash:hash,proof:hash,envelopeHash:hash}});
     await db.ordinaryEmailAttempt.create({data:{id:attemptId,requestId:randomUUID(),decisionId,messageId:saved.id}});
     if(state!=='RESERVED') {
-      const claim=await db.ordinaryEmailClaim.create({data:{id:randomUUID(),attemptId,expiresAt:new Date(Date.now()+10_000)}});
+      const claim=await db.ordinaryEmailClaim.create({data:{id:randomUUID(),attemptId,createdAt:new Date(Date.now()-5000),expiresAt:new Date(Date.now()-1000)}});
       await db.ordinaryEmailAttempt.update({where:{id:attemptId},data:{state:'CLAIMED'}});
       if(state==='UNCERTAIN'||state==='ACCEPTED') {
         await db.ordinaryEmailOutcome.create({data:{id:randomUUID(),attemptId,claimId:claim.id,outcome:state,phase:'CONTENT',replyCode:state==='ACCEPTED'?250:null}});
@@ -41,6 +43,27 @@ async function main() {
     }
     await db.approvedCommunication.update({where:{id:saved.id},data:{state:state==='ACCEPTED'?'SENT':state==='UNCERTAIN'?'UNCERTAIN':'SENDING'}});
   }
+  // A synthetic append-only reconciliation exercises readback across candidate,
+  // compatible return and resume. No wire transport or historical source is rewritten.
+  const uncertain = await db.ordinaryEmailAttempt.findFirstOrThrow({where:{messageId:messages[2]}});
+  const oldOutcome = await db.ordinaryEmailOutcome.findUniqueOrThrow({where:{attemptId:uncertain.id}});
+  const claim = await db.ordinaryEmailClaim.findUniqueOrThrow({where:{attemptId:uncertain.id}});
+  const decision = await db.ordinaryEmailDecision.findUniqueOrThrow({where:{id:uncertain.decisionId}});
+  const sealed = sealOrdinaryObservation({attemptId:uncertain.id,leaseId:claim.id,expiresAt:claim.expiresAt.toISOString(),committed:true},
+    {attemptId:uncertain.id,intentHash:canonicalSha256('synthetic-intent'),mimeHash:canonicalSha256('synthetic-mime'),envelopeHash:decision.envelopeHash},
+    {outcome:'ACCEPTED',phase:'CONTENT',replyCode:250},new Date());
+  await db.$transaction(async tx=>{
+    await tx.ordinaryEmailReconciliation.create({data:{id:randomUUID(),attemptId:uncertain.id,claimId:claim.id,
+      previousOutcomeId:oldOutcome.id,actorId:user.id,sessionId:session.id,keyVersion:1,reason:'SYNTHETIC_PERSISTENCE_ONLY',
+      outcome:'ACCEPTED',phase:'CONTENT',replyCode:250,observation:sealed,sourceHash:canonicalSha256(sealed)}});
+    await tx.ordinaryEmailAttempt.update({where:{id:uncertain.id},data:{state:'ACCEPTED'}});
+    await tx.approvedCommunication.update({where:{id:messages[2]},data:{state:'SENT'}});
+  });
+  assert.equal((await db.ordinaryEmailOutcome.findUniqueOrThrow({where:{attemptId:uncertain.id}})).outcome,'UNCERTAIN');
+  const reconciled = await db.ordinaryEmailReconciliation.findUniqueOrThrow({where:{attemptId:uncertain.id}});
+  await writeFile(process.env.R05_ORDINARY_RECOVERY_FIXTURE!,JSON.stringify({synthetic:true,persistenceOnly:true,
+    adminEmail:user.email,practiceId:practice.id,messageId:messages[2],attemptId:uncertain.id,
+    reconciliationId:reconciled.id,sourceHash:reconciled.sourceHash,originalOutcome:'UNCERTAIN'}));
   const descriptor={protocol:'IMAP_UID',host:'restart.invalid.test',port:993,security:'TLS',minVersion:'TLSv1.2',
     rejectUnauthorized:true,folder:'INBOX',generation:'1234',authenticationReference:'SYNTHETIC_ONLY'};
   const stream=await db.ordinaryEmailInboundStream.create({data:{id:randomUUID(),mailboxId:box.id,mailboxRevision:box.revision,

@@ -20,7 +20,7 @@ let admin: Person;
 before(async () => {
   if (!enabled) return; await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const [ledger] = await db.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL');
-  assert.equal(ledger.count, 74n);
+  assert.equal(ledger.count, 75n);
   const existing = await db.selectiveAccessAuthority.findFirst();
   if (existing) { const user = await db.user.findUniqueOrThrow({ where: { id: existing.userId } }); admin = { user, ...await syntheticSession(db, user) }; }
   else admin = await syntheticAuthority(db);
