@@ -18,11 +18,11 @@ export function TechnicalUploadProfileFields({ value, onChange }: { value: Uploa
     <fieldset><legend className="font-semibold">Formati ammessi</legend><div className="flex flex-wrap gap-3">{documentUploadExtensions.filter(f => f !== '.zip').map(format =>
       <label key={format} className="flex items-center gap-2"><input type="checkbox" checked={value.formats.includes(format)} onChange={event => onChange({ ...value,
         formats: event.target.checked ? [...value.formats, format] : value.formats.filter(f => f !== format) })} />{format}</label>)}</div></fieldset>
-    <div className="grid gap-3 sm:grid-cols-3"><label className="block font-semibold">Dimensione massima per file (MiB)<input type="number" className={control} min={1} max={25} step={1} required value={value.fileMiB}
+    <div className="grid gap-3 sm:grid-cols-3"><label className="block font-semibold">Dimensione massima per file (MiB)<input type="number" className={control} min={1 / 1048576} max={25} step="any" required value={value.fileMiB}
       onChange={event => onChange({ ...value, fileMiB: event.target.value })} /></label>
       <label className="block font-semibold">Numero massimo di file<input type="number" className={control} min={1} max={20} step={1} required value={value.files}
         onChange={event => onChange({ ...value, files: event.target.value })} /></label>
-      <label className="block font-semibold">Spazio totale massimo (MiB)<input type="number" className={control} min={1} max={500} step={1} required value={value.totalMiB}
+      <label className="block font-semibold">Spazio totale massimo (MiB)<input type="number" className={control} min={1 / 1048576} max={500} step="any" required value={value.totalMiB}
         onChange={event => onChange({ ...value, totalMiB: event.target.value })} /></label></div>
     <p className="text-sm">Le quote valgono per questa versione dell’incarico e comprendono i file rifiutati o trattenuti dopo un’interruzione. Nessuna cancellazione automatica.</p>
   </fieldset>;

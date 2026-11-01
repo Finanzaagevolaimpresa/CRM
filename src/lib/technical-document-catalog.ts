@@ -7,7 +7,7 @@ export const technicalDocumentCatalogueQuery = z.object({
 }).strict();
 export type TechnicalDocumentCatalogueQuery = z.infer<typeof technicalDocumentCatalogueQuery>;
 export type TechnicalDocumentOption = TechnicalAssignmentSelection['documents'][number] & {
-  title: string; fileName: string; mimeType: string;
+  title: string; fileName: string; mimeType: string; retainedReference?: true;
 };
 export type TechnicalDocumentCatalogue = { options: TechnicalDocumentOption[];
   query: TechnicalDocumentCatalogueQuery; hasNext: boolean };
