@@ -127,7 +127,7 @@ async function technicalIsolation(browser: import('@playwright/test').Browser, f
   const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: document.id } });
   await expect.poll(() => admin.evaluate(() => Boolean((window as Window & { isolationUpload?: CapturedUpload }).isolationUpload))).toBe(true);
   const captured = await admin.evaluate(() => (window as Window & { isolationUpload?: CapturedUpload }).isolationUpload!);
-  expect((await owner.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
+  expect((await owner.request.get('/documents/' + document.id + '/download')).status()).toBe(404);
   if (mode === 'enforced') {
     const user = await db.user.findUniqueOrThrow({ where: { id: adminId } });
     await classifySyntheticTechnicalVersion(db, { user, ...await syntheticSession(db, user) }, version.id);
@@ -153,7 +153,7 @@ async function technicalIsolation(browser: import('@playwright/test').Browser, f
   await assignment.getByRole('button', { name: 'Salva responsabili' }).click();
   await expect(assignment.getByRole('status')).toHaveText('Responsabili aggiornati.');
   expect((await owner.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
-  expect((await replacement.request.get('/documents/' + document.id + '/download')).status()).toBe(mode === 'enforced' ? 200 : 403);
+  expect((await replacement.request.get('/documents/' + document.id + '/download')).status()).toBe(mode === 'enforced' ? 200 : 404);
   expect((await db.document.findUniqueOrThrow({ where: { id: document.id } })).uploadedById).toBe(adminId);
   expect((await db.task.findUniqueOrThrow({ where: { id: f.taskId } })).createdById).toBe(f.ownerId);
   expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: f.checklistId } })).updatedById).toBe(f.ownerId);

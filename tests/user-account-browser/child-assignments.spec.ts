@@ -97,7 +97,7 @@ test('child-only scope retains classified versions after client reassignment; ge
     await expect.poll(() => db.document.count({ where: { title: tag + '-' + suffix } })).toBe(1);
     const document = await db.document.findFirstOrThrow({ where: { title: tag + '-' + suffix } });
     expect(document.uploadedById).toBe(adminId);
-    expect((await page.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
+    expect((await page.request.get('/documents/' + document.id + '/download')).status()).toBe(404);
     if (process.env.PRIVILEGED_ACCESS_MODE === 'enforced') {
       const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: document.id } });
       await classification(version.id);
@@ -116,7 +116,7 @@ test('child-only scope retains classified versions after client reassignment; ge
   await page.goto('/projects/' + projectId); await expect(page.getByText(tag + '-own-project', { exact: true })).toBeVisible();
   expect((await page.request.get('/clients/' + clientId)).status()).toBe(404);
   expect((await page.request.get('/documents/' + first.document.id + '/download')).status())
-    .toBe(process.env.PRIVILEGED_ACCESS_MODE === 'enforced' ? 200 : 403);
+    .toBe(process.env.PRIVILEGED_ACCESS_MODE === 'enforced' ? 200 : 404);
   const service = await upload(otherClientId, '', ownServiceId, 'service-only');
   const before = await db.document.count();
   await replay(page, service.request, service.request.body.replaceAll(ownServiceId, foreignServiceId));

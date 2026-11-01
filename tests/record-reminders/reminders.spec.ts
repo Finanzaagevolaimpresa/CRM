@@ -127,7 +127,7 @@ test('two technicians receive only the selected deadline at its real time; curre
   await expect(techA).toHaveURL(/\/notifications\/updates$/);
   const activeCard = techA.locator('article').filter({ has: techA.locator(`a[href="${noticePath(a.id)}"]`) });
   await expect(activeCard).toContainText(romeDisplay(at));
-  await activeCard.getByRole('link', { name: 'Apri', exact: true }).click();
+  await activeCard.getByRole('link', { name: 'Apri aggiornamento', exact: true }).click();
   await expect(techA.getByText(romeDisplay(at), { exact: true })).toBeVisible();
   await expect(techA.getByText('Scadenza dell’attività: ' + romeDisplay(dueAt), { exact: true })).toBeVisible();
   await expect(techA.getByText('Orari Europe/Rome.', { exact: true })).toBeVisible();

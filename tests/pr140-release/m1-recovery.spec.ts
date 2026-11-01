@@ -47,11 +47,11 @@ test('packaged image enforces live client perimeters on an existing reviewer ses
   await access(true);
 });
 
-test('packaged image reopens M1 handoff, acceptance and private materials with current access checks', async ({ page, browser }) => {
+test('packaged image preserves M1 evidence and reopens only classified technical materials and individual acceptance', async ({ page, browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_M1_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; clientId: string; serviceId: string; practiceId: string; handoffId: string; acceptanceId: string; originId: string;
     tech: { id: string; email: string }; otherEmail: string; otherId: string; adminEmail: string;
-    materialId: string; materialHash: string; sensitiveId: string;
+    materialId: string; materialVersionId: string; materialClassificationCommandId: string; materialHash: string; sensitiveId: string;
   };
   expect(f.synthetic).toBe(true);
   expect((await getHandoffReceipt(db, f.serviceId))?.id).toBe(f.handoffId);
@@ -75,19 +75,22 @@ test('packaged image reopens M1 handoff, acceptance and private materials with c
   expect(await db.auditLog.findMany({ where: { entityId: f.practiceId }, orderBy: { id: 'asc' } })).toEqual(originalAudit);
   await adminContext.close();
   await login(page, f.tech.email);
-  const path = app + '/services/' + f.serviceId + '/handoff';
-  await page.goto(path);
-  await expect(page.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: 'Responsabilità e presa in carico', exact: true }).click();
+  const handoffPath = app + '/services/' + f.serviceId + '/handoff';
+  expect((await page.request.get(handoffPath)).status()).toBe(404);
+  const path = app + '/technical-office/practices/' + f.practiceId;
+  await page.goto(app + '/assignments/TechnicalPractice/' + f.practiceId);
   await expect(page.getByText(/Presa in carico tecnico: registrata il/)).toBeVisible();
+  await page.goto(path);
+  expect(await db.adminRecordRevision.count({ where: { commandId: f.materialClassificationCommandId,
+    model: 'TechnicalDocumentDisclosure', recordId: f.materialVersionId } })).toBe(1);
   const material = await page.request.get(app + '/documents/' + f.materialId + '/download');
   expect(material.status()).toBe(200);
   expect(createHash('sha256').update(await material.body()).digest('hex')).toBe(f.materialHash);
   expect((await page.request.get(app + '/documents/' + f.sensitiveId + '/download')).status()).toBe(403);
   const other = await browser.newContext(), otherPage = await other.newPage();
   await login(otherPage, f.otherEmail);
-  await otherPage.goto(path);
-  await expect(otherPage.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toHaveCount(0);
+  expect((await otherPage.goto(path))?.status()).toBe(404);
+  expect((await otherPage.request.get(handoffPath)).status()).toBe(404);
   expect((await otherPage.request.get(app + '/documents/' + f.materialId + '/download')).status()).toBe(403);
   await other.close();
   const tech = await db.user.findUniqueOrThrow({ where: { id: f.tech.id } });

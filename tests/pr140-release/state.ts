@@ -13,6 +13,8 @@ import { recordCommercialOrigin } from '../../src/lib/commercial-origin';
 import { readPrivateVideoFile } from '../../src/lib/video-storage';
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
 import { readTechnicalUploadPrivateFile } from '../../src/lib/technical-upload-storage';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
+import { syntheticSession } from '../selective-sharing/fixtures';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -37,9 +39,14 @@ async function main() {
     const entry = await db.$transaction(tx => handoffPurchasedService(tx, f.admin, f.input, true), { isolationLevel: 'Serializable' });
     const accepted = await db.$transaction(tx => acceptResponsibility(tx, f.tech, { kind: 'TechnicalPractice',
       id: entry.receipt.technicalPracticeId, decisionId: entry.receipt.decisionId, role: 'tecnico' }), { isolationLevel: 'Serializable' });
+    const classificationAdmin = await db.user.findUniqueOrThrow({ where: { id: f.admin.id } });
+    const classification = await classifySyntheticTechnicalVersion(db, { user: classificationAdmin,
+      ...await syntheticSession(db, classificationAdmin) }, f.documents[2].version.id);
+    assert.ok(classification);
     writeFileSync(process.argv[3], JSON.stringify({ synthetic: true, clientId: f.client.id, serviceId: f.service.id,
       practiceId: entry.receipt.technicalPracticeId, handoffId: entry.id, acceptanceId: accepted.id, originId: origin.id,
       tech: { id: f.tech.id, email: f.tech.email }, otherEmail: f.other.email, otherId: f.other.id, adminEmail: f.admin.email,
+      materialVersionId: f.documents[2].version.id, materialClassificationCommandId: classification.commandId,
       materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
   } else if (mode === 'epochs') {
     // Compare every epoch immediately across each stop/start, before browser

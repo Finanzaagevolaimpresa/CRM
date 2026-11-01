@@ -59,25 +59,25 @@ test('paid service UI: Admin handoff, individual acceptance, classified material
   const form = admin.getByRole('form', { name: 'Passaggio al tecnico', exact: true });
   async function submit() {
     await admin.goto(`${path}?q=${encodeURIComponent(f.tag)}`);
-    await form.getByLabel('Variante prevista dallâ€™incarico', { exact: true }).fill(f.input.variantCode);
+    await form.getByLabel('Variante prevista dall’incarico', { exact: true }).fill(f.input.variantCode);
     await form.getByLabel('Reparto tecnico', { exact: true }).fill(f.input.departmentCode);
     await form.getByLabel('Referente tecnico', { exact: true }).selectOption(f.tech.id);
-    await form.getByLabel('Scadenza delle attivitÃ ', { exact: true }).fill('2027-01-15');
-    await form.getByLabel('AttivitÃ  incluse, una per riga', { exact: true }).fill(f.input.activities.join('\n'));
+    await form.getByLabel('Scadenza delle attività', { exact: true }).fill('2027-01-15');
+    await form.getByLabel('Attività incluse, una per riga', { exact: true }).fill(f.input.activities.join('\n'));
     await form.getByLabel('Motivazione', { exact: true }).fill(f.input.reason); await form.getByRole('checkbox').check();
     await capture(admin, path); await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click(); return captured(admin);
   }
   const denied = await submit(); expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
   await replay(tech, denied); expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
   if (mode === 'disabled') { await expect(form.getByRole('status')).toContainText('non disponibile'); await ac.close(); await tc.close(); await oc.close(); return; }
-  const inline = admin.getByRole('region', { name: 'Conferma identitÃ  senza lasciare il lavoro', exact: true });
+  const inline = admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true });
   await expect(inline).toBeVisible();
   await expect(form.getByLabel('Referente tecnico', { exact: true })).toHaveValue(f.tech.id);
   await expect(form.getByLabel('Motivazione', { exact: true })).toHaveValue(f.input.reason);
   await expect(form.getByRole('checkbox')).toBeChecked();
   await inline.getByLabel('Password corrente', { exact: true }).fill(password);
-  await inline.getByRole('button', { name: 'Conferma identitÃ  e conserva le scelte', exact: true }).click();
-  await expect(inline).toContainText('IdentitÃ  confermata.');
+  await inline.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+  await expect(inline).toContainText('Identità confermata.');
   expect(await getHandoffReceipt(db, f.service.id)).toBeNull();
   await capture(admin, path); await form.getByRole('button', { name: 'Affida il servizio al tecnico', exact: true }).click();
   const committedRequest = await captured(admin);
@@ -114,7 +114,7 @@ test('paid service UI: Admin handoff, individual acceptance, classified material
   expect(await db.practiceCommunication.count({ where: { technicalPracticeId: receipt.receipt.technicalPracticeId } })).toBe(0);
   await captureManual(tech, 'S03-passaggio-tecnico', 'consulente', 'Responsabilità personale e materiale tecnico classificato; contratto, pagamento e note restano riservati.');
   await stepUp(admin); await admin.goto(`${assignmentPath}?q=${encodeURIComponent(f.tag)}`);
-  const assignment = admin.getByRole('form', { name: 'Decisione responsabilitÃ ', exact: true });
+  const assignment = admin.getByRole('form', { name: 'Decisione responsabilità', exact: true });
   await assignment.getByLabel('Referente tecnico', { exact: true }).selectOption(f.other.id);
   await assignment.getByLabel('Motivazione', { exact: true }).fill('Reassignment of technical scope, preserving original evidence');
   await assignment.getByRole('button', { name: 'Registra decisione', exact: true }).click();

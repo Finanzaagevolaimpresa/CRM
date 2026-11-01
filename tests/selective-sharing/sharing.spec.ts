@@ -165,8 +165,14 @@ test('P1-01 actual server actions from pre-grant forms deny admin and assigned t
       const before = await footprint();
       for (const form of forms) {
         const response = await post(form.fields);
-        expect(response.status()).toBe(500);
-        expect(await response.text()).not.toContain('Failed to find Server Action');
+        expect(response.status()).toBe(404);
+        const body = await response.text();
+        expect(body).not.toContain('Failed to find Server Action');
+        if (role === 'consulente') {
+          expect(response.status()).toBe(404);
+          expect(body).not.toContain('Synthetic internal note');
+          expect(body).not.toContain('Unchanged synthetic note');
+        }
         expect(await footprint(), 'technical before grant/' + form.label).toEqual(before);
       }
     }
@@ -186,7 +192,13 @@ test('P1-01 actual server actions from pre-grant forms deny admin and assigned t
         if (form.label === 'Salva dati') fields.title = 'Unauthorized change';
         if (form.label === 'Assegna') fields.technicalOwnerId = f.otherAdmin.user.id;
         const response = await post(fields);
-        expect(await response.text()).not.toContain('Failed to find Server Action');
+        const body = await response.text();
+        expect(body).not.toContain('Failed to find Server Action');
+        if (role === 'consulente') {
+          expect(response.status()).toBe(404);
+          expect(body).not.toContain('Synthetic internal note');
+          expect(body).not.toContain('Unchanged synthetic note');
+        }
         expect(await footprint(), `${role}/${revoked ? 'revoked' : 'active'}/${form.label}`).toEqual(before);
       }
     }

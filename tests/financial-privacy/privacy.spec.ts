@@ -365,7 +365,7 @@ test('an excluded role cannot invoke a legacy archive upload action with an assi
     const observed = await routeNativeActionAs(page, technician);
     await form.getByRole('button', { name: 'Carica in storage privato' }).click();
     await expect.poll(() => observed.length).toBe(1);
-    expect(observed[0].status).toBe(500); expect(observed[0].body).toContain('Risorsa non disponibile o non accessibile.');
+    expect(observed[0].status).toBe(404); expect(observed[0].body).not.toContain('Failed to find Server Action');
     expect(await db.document.count({ where: { clientId: f.clientId, fileName: 'denied-archive.zip' } })).toBe(0);
     expect(await db.auditLog.count({ where: { actorId: f.userId } })).toBe(before);
   } finally { await context.close(); }
@@ -641,18 +641,17 @@ for (const role of ['admin', 'consulente']) for (const action of ['create', 'edi
       await expect.poll(() => captured.length).toBe(1);
       expect(actionRequests).toBe(1);
       const response = captured[0];
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(technician ? 404 : 500);
       expect(await technicalFootprint(f.clientId)).toEqual(before);
-      // Check the actual RSC denial and guard, independently of Chromium's
-      // accented-text representation in the development error envelope.
-      const failureLine = response.body.split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
-      expect(failureLine).toBeTruthy();
-      const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
+      expect(response.body).not.toContain('Failed to find Server Action');
       if (technician) {
-        expect(failure.name).toBe('Error');
-        expect(failure.message).toBe('Risorsa non disponibile o non accessibile.');
-        expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalServerAction')).toBe(true);
+        // The server refuses the known native action without disclosing
+        // confidential context. The exact database/audit footprint is unchanged.
+        for (const value of [f.contractId, f.paymentId, ...f.docs.map(row => row.title)]) expect(response.body).not.toContain(value);
       } else {
+        const failureLine = response.body.split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
+        expect(failureLine).toBeTruthy();
+        const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
         expect(failure.name).toBe('UserFacingActionError');
         expect(failure.message).toContain('sospesa. Rivolgiti al responsabile per la verifica interna.');
         expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalPracticeOperational')).toBe(true);

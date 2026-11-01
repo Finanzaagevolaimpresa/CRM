@@ -16,7 +16,7 @@ export async function OperationalTechnicalDashboard({ session }: { session: Auth
   const projects = projectCatalogue ? selectOperationalWork(projectCatalogue.records, { active: true }) : null;
   const unknown = practiceCatalogue ? selectOperationalWork(practiceCatalogue.records).hiddenStatus : 0;
   return <div className="crm-space-y-6"><DashboardOverview greeting="Il tuo lavoro tecnico" userName={user?.name ?? ''}
-    summary="ResponsabilitÃ  ordinarie e incarichi personali correnti, senza duplicati." showPipeline={false} pipeline={[]}
+    summary="Responsabilità ordinarie e incarichi personali correnti, senza duplicati." showPipeline={false} pipeline={[]}
     priorities={[]} priorityLinks={[]}
     counterGroups={[
       ...(practices ? [{ id: 'ufficio-tecnico', title: 'Ufficio Tecnico', tone: 'green' as const,
@@ -35,18 +35,18 @@ export async function OperationalTechnicalDashboard({ session }: { session: Auth
       href: '/technical-office/practices?dashboard=attive', tone: 'green' as const }] : []),
     ]}
     selectedKpiId="pratiche" detailItems={practices?.records.slice(0, 3).map(row => ({
-      id: row.id, title: row.title ?? 'Pratica Â· titolo non condiviso', status: row.status!, href: row.href,
+      id: row.id, title: row.title ?? 'Pratica · titolo non condiviso', status: row.status!, href: row.href,
     })) ?? []}
     shortcuts={[
       ...(practices ? [{ label: 'Ufficio tecnico', description: 'Pratiche e scadenze nel tuo perimetro', href: '/technical-office', icon: 'gear', tone: 'green' }] : []),
       ...(projects ? [{ label: 'Progetti', description: 'Progetti autorizzati e perimetri personali', href: '/projects', icon: 'folder', tone: 'blue' }] : []),
       { label: 'I miei incarichi tecnici', description: 'Schede ordinarie e perimetri personali', href: '/technical-work', icon: 'folder', tone: 'green' },
-      { label: 'Richieste allâ€™Admin', description: 'Segui le richieste pertinenti', href: '/admin-requests', icon: 'mail', tone: 'purple' },
-      { label: 'AttivitÃ  e scadenze', description: 'Le attivitÃ  autorizzate', href: '/tasks', icon: 'calendar', tone: 'orange' },
+      { label: 'Richieste all’Admin', description: 'Segui le richieste pertinenti', href: '/admin-requests', icon: 'mail', tone: 'purple' },
+      { label: 'Attività e scadenze', description: 'Le attività autorizzate', href: '/tasks', icon: 'calendar', tone: 'orange' },
     ]}
     perimeterLinks={[{ label: 'I miei incarichi tecnici', href: '/technical-work' }, { label: 'Le mie assegnazioni', href: '/assignments' }]} />
     {((hasPermission(session, 'technical.read') && !practiceCatalogue) || (hasPermission(session, 'project.read') && !projectCatalogue)) &&
-      <p role="status">Una vista non Ã¨ disponibile con la sessione corrente; non Ã¨ conteggiata come un elenco vuoto.</p>}
+      <p role="status">Una vista non è disponibile con la sessione corrente; non è conteggiata come un elenco vuoto.</p>}
     {((practiceCatalogue && !practiceCatalogue.selectiveAvailable) || (projectCatalogue && !projectCatalogue.selectiveAvailable)) &&
       <p role="status">Incarichi personali non disponibili: sono mostrati soltanto i dati ordinari autorizzati.</p>}
     {unknown > 0 && <Card title="Pratiche con stato non condiviso"><p>{unknown} ulteriori pratiche autorizzate non contribuiscono ai contatori per stato.</p><SecondaryLink href="/technical-office/practices">Apri tutte le pratiche autorizzate</SecondaryLink></Card>}

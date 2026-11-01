@@ -70,7 +70,7 @@ for (const profile of ['techA', 'techB', 'mixed'] as const) test(profile + ': te
   for (const url of ['/dashboard', '/dashboard?view=oggi', '/documents', '/search?q=PAGAMENTO', '/notifications', '/communications']) {
     const response = await page.goto(url); expect(response?.status()).toBe(200);
     const title = url.startsWith('/documents') ? 'Documenti tecnici consentiti' : url.startsWith('/search') ? 'Ricerca nel perimetro tecnico'
-      : url.startsWith('/notifications') ? 'Notifiche Â· perimetro tecnico' : url.startsWith('/communications') ? 'Comunicazioni Â· perimetro tecnico' : 'Ufficio Tecnico';
+      : url.startsWith('/notifications') ? 'Notifiche · perimetro tecnico' : url.startsWith('/communications') ? 'Comunicazioni · perimetro tecnico' : 'Ufficio Tecnico';
     if (url.startsWith('/dashboard')) { await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dashboard');
       await expect(page.locator('main')).toContainText('Il tuo lavoro tecnico'); }
     else await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -120,7 +120,7 @@ test('Admin and Commerciale retain their actual permitted paths; exact classific
   // Reopening the stored command is a read, not a second save.
   await admin.goto(url + '?decision=' + decision);
   await admin.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
-  await expect(admin.getByRole('status')).toContainText('Classificazione giÃ  registrata.');
+  await expect(admin.getByRole('status')).toContainText('Classificazione già registrata.');
   expect(await db.adminRecordRevision.count({ where: { commandId: decision! } })).toBe(1);
   await ac.close(); await tc.close(); await sc.close();
 });
@@ -143,10 +143,10 @@ test('Admin copies only into a draft then authorizes each collaborator; revocati
     expect(await count()).toBe(before); await deniedFile(context, file(row), row);
     const [sourceRecord] = await db.$queryRaw<Array<{ selection: { expiresAt: string } }>>
       `SELECT payload->'selection' AS selection FROM "TechnicalAssignment" WHERE id=${source!}::uuid`;
-    await expect(admin.getByLabel('Scadenza, entro 90 giorni Â· Europe/Rome', { exact: true })).toHaveValue(romeDateTimeInput(sourceRecord.selection.expiresAt));
-    await expect(admin.getByRole('combobox', { name: 'ResponsabilitÃ ', exact: true })).toHaveValue('supporto');
-    await admin.getByLabel('Motivo dellâ€™incarico', { exact: true }).fill('Collaborazione sintetica nominale');
-    await admin.getByRole('button', { name: 'Anteprima dellâ€™incarico', exact: true }).click();
+    await expect(admin.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true })).toHaveValue(romeDateTimeInput(sourceRecord.selection.expiresAt));
+    await expect(admin.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('supporto');
+    await admin.getByLabel('Motivo dell’incarico', { exact: true }).fill('Collaborazione sintetica nominale');
+    await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
     await expect(admin.getByRole('region', { name: 'Riepilogo incarico', exact: true })).toContainText(person.email);
     await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
     await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
