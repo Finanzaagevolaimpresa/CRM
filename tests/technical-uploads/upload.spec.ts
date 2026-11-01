@@ -188,6 +188,9 @@ test('native private acquisition, exact technical version selection, positive by
   await a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true }).check();
   await a.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Mostra soltanto la versione acquisita');
+  // Existing upload authority is retained; this replacement explicitly removes it.
+  await expect(a.getByLabel('Caricare documenti tecnici', { exact: true })).toBeChecked();
+  await a.getByLabel('Caricare documenti tecnici', { exact: true }).uncheck();
   await expect(a.getByLabel('Caricare documenti tecnici', { exact: true })).not.toBeChecked();
   await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await a.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
