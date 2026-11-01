@@ -53,9 +53,9 @@ export function AdminPrivateDocumentVersionEditor({ data, commandId: initialComm
     </fieldset></form>
     {result && <p role="status">{result.message}</p>}{result?.stepUp && <InlinePrivilegedConfirmation/>}
     {result?.uncertain && <section className="border rounded-xl p-4 space-y-3"><p className="break-all">Riferimento: {commandId}</p>
-      <button disabled={busy} className="block underline" onClick={() => void reconcile()}>Verifica esito registrato</button>
+      <button disabled={!ready || busy} className="block underline" onClick={() => void reconcile()}>Verifica esito registrato</button>
       <label><input type="checkbox" checked={closeConfirmed} onChange={e => setCloseConfirmed(e.target.checked)}/> Chiudi il tentativo soltanto se non ha prodotto una versione.</label>
-      <button disabled={busy || !closeConfirmed} className="block underline" onClick={() => void reconcile(true)}>Riconcilia e chiudi il tentativo</button></section>}
+      <button disabled={!ready || busy || !closeConfirmed} className="block underline" onClick={() => void reconcile(true)}>Riconcilia e chiudi il tentativo</button></section>}
     {(result?.ok || result?.closed) && <a className="block underline font-bold" href={path}>Riapri e verifica le versioni</a>}
     <section className="space-y-3"><h2 className="font-bold">Versioni conservate</h2>{[...data.versions].reverse().map(v => <article key={v.versionId} className="border rounded-xl p-4 space-y-2">
       <p className="font-bold">Versione {v.version} · {v.fileName}</p><p>{new Date(v.at).toLocaleString('it-IT')} · {v.actor?.name} · {v.actor?.email}</p><p>{v.reason}</p>

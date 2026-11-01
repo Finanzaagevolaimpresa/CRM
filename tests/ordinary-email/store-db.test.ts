@@ -741,9 +741,10 @@ test('admitted receipt projection distinguishes pending, accepted and historical
   await rotate(f);
   const before=await footprint(f);
   receipt=(await read(f,delegate)).messages[0].ordinaryReceipts[0];
-  assert.deepEqual(Object.keys(receipt).sort(),['createdAt','id','outcome','recordedAt','revision','snapshotHash','state']);
+  assert.deepEqual(Object.keys(receipt).sort(),['createdAt','id','outcome','reconciliation','recordedAt','revision','snapshotHash','state']);
   assert.equal(receipt.state,'ACCEPTED'); assert.equal(receipt.outcome,'ACCEPTED'); assert.equal(receipt.revision,1);
   assert.equal(receipt.snapshotHash,f.saved.snapshotHash); assert.ok(receipt.recordedAt instanceof Date);
+  assert.equal(receipt.reconciliation,null);
   assert.deepEqual(await footprint(f),before);
 });
 

@@ -111,10 +111,10 @@ export function AdminCommunicationFileEditor({ data, commandId, versionId, recov
     {result && <p role="status">{result.message}</p>}
     {result?.stepUp && <InlinePrivilegedConfirmation/>}
     {result?.uncertain && <section className="space-y-3 rounded-xl border border-amber-400 p-4"><p className="break-all">Riferimento del tentativo: {commandId}</p>
-      <button disabled={busy} className="block underline" onClick={()=>void reconcile()}>Verifica esito registrato</button>
+      <button disabled={!ready || busy} className="block underline" onClick={()=>void reconcile()}>Verifica esito registrato</button>
       {submitted && <button disabled={busy} className="block underline" onClick={()=>void submit(true)}>Riprendi lo stesso comando conservato</button>}
       <label className="block"><input type="checkbox" checked={closeConfirmed} onChange={event=>setCloseConfirmed(event.target.checked)}/> Chiudi il tentativo se non ha prodotto una versione.</label>
-      <button disabled={busy||!closeConfirmed} className="block underline" onClick={()=>void reconcile(true)}>Riconcilia e chiudi il tentativo</button>
+      <button disabled={!ready || busy||!closeConfirmed} className="block underline" onClick={()=>void reconcile(true)}>Riconcilia e chiudi il tentativo</button>
     </section>}
     {result?.ok && result.receipt && <Link className="block font-bold underline" href={`/admin/communication-files/${result.receipt.id}`}>Apri la nuova versione registrata</Link>}
     {result?.closed && <Link className="block underline" href={`/admin/communication-files/${data.id}`}>Prepara una nuova operazione</Link>}

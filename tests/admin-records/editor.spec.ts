@@ -17,6 +17,23 @@ import { lifecycleReadinessFixture,lifecyclePrivateDocumentFixture } from '../ad
 import {readAdminPrivateDocumentMetadata,saveAdminPrivateDocumentMetadata} from '../../src/lib/admin-private-document-metadata';
 import { readAdminOperationalState, saveAdminOperationalState } from '../../src/lib/admin-operational-lifecycle';
 import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
+
+async function coldReloadRecovery(page: Page) {
+  // Recovery controls must not accept a click before their client handler is ready.
+  let release!: () => void, blocked = 0;
+  const scripts = new Promise<void>(resolve => { release = resolve; });
+  const pattern = /\/_next\/static\/.*\.js(?:\?.*)?$/;
+  await page.route(pattern, async route => { blocked++; await scripts; await route.continue(); });
+  const button = page.getByRole('button', { name: 'Verifica esito registrato', exact: true });
+  try {
+    await page.reload({ waitUntil: 'commit' });
+    await expect.poll(() => blocked).toBeGreaterThan(0);
+    await expect(button).toBeVisible(); await expect(button).toBeDisabled();
+  } finally { release(); }
+  await expect(button).toBeEnabled();
+  await page.unroute(pattern);
+}
+
 const db = new PrismaClient(), evidence = process.env.ADMIN_RECORD_EVIDENCE!;
 const f: { adminEmail: string; technicianEmail: string; commandsEmail: string; clientId: string; projects: { id: string; title: string }[] } = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8'));
 const password = process.env.ADMIN_RECORD_BROWSER_PASSWORD!;
@@ -561,7 +578,7 @@ test('a lost file-version response recovers its single receipt after reload with
   });
   await page.getByRole('button', { name: 'Registra nuova versione', exact: true }).click();
   await expect.poll(() => discarded).toBe(true);
-  await page.unroute(pattern); await page.reload();
+  await page.unroute(pattern); await coldReloadRecovery(page);
   await expect(page.getByRole('button', { name: 'Registra nuova versione', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Operazione già registrata.');
@@ -991,7 +1008,7 @@ test('lost profile response recovers one revision and an absent later attempt cl
   await page.getByRole('button', { name: 'Registra profilo del ruolo', exact: true }).click();
   await expect.poll(() => lost).toBe(true); await page.unroute(pattern);
   const saved = new URL(page.url()).searchParams.get('decision')!;
-  await page.reload(); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await coldReloadRecovery(page); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Profilo già registrato.');
   expect(posts).toBe(1); expect(await db.adminRecordRevision.count({ where: { commandId: saved } })).toBe(1);
   await page.getByRole('link', { name: 'Riapri e verifica il profilo', exact: true }).click();
@@ -1058,7 +1075,7 @@ test('lost operational-link response recovers one atomic relationship and never 
   await page.route(pattern, async route => { if (route.request().method() !== 'POST') return route.continue(); posts++; await route.fetch(); completed = true; await route.abort('failed'); });
   await page.getByRole('button', { name: 'Registra rettifica dei collegamenti', exact: true }).click();
   await expect.poll(() => completed).toBe(true); const commandId = new URL(page.url()).searchParams.get('decision')!;
-  await page.unroute(pattern); await page.reload();
+  await page.unroute(pattern); await coldReloadRecovery(page);
   await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Rettifica già registrata.');
   expect(posts).toBe(1); expect(await db.adminRecordRevision.count({ where: { commandId } })).toBe(1);
@@ -1121,7 +1138,7 @@ test('a lost private binary response is reconciled once and an absent upload is 
   let completed = false, posts = 0;
   await page.route(pattern, async route => { if (route.request().method() !== 'POST') return route.continue(); posts++; await route.fetch(); completed = true; await route.abort('failed'); });
   await page.getByRole('button', { name: 'Registra nuova versione privata', exact: true }).click(); await expect.poll(() => completed).toBe(true);
-  await page.unroute(pattern); await page.reload(); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await page.unroute(pattern); await coldReloadRecovery(page); await page.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Versione già registrata.'); expect(posts).toBe(1);
   expect(await db.documentVersion.count({ where: { documentId: id } })).toBe(2);
   const recordedCommand = new URL(page.url()).searchParams.get('command');

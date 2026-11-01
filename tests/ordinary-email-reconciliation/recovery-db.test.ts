@@ -61,7 +61,7 @@ test('schema75 exposes the append-only recovery surface and binding guards',opti
 test('lost receipt persistence recovers a real synthetic wire observation once, without another transport',options,async()=>{
   const f=await fixture(), sockets:SyntheticSocket[]=[];
   const transport={readQualifiedTransport:async()=>({host:'smtp.synthetic.invalid',password:'SYNTHETIC_ONLY'}),
-    connectTls:((_config:ConnectionOptions)=>{const s=new SyntheticSocket({});sockets.push(s);queueMicrotask(()=>{s.emit('secureConnect');s.reply('220 synthetic ready\r\n');});return s;}) as unknown as typeof connect};
+    connectTls:((config:ConnectionOptions)=>{assert.equal(config.rejectUnauthorized,true);const s=new SyntheticSocket({});sockets.push(s);queueMicrotask(()=>{s.emit('secureConnect');s.reply('220 synthetic ready\r\n');});return s;}) as unknown as typeof connect};
   const send=await confirmAndTransmitStoredOrdinaryEmail(fault('ordinary_email_outcome'),f.actor,
     {messageId:f.saved.id,requestId:randomUUID(),previewToken:(await previewStoredOrdinaryEmail(db,f.actor,f.saved.id,runtime)).token},
     f.credentials,runtime,transport,{deadline:performance.now()+14000,signal:AbortSignal.timeout(15000)});

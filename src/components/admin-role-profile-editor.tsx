@@ -68,9 +68,9 @@ export function AdminRoleProfileEditor({ data, commandId: initialCommandId, reco
     </form>
     {result && <p role="status">{result.message}</p>}{result?.stepUp && <InlinePrivilegedConfirmation/>}
     {result?.uncertain && <section className="space-y-3 border rounded-xl p-3"><p>Riferimento: {commandId}</p>
-      <button disabled={busy} className="block underline" onClick={() => void reconcile()}>Verifica esito registrato</button>
+      <button disabled={!ready || busy} className="block underline" onClick={() => void reconcile()}>Verifica esito registrato</button>
       <label><input type="checkbox" checked={closeConfirmed} onChange={event => setCloseConfirmed(event.target.checked)}/> Chiudi solo un tentativo privo di effetto.</label>
-      <button disabled={busy || !closeConfirmed} className="block underline" onClick={() => void reconcile(true)}>Riconcilia e chiudi il tentativo</button>
+      <button disabled={!ready || busy || !closeConfirmed} className="block underline" onClick={() => void reconcile(true)}>Riconcilia e chiudi il tentativo</button>
     </section>}
     {(result?.ok || result?.closed) && <a className="block underline" href={path}>Riapri e verifica il profilo</a>}
     <button disabled={frozen} className="underline" onClick={() => restore({ overrides: [] })}>Riprendi la base del sistema nella bozza</button>

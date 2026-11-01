@@ -7,10 +7,10 @@ import { ordinaryReceiptSchema } from './ordinary-email-receipt';
 export async function readAdmittedOrdinaryEmailReceipts(tx: Prisma.TransactionClient, messageId: string) {
   z.string().uuid().parse(messageId);
   const [tables] = await tx.$queryRaw<Array<{ present: number; recovery: boolean }>>`SELECT count(*)::integer AS present,
-    to_regclass('public."OrdinaryEmailReconciliation"') IS NOT NULL AS recovery FROM
-    (VALUES (to_regclass('public."OrdinaryEmailAuthority"')), (to_regclass('public."OrdinaryEmailChannel"')),
-      (to_regclass('public."OrdinaryEmailAttempt"')), (to_regclass('public."OrdinaryEmailDecision"')),
-      (to_regclass('public."OrdinaryEmailClaim"')), (to_regclass('public."OrdinaryEmailOutcome"'))) AS candidate(relation) WHERE relation IS NOT NULL`;
+    to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailReconciliation')) IS NOT NULL AS recovery FROM
+    (VALUES (to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailAuthority'))), (to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailChannel'))),
+      (to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailAttempt'))), (to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailDecision'))),
+      (to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailClaim'))), (to_regclass(format('%I.%I', current_schema(), 'OrdinaryEmailOutcome')))) AS candidate(relation) WHERE relation IS NOT NULL`;
   if (tables.present === 0) return [];
   if (tables.present !== 6) throw new Error('ORDINARY_EMAIL_RECEIPTS_UNAVAILABLE');
   const reconciliation = tables.recovery ? Prisma.sql`jsonb_build_object('id',r."id",'sourceHash',r."sourceHash",
