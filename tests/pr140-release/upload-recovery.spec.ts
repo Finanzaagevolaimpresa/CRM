@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
-test('schema71 restart preserves private upload bytes, pending and final reviews and current denials', async ({ browser }) => {
+test('restart preserves Admin private upload bytes, technical redaction, reviews and current denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_UPLOAD_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; practiceId: string; adminEmail: string; liveEmail: string; revokedEmail: string;
     liveId: string; revokedId: string; salesEmails: string[];
@@ -27,6 +27,22 @@ test('schema71 restart preserves private upload bytes, pending and final reviews
     expect(await page.content()).not.toContain('RECOVERY_PRIVATE_UPLOAD_REVOKED');
   }
   await expect(a.locator('[data-upload-review-ready="true"]')).toHaveCount(1);
+  await expect(t.getByRole('heading', { name: 'Deposito privato', exact: true })).toHaveCount(3);
+  await expect(t.getByText('File in revisione Admin', { exact: false })).toHaveCount(3);
+  const technicalHtml = await t.content();
+  expect(technicalHtml).not.toContain('Verifica sintetica prima del riavvio');
+  for (const row of f.uploads) {
+    expect(technicalHtml).not.toContain(row.title);
+    expect(technicalHtml).not.toContain(row.bytes);
+    expect(technicalHtml).not.toContain(row.status + '.txt');
+  }
+  async function denied(context: BrowserContext, url: string, row: typeof f.uploads[number]) {
+    for (const suffix of ['', '?download=1']) {
+      const response = await context.request.get(url + suffix); expect(response.status()).toBe(404);
+      expect(response.headers()['content-disposition']).toBeUndefined();
+      expect(await response.text()).not.toContain(row.bytes);
+    }
+  }
   async function exact(context: BrowserContext, url: string, row: typeof f.uploads[number]) {
     for (const suffix of ['', '?download=1']) {
       const response = await context.request.get(url + suffix); expect(response.status()).toBe(200);
@@ -53,15 +69,17 @@ test('schema71 restart preserves private upload bytes, pending and final reviews
     const ownFile = own + '/files/' + row.commandId, adminFile = review(row.authorId) + '/files/' + row.commandId;
     allUrls.push(ownFile, ownFile + '?download=1', adminFile, adminFile + '?download=1');
     if (row.status !== 'REVOKED') {
-      await expect(t.getByRole('heading', { name: row.title, exact: true })).toBeVisible();
-      await exact(live, ownFile, row); await exact(admin, adminFile, row);
+      await expect(a.getByRole('heading', { name: row.title, exact: true })).toBeVisible();
+      await exact(admin, adminFile, row);
     } else {
-      expect((await live.request.get(ownFile)).status()).toBe(404);
-      expect((await admin.request.get(adminFile)).status()).toBe(404);
+      await denied(admin, adminFile, row);
     }
-    expect((await revoked.request.get(ownFile)).status()).toBe(404);
-    expect((await live.request.get(adminFile)).status()).toBe(404);
-    expect((await admin.request.get(ownFile)).status()).toBe(404);
+    // Authorship and a previous review never authorize the raw private deposit.
+    // Acquisition, classification and an explicit version grant are required.
+    await denied(live, ownFile, row);
+    await denied(revoked, ownFile, row);
+    await denied(live, adminFile, row);
+    await denied(admin, ownFile, row);
   }
   expect((await revoked.request.get(own)).status()).toBe(404);
   expect((await admin.request.get(review(f.revokedId))).status()).toBe(404);
