@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
-          git diff --exit-code bbc76e18a64b8e3ff75c51fe7d966ae31e5f2fd2 HEAD -- prisma/migrations ":(exclude)prisma/migrations/20261030190000_admin_residual_provenance_v1"
+          git diff --exit-code 562bfae09c73c8d93332630b5381e764488a4cab HEAD -- prisma/migrations ":(exclude)prisma/migrations/20261101090000_ordinary_email_reconciliation_v1"
           evidence="$RUNNER_TEMP/service-registration-evidence"
           mkdir -p "$evidence"
           echo "SERVICE_REGISTRATION_EVIDENCE=$evidence" >> "$GITHUB_ENV"

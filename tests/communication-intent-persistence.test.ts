@@ -80,6 +80,7 @@ test('N15 migration 44 is one additive transaction with three dedicated dormant 
     '20261029190000_admin_record_revisions_v1',
     '20261030100000_admin_operational_lifecycle_v1',
     '20261030190000_admin_residual_provenance_v1',
+    '20261101090000_ordinary_email_reconciliation_v1',
   ].includes(name));
   assert.equal(names.length, 44);
   assert.equal(names.at(-1), '20260909120000_n15_dedicated_communication_persistence_v1');
