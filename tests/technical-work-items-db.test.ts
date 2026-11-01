@@ -220,7 +220,7 @@ test('refresh does not renew a chosen document snapshot; concurrent source chang
   const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
   await db.document.update({ where: { id: rows[64].id }, data: { title: 'Relazione aggiornata sintetica' } });
   const current = await documents(f, rows[64].fileName);
-  assert.notEqual(current.documentOptions[0].contextSha256, input.selection.documents[0].contextSha256);
+  assert.equal(current.documentOptions.length, 0, 'Changed metadata invalidates technical classification; a refresh cannot reclassify or renew it');
   await assert.rejects(previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input));
   await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true));
   assert.equal(await db.technicalAssignment.count({ where: { recipientId: f.techA.user.id, practiceId: target.targetId } }), 0);

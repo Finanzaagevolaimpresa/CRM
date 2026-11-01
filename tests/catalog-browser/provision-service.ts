@@ -11,7 +11,7 @@ export async function provisionCatalogBrowserFixtures(db: ProvisionDb, password:
   await assertSyntheticCatalogDatabase(db);
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({ data: [
-    { id: 'catalog-browser-viewer', email: 'catalog-viewer@invalid.test', name: 'Catalogo Sintetico', passwordHash, role: 'backoffice' },
+    { id: 'catalog-browser-viewer', email: 'catalog-viewer@invalid.test', name: 'Catalogo Commerciale Sintetico', passwordHash, role: 'commerciale' },
     { id: 'catalog-browser-denied', email: 'catalog-denied@invalid.test', name: 'Catalogo Negato', passwordHash, role: 'consulente' },
   ] });
   await db.userPermissionOverride.create({ data: { userId: 'catalog-browser-denied', permission: 'service.read', allowed: false } });

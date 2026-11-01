@@ -75,7 +75,7 @@ async function actor(tx: Prisma.TransactionClient, claimed: AuthSession, permiss
   if (!claimed.sessionId || !uuid.safeParse(claimed.sessionId).success) throw new EngagementDossierError('DENIED');
   const user = await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId, userId: claimed.userId });
   if (!user || !user.live || user.revokedAt || !user.active || user.deletedAt) throw new EngagementDossierError('DENIED');
-  const current = { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), clientReadScope: await loadClientReadScope(tx, claimed.userId), role: user.role, active: user.active, permissionOverrides: [...user.permissionOverrides] } satisfies AuthSession;
+  const current = { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), clientReadScope: await loadClientReadScope(tx, claimed.userId), role: user.role, technicalRestricted: user.technicalRestricted, active: user.active, permissionOverrides: [...user.permissionOverrides] } satisfies AuthSession;
   if (!hasPermission(current, permission)) throw new EngagementDossierError('DENIED');
   return current;
 }

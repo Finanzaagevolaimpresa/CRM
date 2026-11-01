@@ -113,7 +113,7 @@ test('Admin creates then explicitly assigns different items to two technicians; 
   await expect(a.getByText('Modifica registrata con ricevuta. Nessun messaggio è stato inviato.', { exact: true })).toBeVisible();
   await screenshot(a, 'private-task-assigned-work');
   await b.goto(workItem(row, 'ChecklistItem', check.itemId)); await b.locator('[data-technical-item-ready="true"]').waitFor();
-  await expect(b.getByRole('definition').filter({ hasText: /^TESTO_PRIVATO_NON_SCELTO$/ })).toBeVisible();
+  await expect(b.getByRole('definition').filter({ hasText: /^Checklist riservata al tecnico B$/ })).toBeVisible();
   await expect(b.getByRole('textbox', { name: /Note/, exact: true })).toHaveCount(0);
   expect(await b.content()).not.toContain('TESTO_PRIVATO_NON_SCELTO');
   await b.getByLabel('Modifica titolo', { exact: true }).check();

@@ -57,11 +57,14 @@ test('anagrafica journey persists lead, client, company and referent; outsider a
   await editing.getByRole('button', { name: 'Salva referente', exact: true }).click(); await expect(admin).toHaveURL(/#referenti$/);
   await expect(admin.getByText('Amministratore', { exact: true })).toBeVisible();
   await login(outsider, 'outsider'); const denied = await outsider.goto(`/companies/${company.id}/edit`); expect(denied?.status()).toBe(404);
-  await login(owner, 'owner'); await owner.goto(`/companies/${company.id}/edit`);
-  await owner.locator('input[name="name"]').fill('Must not save');
-  await db.userPermissionOverride.create({ data: { userId: f.ownerId, permission: 'company.write', allowed: false } });
-  await owner.getByRole('button', { name: 'Salva anagrafica', exact: true }).click();
-  await expect(owner.getByRole('alert').filter({ hasText: 'Salvataggio non autorizzato' })).toBeVisible();
+  await login(owner, 'owner'); const technicalDenied = await owner.goto(`/companies/${company.id}/edit`);
+  expect(technicalDenied?.status()).toBe(404);
+  await admin.goto(`/companies/${company.id}/edit`);
+  await admin.locator('input[name="name"]').fill('Must not save');
+  const administrativeAuthor = await db.user.findUniqueOrThrow({ where: { email: 'profiles-admin@example.test' } });
+  await db.userPermissionOverride.create({ data: { userId: administrativeAuthor.id, permission: 'company.write', allowed: false } });
+  await admin.getByRole('button', { name: 'Salva anagrafica', exact: true }).click();
+  await expect(admin.getByRole('alert').filter({ hasText: 'Salvataggio non autorizzato' })).toBeVisible();
   expect((await db.company.findUniqueOrThrow({ where: { id: company.id } })).name).toBe('Profiles Browser Company');
   writeFileSync(join(root, 'browser-proof.json'), JSON.stringify({ synthetic: true, lead: true, client: true, company: true, nullClearing: true,
     zeroPreserved: true, personCreateAndEdit: true, outsiderDenied: true, revokedOpenFormDenied: true }));

@@ -19,7 +19,7 @@ const restrictedPermissions = new Set([
   'dossier.read', 'dossier.write', 'dossier.approve', 'ai.review', 'ai.approve',
   'ai.execution.audit', 'ai.orchestrator.audit', 'legal.read', 'privacy.evidence.read',
   'practice_communications.read', 'practice_communications.review', 'practice_communications.mark_used',
-  'communications.internal.read', 'user.read', 'user.write', 'settings.manage',
+  'communications.internal.read', 'video.read', 'video.manage', 'user.read', 'user.write', 'settings.manage',
 ]);
 export function technicalPermissionCeiling(actor: TechnicalConfidentialityActor, permission: string) {
   return !isTechnicalAccount(actor) || !restrictedPermissions.has(permission);

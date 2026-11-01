@@ -69,6 +69,10 @@ for (const profile of ['techA', 'techB', 'mixed'] as const) test(profile + ': te
   await deniedFile(context, '/client-dossiers/' + row.clientDossierId + '/work-export', row, 'POST');
   for (const url of ['/dashboard', '/documents', '/search?q=PAGAMENTO', '/notifications', '/communications']) {
     const response = await page.goto(url); expect(response?.status()).toBe(200);
+    const title = url.startsWith('/documents') ? 'Documenti tecnici consentiti' : url.startsWith('/search') ? 'Ricerca nel perimetro tecnico'
+      : url.startsWith('/notifications') ? 'Notifiche · perimetro tecnico' : url.startsWith('/communications') ? 'Comunicazioni · perimetro tecnico' : 'Ufficio Tecnico';
+    if (url === '/dashboard') await expect(page.getByRole('heading', { level: 1 })).toContainText('Il tuo lavoro tecnico');
+    else await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
     const html = (await response!.text()) + (await page.content());
     for (const value of row.excluded) expect(html.includes(value), 'Page disclosed a reserved synthetic value').toBe(false);
   }
@@ -100,10 +104,13 @@ test('Admin and Commerciale retain their actual permitted paths; exact classific
   expect(await db.adminRecordRevision.count({ where: { commandId: decision! } })).toBe(1);
   await deniedFile(tc, file(row), row);
   await tech.goto(work(row)); await expect(tech.getByText(row.documents[0].fileName, { exact: false })).toHaveCount(0);
-  await admin.getByRole('link', { name: 'Riapri e verifica la classificazione', exact: true }).click();
+  await admin.getByRole('link', { name: 'Riapri e verifica la classificazione', exact: true }).click({ noWaitAfter: true });
+  await expect(admin).toHaveURL(url => url.pathname === '/admin/document-disclosure/' + row.documents[0].versionId && !url.search);
   await expect(admin.locator('main')).toContainText('Classificazione corrente: Riservato ai profili ammessi');
   // Reopening the stored command is a read, not a second save.
   await admin.goto(url + '?decision=' + decision);
+  await admin.getByRole('button', { name: 'Verifica esito registrato', exact: true }).click();
+  await expect(admin.getByRole('status')).toContainText('Classificazione già registrata.');
   expect(await db.adminRecordRevision.count({ where: { commandId: decision! } })).toBe(1);
   await ac.close(); await tc.close(); await sc.close();
 });

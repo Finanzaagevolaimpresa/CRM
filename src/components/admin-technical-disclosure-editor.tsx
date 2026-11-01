@@ -5,13 +5,16 @@ import { saveTechnicalDisclosureAction, reconcileTechnicalDisclosureAction, type
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 type Data = Awaited<ReturnType<typeof readAdminTechnicalDisclosure>>;
 const subscribe = () => () => {}, clientReady = () => true, serverReady = () => false;
-export function AdminTechnicalDisclosureEditor({ data, commandId, recovering }: { data: Data; commandId: string; recovering: boolean }) {
+export function AdminTechnicalDisclosureEditor({ data, commandId: initialCommandId, recovering }: { data: Data; commandId: string; recovering: boolean }) {
+  const [commandId] = useState(initialCommandId);
+  const [opened] = useState({ id: data.id, version: data.version, source: data.sourceSha256 });
+  const sourceChanged = data.id !== opened.id || data.version !== opened.version || data.sourceSha256 !== opened.source;
   const ready = useSyncExternalStore(subscribe, clientReady, serverReady), sending = useRef(false);
   const [classification, setClassification] = useState<'RESTRICTED' | 'TECHNICAL_CONTENT'>('RESTRICTED');
   const [reason, setReason] = useState(''), [verified, setVerified] = useState(false), [confirmed, setConfirmed] = useState(false),
     [closeConfirmed, setCloseConfirmed] = useState(false), [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TechnicalDisclosureResult | null>(recovering ? { ok: false, uncertain: true, message: 'Verifica il tentativo conservato prima di registrare altre scelte.' } : null);
-  const frozen = !ready || busy || !data.canWrite || !!(result?.ok || result?.closed || result?.uncertain);
+  const frozen = !ready || busy || sourceChanged || !data.canWrite || !!(result?.ok || result?.closed || result?.uncertain);
   const path = '/admin/document-disclosure/' + data.id;
   const preview = data.private ? '/acquired-documents/' + data.documentId + '?version=' + data.id
     : '/documents/' + data.documentId + '/view?versionId=' + data.id;
@@ -22,7 +25,7 @@ export function AdminTechnicalDisclosureEditor({ data, commandId, recovering }: 
     if (frozen || sending.current || !confirmed || classification === 'TECHNICAL_CONTENT' && !verified) return;
     sending.current = true; setBusy(true); remember();
     try {
-      const next = await saveTechnicalDisclosureAction({ commandId, id: data.id, expectedVersion: data.version, expectedSource: data.sourceSha256,
+      const next = await saveTechnicalDisclosureAction({ commandId, id: opened.id, expectedVersion: opened.version, expectedSource: opened.source,
         classification, assertions: classification === 'TECHNICAL_CONTENT' ? { noPayments: true, noSignedCustomerContracts: true,
           noFreeOrInternalNotes: true, reviewedExactVersion: true } : null, reason, confirmed: true });
       setResult(next);
@@ -40,6 +43,7 @@ export function AdminTechnicalDisclosureEditor({ data, commandId, recovering }: 
     <p>Classificazione corrente: {data.current.classification === 'TECHNICAL_CONTENT' ? 'Contenuto tecnico verificato' : data.current.classification === 'RESTRICTED' ? 'Riservato ai profili ammessi' : 'Non classificato · negato ai tecnici'}.</p>
     <a className="underline" href={preview} target="_blank" rel="noopener noreferrer">Esamina questa versione</a>
     <p>La classificazione non concede accesso. Destinatario, campi, scadenza e singola versione restano una decisione separata. Contratti firmati dal cliente di qualunque provenienza, pagamenti e note restano esclusi.</p>
+    {sourceChanged && !result?.ok && <p role="status">La versione o la classificazione è cambiata. Conserva queste scelte e riapri la versione corrente prima di un nuovo tentativo.</p>}
     {data.prohibited && <p>Il documento presenta un collegamento o metadati riservati: non è ammesso classificarlo come contenuto tecnico.</p>}
     <form onSubmit={e => { e.preventDefault(); void save(); }} className="space-y-4"><fieldset disabled={frozen} className="space-y-4">
       <label className="block">Classificazione<select className="block rounded-lg border p-2" value={classification} onChange={e => { setClassification(e.target.value as typeof classification); setConfirmed(false); }}>

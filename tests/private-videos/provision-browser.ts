@@ -14,7 +14,7 @@ async function main() {
   assert.ok(password?.length >= 24 && evidence);
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash);
   const reader = await syntheticPerson(db, 'Commerciale video sintetico', 'commerciale', hash);
-  const other = await syntheticPerson(db, 'Tecnico video escluso sintetico', 'backoffice', hash);
+  const other = await syntheticPerson(db, 'Amministrazione video nominativa sintetica', 'amministrazione', hash);
   await db.$transaction(async tx => {
     for (const p of [admin, reader, other]) await revokeAllInternalSessions(tx, p.user.id, 'INTERNAL_GLOBAL', admin.user.id);
   });

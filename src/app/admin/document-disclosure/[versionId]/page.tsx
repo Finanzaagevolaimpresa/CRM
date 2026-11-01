@@ -13,7 +13,7 @@ async function Page({ params, searchParams }: { params: Promise<{ versionId: str
   const commandId = query.decision ?? randomUUID(); if (!z.string().uuid().safeParse(commandId).success) notFound();
   const data = await readAdminTechnicalDisclosure(prisma, session, p.versionId).catch(() => null); if (!data) notFound();
   return <div className="space-y-5"><PageHeader title="Riservatezza della versione documentale" description="Classificazione Admin tracciata; nessuna condivisione automatica." />
-    <AdminTechnicalDisclosureEditor data={data} commandId={commandId} recovering={!!query.decision} /></div>;
+    <AdminTechnicalDisclosureEditor key={p.versionId} data={data} commandId={commandId} recovering={!!query.decision} /></div>;
 }
 
 export default withTechnicalPage("/admin/document-disclosure/[versionId]", Page);

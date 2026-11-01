@@ -261,7 +261,7 @@ for (const reason of ['inactive', 'deleted', 'read-permission-revoked'] as const
         const unavailable = admin.getByLabel('Destinatari non disponibili', { exact: true });
         await expect(unavailable).toContainText('Destinatari selezionati non più disponibili: 1.');
         await expect(unavailable).not.toContainText(f.readerName);
-        const otherChoice = admin.getByRole('checkbox', { name: f.otherName + ' · ' + f.emails.other + ' (backoffice)', exact: true });
+        const otherChoice = admin.getByRole('checkbox', { name: f.otherName + ' · ' + f.emails.other + ' (amministrazione)', exact: true });
         await otherChoice.check();
         const before = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
         expect(before.selection).toEqual({ people: [f.readerId], areas: [] });
@@ -297,7 +297,7 @@ for (const reason of ['inactive', 'deleted', 'read-permission-revoked'] as const
         const published = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
         expect(published.state).toBe('PUBLISHED');
         expect(published.selection).toEqual({ people: [f.otherId], areas: [] });
-        expect(published.audience).toEqual([{ id: f.otherId, epoch: expect.any(Number), role: 'backoffice' }]);
+        expect(published.audience).toEqual([{ id: f.otherId, epoch: expect.any(Number), role: 'amministrazione' }]);
         expect((await reader.request.get(content, { headers: { Range: 'bytes=16-31' } })).status()).toBe(404);
         await other.goto('/videos/' + row.id); await play(other);
         expect(await db.videoRevision.count({ where: { videoId: row.id } })).toBe(restored ? 6 : 4);

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Document, DocumentVersion, Prisma } from '@prisma/client';
+import type { AdminRecordRevision, Document, DocumentVersion, Prisma } from '@prisma/client';
 import { canonicalSha256 } from './canonical-json';
 import { isFinancialDocument } from './financial-privacy-policy';
 import { isTechnicalAccount, type TechnicalConfidentialityActor } from './technical-confidentiality';
@@ -51,6 +51,9 @@ export async function readDisclosure(db: Pick<DisclosureDb, 'adminRecordRevision
     : 'SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))::text', 'technical-disclosure:' + id);
   const rows = await db.adminRecordRevision.findMany({ where: { model: technicalDisclosureModel, recordId: id, operation: { not: 'CLOSE' } },
     orderBy: [{ createdAt: 'asc' }, { commandId: 'asc' }], take: 1001 });
+  return disclosureState(id, rows);
+}
+function disclosureState(id: string, rows: Pick<AdminRecordRevision, 'operation' | 'before' | 'after' | 'beforeHash' | 'afterHash' | 'commandId' | 'reason' | 'createdAt'>[]) {
   if (rows.length > 1000) throw new Error('TECHNICAL_DISCLOSURE_UNAVAILABLE');
   const history = rows.map(row => {
     const before = disclosureSnapshot.parse(row.before), after = disclosureSnapshot.parse(row.after);
@@ -86,6 +89,45 @@ export async function technicalVersionDisclosureAllowed(db: DisclosureDb, actor:
     && state.current.sourceSha256 === disclosureSource(document, version)
     && state.current.contentSha256 === version.checksum && !!state.current.assertions;
 }
+/** Bounded transaction-local batch. Every journal is independently chained and
+ * all shared locks remain held until the caller finishes its authorization.
+ * No admission or cache is reused by another transaction or another version. */
+export async function technicalVersionDisclosuresAllowed(db: DisclosureDb, actor: TechnicalConfidentialityActor,
+  entries: readonly { document: Document; version: DocumentVersion }[]) {
+  if (entries.length > 256 || new Set(entries.map(row => row.version.id)).size !== entries.length) {
+    throw new Error('TECHNICAL_DISCLOSURE_UNAVAILABLE');
+  }
+  if (!isTechnicalAccount(actor)) return new Set(entries.map(row => row.version.id));
+  const candidates = entries.filter(({ document: d, version: v }) => !d.deletedAt
+    && !['archiviato', 'respinto', 'scaduto'].includes(d.status) && v.documentId === d.id
+    && !!v.checksum && !restrictedDocumentMetadata(d));
+  if (!candidates.length) return new Set<string>();
+  const ids = candidates.map(row => row.version.id).sort();
+  await db.$queryRawUnsafe("SELECT pg_advisory_xact_lock_shared(hashtextextended('technical-disclosure:' || id,0))::text FROM (SELECT unnest($1::text[]) AS id ORDER BY 1) ordered", ids);
+  const documentIds = [...new Set(candidates.map(row => row.document.id))];
+  const [rows, contracts, payments, formalizations] = await Promise.all([
+    db.$queryRawUnsafe<AdminRecordRevision[]>('SELECT * FROM (SELECT r.*, row_number() OVER (PARTITION BY "recordId" ORDER BY "createdAt", "commandId") AS ordinal FROM "AdminRecordRevision" r WHERE model=$1 AND "recordId"=ANY($2::text[]) AND operation <> \'CLOSE\') bounded WHERE ordinal <= 1001 ORDER BY "recordId", ordinal', technicalDisclosureModel, ids),
+    db.contract.findMany({ where: { signedDocumentId: { in: documentIds } }, select: { signedDocumentId: true } }),
+    db.payment.findMany({ where: { accountingDocumentId: { in: documentIds } }, select: { accountingDocumentId: true } }),
+    db.practiceFormalization.findMany({ where: { signedDocumentId: { in: documentIds } }, select: { signedDocumentId: true } }),
+  ]);
+  const restricted = new Set([...contracts.map(row => row.signedDocumentId), ...payments.map(row => row.accountingDocumentId),
+    ...formalizations.map(row => row.signedDocumentId)]);
+  const byVersion = new Map<string, AdminRecordRevision[]>();
+  for (const row of rows) {
+    if (!ids.includes(row.recordId) || row.model !== technicalDisclosureModel) throw new Error('TECHNICAL_DISCLOSURE_INTEGRITY');
+    const history = byVersion.get(row.recordId) ?? []; history.push(row); byVersion.set(row.recordId, history);
+  }
+  const admitted = new Set<string>();
+  for (const { document, version } of candidates) {
+    const state = disclosureState(version.id, byVersion.get(version.id) ?? []);
+    if (!restricted.has(document.id) && state.current.classification === 'TECHNICAL_CONTENT'
+      && state.current.sourceSha256 === disclosureSource(document, version)
+      && state.current.contentSha256 === version.checksum && state.current.assertions) admitted.add(version.id);
+  }
+  return admitted;
+}
+
 export async function technicalCurrentDocumentAllowed(db: DisclosureDb, actor: TechnicalConfidentialityActor, document: Document) {
   if (!isTechnicalAccount(actor)) return true;
   const versions = await db.documentVersion.findMany({ where: { documentId: document.id,

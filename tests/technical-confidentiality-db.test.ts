@@ -1,3 +1,4 @@
+import { listOrdinaryTechnicalDocuments } from '../src/lib/technical-ordinary-documents';
 import { readPrivateDocument } from '../src/lib/storage';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -146,4 +147,28 @@ test('unclassified communications reject every known technical address in To, Cc
     await assert.rejects(db.$transaction(tx => assertCommunicationTechnicalRecipients(tx, { to: [], cc: [], bcc: [], [kind]: [person.user.email.toUpperCase()] })));
   }
   await db.$transaction(tx => assertCommunicationTechnicalRecipients(tx, { to: [admin.user.email, f.salesA.user.email], cc: [], bcc: [] }));
+});
+
+test('ordinary technical record lists only current classified files; ownership, future versions and stale sessions never substitute for classification', options, async () => {
+  for (const role of ['consulente', 'backoffice'] as const) {
+    const f = await fixture(), person = role === 'consulente' ? f.techA : f.techB;
+    if (role === 'backoffice') {
+      await db.client.update({ where: { id: f.client.id }, data: { consultantId: person.user.id } });
+      await db.project.update({ where: { id: f.project.id }, data: { consultantId: person.user.id } });
+      await db.technicalPractice.update({ where: { id: f.practice.id }, data: { technicalOwnerId: person.user.id } });
+    }
+    for (const kind of ['Project', 'TechnicalPractice'] as const) {
+      const listed = await listOrdinaryTechnicalDocuments(db, person.session, technicalTarget(f, kind));
+      assert.equal(listed.limited, false);
+      assert.deepEqual(listed.items.map(row => row.versionId).sort(), f.documents.slice(0, 2).map(row => row.version.id).sort());
+      assert(!JSON.stringify(listed).includes(f.documents[2].doc.id), 'neutral signed contract metadata is excluded');
+      assert(!JSON.stringify(listed).includes('storagePath'));
+    }
+    const original = f.documents[0];
+    await db.documentVersion.create({ data: { documentId: original.doc.id, version: 2, storagePath: original.version.storagePath, checksum: original.version.checksum } });
+    const latest = await listOrdinaryTechnicalDocuments(db, person.session, technicalTarget(f));
+    assert(!latest.items.some(row => row.id === original.doc.id), 'even identical future bytes require their own exact-version classification');
+    await db.internalSession.update({ where: { id: person.session.sessionId! }, data: { revokedAt: new Date() } });
+    await assert.rejects(listOrdinaryTechnicalDocuments(db, person.session, technicalTarget(f)), /UNAVAILABLE/);
+  }
 });

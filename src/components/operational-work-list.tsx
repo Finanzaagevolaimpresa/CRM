@@ -1,3 +1,4 @@
+import { isTechnicalAccount } from '@/lib/technical-confidentiality';
 import Link from 'next/link';
 import { PrimaryButton, SecondaryLink } from './actions';
 import { Card, EmptyState, PageHeader, Stat } from './ui';
@@ -52,12 +53,12 @@ export async function OperationalWorkList({ session, kind, path, title, query: r
       <SecondaryLink href="/projects">Progetti</SecondaryLink><SecondaryLink href="/technical-office/practices">Pratiche tecniche</SecondaryLink>
       <SecondaryLink href={operationalWorkListPath('/technical-work', { q: query.q }, 1, 'TechnicalPractice')}>Pratiche assegnate</SecondaryLink>
       <SecondaryLink href={operationalWorkListPath('/technical-work', { q: query.q }, 1, 'Project')}>Progetti assegnati</SecondaryLink>
-      {kind === 'Project' && hasPermission(session, 'project.write') && <>
+      {kind === 'Project' && !isTechnicalAccount(session) && hasPermission(session, 'project.write') && <>
         <SecondaryLink href="/projects?new=1">Crea progetto base</SecondaryLink>
         <SecondaryLink href="/projects?view=archive">Archivio progetti</SecondaryLink>
         <SecondaryLink href="/projects?view=trash">Cestino progetti</SecondaryLink>
       </>}
-      {kind === 'TechnicalPractice' && hasPermission(session, 'technical.write') && <SecondaryLink href="/technical-office/practices?new=1">Nuova pratica</SecondaryLink>}
+      {kind === 'TechnicalPractice' && !isTechnicalAccount(session) && hasPermission(session, 'technical.write') && <SecondaryLink href="/technical-office/practices?new=1">Nuova pratica</SecondaryLink>}
     </nav>
     <form action={path} method="get" role="search" aria-label="Cerca negli incarichi tecnici" className="grid gap-3 md:grid-cols-3">
       {inAssignments && <input type="hidden" name="kind" value={kind} />}
@@ -106,7 +107,7 @@ export async function OperationalTechnicalHome({ session }: { session: AuthSessi
     .sort((a, b) => (a.dueDate ?? 'z').localeCompare(b.dueDate ?? 'z')).slice(0, 10) : [];
   return <div className="crm-space-y-6"><PageHeader title="Ufficio Tecnico" description="Il tuo lavoro autorizzato. Responsabilità ordinaria e perimetri personali restano distinti nell’apertura della scheda." />
     <div className="flex flex-wrap gap-3"><SecondaryLink href="/technical-office/practices">Lista pratiche</SecondaryLink>
-      <SecondaryLink href="/technical-work">I miei incarichi tecnici</SecondaryLink><SecondaryLink href="/technical-office/integrations">Integrazioni tecniche</SecondaryLink></div>
+      <SecondaryLink href="/technical-work">I miei incarichi tecnici</SecondaryLink><SecondaryLink href="/admin-requests?kind=INTEGRATION">Richieste di integrazione all’Admin</SecondaryLink></div>
     {!data ? <p role="status">Le pratiche non sono disponibili con la sessione corrente.</p> : <>
       {!catalogue?.selectiveAvailable && <p role="status">Incarichi personali temporaneamente non disponibili: elenco ordinario parziale.</p>}
       <section aria-label="Pratiche per stato" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{buckets.map(([status, label]) =>

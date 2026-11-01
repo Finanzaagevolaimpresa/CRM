@@ -4,10 +4,11 @@ export type TechnicalPageMode = 'original' | 'workspace' | 'record' | 'denied';
  * account until its projection and direct-access path have been qualified. */
 export function technicalPageMode(route: string): TechnicalPageMode {
   if (['/', '/login', '/settings/account', '/technical-uploads/[kind]/[id]',
+    '/notifications/updates', '/notifications/updates/[id]', '/technical-office/integrations',
     '/admin-requests', '/admin-requests/new', '/admin-requests/[id]', '/assignments/[kind]/[id]'].includes(route)) return 'original';
   if (['/dashboard', '/projects', '/technical-office', '/technical-office/practices',
     '/tasks', '/deadlines', '/documents', '/document-checklists', '/search',
-    '/notifications', '/notifications/updates', '/notifications/reminders',
+    '/notifications',
     '/communications', '/communications/updates', '/assignments'].includes(route)) return 'workspace';
   if (['/projects/[id]', '/technical-office/practices/[id]'].includes(route)) return 'record';
   if (['/technical-work', '/technical-work/[kind]/[id]', '/technical-work/[kind]/[id]/items/[itemKind]/[itemId]'].includes(route)
@@ -27,6 +28,7 @@ const allowedActions = new Set([
   'user-account-actions:saveAccountProfile', 'user-account-actions:saveOwnPassword',
   'technical-work-actions:prepareTechnicalWork', 'technical-work-actions:saveTechnicalWork', 'technical-work-actions:checkTechnicalWork',
   'technical-work-item-actions:prepareTechnicalWorkItem', 'technical-work-item-actions:saveTechnicalWorkItem', 'technical-work-item-actions:checkTechnicalWorkItem',
+  'record-update-actions:markRecordUpdateReadAction',
   'responsibility-actions:acceptResponsibilityAction', 'admin-request-actions:mutateAdminRequest',
   'technical-upload-actions:prepareTechnicalUpload', 'technical-upload-actions:saveTechnicalUpload', 'technical-upload-actions:checkTechnicalUpload',
 ]);

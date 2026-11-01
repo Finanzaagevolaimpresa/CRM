@@ -16,7 +16,15 @@ Ogni versione documentale parte da “Non classificato · negato ai tecnici”. 
 
 1. **Antonio / Admin.** Da **Clienti**, **Progetti** o **Pratiche tecniche** apre la scheda pertinente. **Controllo Admin** offre i percorsi di correzione già rilasciati; i collegamenti si rettificano nel contesto e le prove personali restano conservate. Dagli incarichi del progetto o della pratica seleziona **Persona da incaricare**, controllando nome ed email, poi **Apri scelte per la persona**. Sceglie campi, azioni, singole versioni e scadenza. **Anteprima dell’incarico** precede **Conferma incarico tecnico**. Non occorre effettuare operazioni produttive per seguire questo esempio.
 2. **Tecnico.** Da **Ufficio Tecnico**, **Pratiche tecniche** o **I miei incarichi tecnici** apre il lavoro corrente. Legge i campi concessi, incluse priorità e responsabilità nominativa quando selezionate, ed esegue le sole azioni mostrate. I file si aprono dall’incarico nella versione concessa e classificata; il download è una scelta distinta. Note e documenti riservati non diventano accessibili dal cliente, da una ricerca, da uno storico o da un vecchio URL. Un deposito appena caricato resta in revisione Admin: non è una pubblicazione.
-3. **Commerciale.** Da **Le mie assegnazioni**, **Lead e offerte**, **Clienti** e **Stato e prossime azioni** apre il perimetro assegnato. Usa i percorsi commerciali e le condivisioni effettivamente autorizzate. Questo requisito non attribuisce al commerciale permessi finanziari aggiuntivi; un account che svolga anche funzione tecnica riceve il relativo limite.
+3. **Commerciale.** Da **Le mie assegnazioni**, **Lead** (la sezione completa riporta **Lead e offerte**), **Clienti** e **Stato e prossime azioni** apre il perimetro assegnato. Usa i percorsi commerciali e le condivisioni effettivamente autorizzate. Questo requisito non attribuisce al commerciale permessi finanziari aggiuntivi; un account che svolga anche funzione tecnica riceve il relativo limite.
+
+## Navigazione tecnica e risultati
+
+La scheda tecnica ordinaria mostra **Documenti tecnici disponibili** solo per versioni correnti, classificate e già ammesse dal perimetro dell’account; apertura e download ricontrollano l’accesso. Gli incarichi personali mantengono la selezione delle versioni e la scelta distinta del download. Una nuova versione o una modifica dei metadati non eredita la classificazione precedente. Se il contesto ordinario supera 256 documenti, il riepilogo si dichiara non disponibile: non mostra un sottoinsieme come se fosse completo. Gli incarichi espliciti restano il percorso per selezioni circoscritte.
+
+**Notifiche** porta agli aggiornamenti e promemoria già ammessi. Al tecnico arrivano soltanto eventi strutturati di progetto/pratica consentiti; titoli e testi liberi delle richieste restano riservati. I video privi di classificazione tecnica non sono un canale documentale alternativo.
+
+Da **Richieste all’Admin**, dopo un salvataggio confermato compare **Apri richiesta registrata**. Se la risposta manca, **Verifica esito dello stesso comando** interroga lo storico senza ripetere l’azione. Il riferimento locale è separato per utente e sessione e non conserva testo, credenziali o cookie. “Nessun esito al momento” non significa che il tentativo non sia mai stato eseguito.
 
 ## Secondo e terzo tecnico
 

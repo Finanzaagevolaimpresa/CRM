@@ -13,7 +13,9 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 
 export async function lifecycleReadinessFixture(db:PrismaClient,admin:AuthSession){
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
-  const operator=await syntheticUser(db,'consulente','Operatore sintetico lifecycle');
+  // The existing Admin constructs the confidential dossier in this Admin lifecycle fixture.
+  // Technical identities remain separate and are never elevated for this test.
+  const operator=admin;
   return syntheticCase(db,'dossier_preanalisi',{admin,operator,human1:await syntheticUser(db,'revisore','Revisore sintetico 1'),
     human2:await syntheticUser(db,'revisore','Revisore sintetico 2')});
 }

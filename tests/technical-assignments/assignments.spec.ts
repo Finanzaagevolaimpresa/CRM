@@ -400,7 +400,7 @@ test('expired native preview preserves the choices and requires a new explicit p
   await screenshot(admin, 'assignment-expired-preview');
   await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toBeEnabled();
   await expect(admin.getByRole('textbox', { name: 'Motivo dell’incarico', exact: true })).toHaveValue('Incarico sintetico qualificazione browser');
-  await expect(admin.getByLabel('Portale', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
   await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
   await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
@@ -455,7 +455,7 @@ test('expired Admin confirmation preserves the full draft, renews inline and com
   await expect(admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
   expect(new URL(admin.url()).pathname).toBe(originalUrl.pathname);
   await expect(admin.getByRole('textbox', { name: 'Motivo dell’incarico', exact: true })).toHaveValue('Incarico sintetico qualificazione browser');
-  await expect(admin.getByLabel('Portale', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
   await expect(admin.getByLabel(new RegExp(row.documents[0].title + ' ·'))).toBeChecked();
   expect(await assignments(row)).toBe(0);
   expect(await db.auditLog.count({ where: { id: `technical-attempt:${priorCommand}` } })).toBe(1);

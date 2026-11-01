@@ -1,3 +1,4 @@
+import { isTechnicalAccount } from './technical-confidentiality';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
@@ -49,7 +50,7 @@ export type ReminderPrincipals = Awaited<ReturnType<typeof lockReminderPrincipal
 
 export function ordinaryReminderAdmission(source: LockedReminderSource,
   user: NonNullable<Awaited<ReturnType<typeof currentRecordUpdateUser>>>): ReminderRecipientAdmission | null {
-  if (['consulente', 'backoffice'].includes(user.role) || source.task.technicalPrivate || !recordUpdatePermission(user, 'service.read')
+  if (isTechnicalAccount(user) || source.task.technicalPrivate || !recordUpdatePermission(user, 'service.read')
     || !recordUpdatePermission(user, recordReadPermissions[source.source.kind]) || !canViewTask(user, source.taskAccess)) return null;
   const recordReadable = source.source.kind === 'CLIENT' ? canViewClient(user, source.client)
     : source.source.kind === 'PROJECT' ? source.project && canViewProject(user, { ...source.project, client: source.client })

@@ -1,3 +1,4 @@
+import { isTechnicalAccount } from './technical-confidentiality';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -22,7 +23,7 @@ export const isOperationalTechnician = (role: string) => role === 'consulente' |
 function unavailable(): never { throw new Error('OPERATIONAL_WORK_UNAVAILABLE'); }
 
 async function ordinaryRows(tx: Tx, current: AuthSession, kind: Kind): Promise<OperationalWorkRow[]> {
-  if (!isOperationalTechnician(current.role) || !hasPermission(current, permission(kind))) unavailable();
+  if (!isTechnicalAccount(current) || !hasPermission(current, permission(kind))) unavailable();
   // Always restore the complete ordinary ceiling. In particular, an expired,
   // revoked or invalid technical assignment never reopens legacy ownership.
   const actor = { ...current, ...await loadSelectiveProjectScope(tx, current.userId) };
@@ -84,7 +85,7 @@ async function ordinaryOnly(db: PrismaClient, claimed: AuthSession, kind: Kind) 
     await lockCommunicationDirectory(tx);
     const live = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
     if (!live || !live.active || live.deletedAt || live.revokedAt || !live.live) unavailable();
-    const current = { ...claimed, role: live.role, active: live.active, permissionOverrides: [...live.permissionOverrides] };
+    const current = { ...claimed, role: live.role, technicalRestricted: live.technicalRestricted, active: live.active, permissionOverrides: [...live.permissionOverrides] };
     const records = await ordinaryRows(tx, current, kind);
     const now = await technicalAssignmentClock(tx);
     if (!Number.isFinite(claimed.expiresAt) || claimed.expiresAt * 1000 <= now.getTime() || live.expiresAt <= now) unavailable();

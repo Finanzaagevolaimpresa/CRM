@@ -1,3 +1,4 @@
+import { technicalActionBoundary } from '../technical-action-boundary';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -27,7 +28,7 @@ const javascript = ts.transpileModule(bodies, { compilerOptions: { target: ts.Sc
 
 export function actualLeadWriteActions(db: PrismaClient, session: AuthSession, schedule: typeof withProjectResources = withProjectResources) {
   const dependencies = {
-    prisma: db, requirePermission: async () => session,
+    prisma: db, requirePermission: async () => session, assertTechnicalServerAction: technicalActionBoundary(session),
     commercialOfferSchema, commercialOfferUpdateSchema, clientSchema, redactAuditPayload, assertCommercialOfferTermsPreserved,
     withProjectResources: schedule, lockLeadActor, lockLeadWriteActor, assertLeadOperational, assertLeadActorLive,
     requireLeadEditAccess: (actor: AuthSession, id: string, tx = db) => requireLeadEditAccess(actor, id, tx),

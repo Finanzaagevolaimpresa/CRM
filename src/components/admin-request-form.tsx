@@ -4,27 +4,60 @@ import { mutateAdminRequest } from '@/lib/admin-request-actions';
 const subscribeReady = () => () => {};
 const browserReady = () => true;
 const serverReady = () => false;
-export function AdminRequestForm({ children, className }: { children: ReactNode; className?: string }) {
-  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
-  const sent = useRef(false), [pending, setPending] = useState(false);
-  return <form action={mutateAdminRequest} className={className} data-interactive-ready={ready} aria-busy={pending} onSubmit={event => {
-    if (sent.current) { event.preventDefault(); return; }
-    const command = new FormData(event.currentTarget).get('commandId');
-    if (typeof command === 'string') window.history.replaceState(window.history.state, '', `/admin-requests?recover=${encodeURIComponent(command)}`);
-    sent.current = true; setPending(true);
-  }}><fieldset disabled={!ready} className="contents">{children}</fieldset>{pending && <p role="status">Registrazione in corso. Se la risposta si interrompe, ricarica per verificare l’esito prima di ripetere.</p>}</form>;
+const pendingKey = (scope: string) => 'fai.admin-request.pending-command.v1:' + scope;
+const pendingCommand = (scope: string) => {
+  try { return sessionStorage.getItem(pendingKey(scope)) ?? ''; } catch { return ''; }
+};
+const serverCommand = () => '';
+function remember(scope: string, commandId: string) {
+  try { sessionStorage.setItem(pendingKey(scope), commandId); } catch { /* The visible recovery link remains available. */ }
 }
-export function AdminRequestRecovery({ commandId }: { commandId: string }) {
+function forget(scope: string, commandId: string) {
+  try { if (sessionStorage.getItem(pendingKey(scope)) === commandId) sessionStorage.removeItem(pendingKey(scope)); } catch { /* no credentials or payload are stored */ }
+}
+export function AdminRequestForm({ children, className, recoveryScope }: { children: ReactNode; className?: string; recoveryScope: string }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
+  const prior = useSyncExternalStore(subscribeReady, () => pendingCommand(recoveryScope), serverCommand);
+  const sent = useRef(false), [command, setCommand] = useState(''), [pending, setPending] = useState(false), [unknown, setUnknown] = useState(false);
+  const [savedHref, setSavedHref] = useState<string | null>(null);
+  const unresolved = prior && !command;
+  const recovery = command || prior;
+  return <form action={async form => {
+    try {
+      const result = await mutateAdminRequest(form);
+      setPending(false);
+      if (result.status === 'RECORDED') {
+        forget(recoveryScope, String(form.get('commandId') ?? '')); setSavedHref(result.target); setUnknown(false);
+      } else setUnknown(true);
+      // Keep the durable receipt on this page. Opening it is an explicit GET;
+      // no action completion or background refresh can replay the command.
+    } catch {
+      setUnknown(true); setPending(false);
+    }
+  }} className={className} data-interactive-ready={ready} aria-busy={pending} onSubmit={event => {
+    if (sent.current || unresolved) { event.preventDefault(); return; }
+    const id = new FormData(event.currentTarget).get('commandId');
+    if (typeof id !== 'string') { event.preventDefault(); return; }
+    setCommand(id); remember(recoveryScope, id); sent.current = true; setPending(true);
+  }}><fieldset disabled={!ready || !!unresolved || !!savedHref} className="contents">{children}</fieldset>
+    {savedHref && <><p role="status">Operazione registrata nello storico. Nessuna email inviata.</p><a className="block font-bold underline" href={savedHref}>Apri richiesta registrata</a></>}
+    {pending && <p role="status">Registrazione in corso. Conserva questa pagina fino all’esito; non ripetere la richiesta.</p>}
+    {(unknown || unresolved) && <p role="status">Risposta non osservata. Verifica lo stesso comando prima di preparare un’altra richiesta.</p>}
+    {recovery && !savedHref && <a className="block font-bold underline" href={'/admin-requests?recover=' + encodeURIComponent(recovery)}>Verifica esito dello stesso comando</a>}
+  </form>;
+}
+export function AdminRequestRecovery({ commandId, recoveryScope }: { commandId: string; recoveryScope: string }) {
   const [state, setState] = useState('Verifica l’esito prima di ripetere la richiesta.'), [href, setHref] = useState<string | null>(null), [pending, setPending] = useState(false);
   return <section className="space-y-3 rounded-xl border p-4"><h2 className="font-bold">Verifica esito della richiesta</h2><p role="status">{state}</p>
     <button className="rounded-xl border p-3" disabled={pending} onClick={async () => {
       setPending(true);
       try {
-        const result = await fetch(`/api/admin-requests/outcome?commandId=${encodeURIComponent(commandId)}`, { cache: 'no-store' });
+        const result = await fetch('/api/admin-requests/outcome?commandId=' + encodeURIComponent(commandId), { cache: 'no-store' });
         if (!result.ok) throw new Error('UNAVAILABLE');
         const body = await result.json();
-        if (body.status === 'RECORDED') { setState('Operazione registrata nello storico. Nessuna email inviata.'); setHref(`/admin-requests/${body.requestId}`); }
-        else setState('Nessuna operazione registrata per questo comando. Riapri il record prima di preparare una nuova richiesta.');
+        if (body.status === 'RECORDED') {
+          forget(recoveryScope, commandId); setState('Operazione registrata nello storico. Nessuna email inviata.'); setHref('/admin-requests/' + body.requestId);
+        } else setState('Nessun esito registrato al momento. Il tentativo può essere ancora in corso: verifica di nuovo senza reinviare.');
       } catch { setState('Esito non disponibile: non ripetere finché la sessione e il perimetro non sono stati verificati.'); }
       finally { setPending(false); }
     }}>Verifica esito</button>{href && <a className="ml-3 font-bold underline" href={href}>Apri richiesta registrata</a>}

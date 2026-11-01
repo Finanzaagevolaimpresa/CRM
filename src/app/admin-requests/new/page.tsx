@@ -1,3 +1,4 @@
+import { adminRequestRecoveryScope } from '@/lib/admin-request-recovery-scope';
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
@@ -14,7 +15,7 @@ export const dynamic = 'force-dynamic';
   catch (error) { if (isRequestUnavailable(error)) notFound(); throw error; }
   return <div className="min-w-0 space-y-5"><PageHeader title="Richiedi documento o integrazione all’Admin" description="La richiesta resta interna e non autorizza comunicazioni al cliente." />
     <Link className="underline" href="/admin-requests">Le mie richieste</Link>
-    <AdminRequestForm className="grid min-w-0 max-w-3xl gap-4">
+    <AdminRequestForm recoveryScope={adminRequestRecoveryScope(user)} className="grid min-w-0 max-w-3xl gap-4">
       <input type="hidden" name="action" value="SUBMIT" /><input type="hidden" name="commandId" value={randomUUID()} />
       <input type="hidden" name="subjectKind" value={entry.subject.kind} /><input type="hidden" name="targetId" value={entry.subject.targetId} />
       <input type="hidden" name="expectedContextSha256" value={entry.expectedContextSha256} /><input type="hidden" name="expectedRecipientEpoch" value={entry.expectedRecipientEpoch} /><input type="hidden" name="expectedAccessRevision" value={entry.expectedAccessRevision} />

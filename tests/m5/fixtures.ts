@@ -15,6 +15,12 @@ export async function syntheticUser(db: PrismaClient, role: RoleCode, name: stri
   const session = await db.internalSession.create({ data: { userId: row.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3600_000) } });
   return { userId: row.id, sessionId: session.id, expiresAt: Math.floor(session.expiresAt.getTime()/1000), role, active: true, permissionOverrides: [] };
 }
+export async function syntheticDossierOperator(db: PrismaClient, name: string, passwordHash?: string): Promise<AuthSession> {
+  const actor = await syntheticUser(db, 'commerciale', name, passwordHash);
+  const permissionOverrides = ['dossier.read', 'dossier.write', 'document.download', 'service.write'].map(permission => ({ permission, allowed: true }));
+  await db.userPermissionOverride.createMany({ data: permissionOverrides.map(value => ({ userId: actor.userId, ...value })) });
+  return { ...actor, permissionOverrides };
+}
 export function syntheticTemplate(code: InitialServiceCode, revision = 1) {
   return { clientName: 'Cliente sintetico M5', date: '2026-09-27', revision,
     sections: Object.fromEntries(INITIAL_SERVICES[code].sections.map(section => [section, 'Risultato sintetico completo del solo servizio acquistato. Nessuna attività reale o consulenza finanziaria.'])),
@@ -26,9 +32,9 @@ export async function syntheticCase(db: PrismaClient, code: InitialServiceCode, 
   await prepareServiceCatalogV2(db);
   const catalogRevision = await db.serviceCatalogRevision.findFirstOrThrow({ where: { serviceCatalog: { code }, status: 'PUBLISHED' }, orderBy: { version: 'desc' } });
   const taxable = catalogRevision.netPrice ?? new Prisma.Decimal(100), vat = taxable.mul(catalogRevision.vatRateBps).div(10000).toDecimalPlaces(2), total = taxable.add(vat);
-  const client = await db.client.create({ data: { type: 'persona_fisica', displayName: 'Cliente sintetico M5', consultantId: actors.operator.userId } });
+  const client = await db.client.create({ data: { type: 'persona_fisica', displayName: 'Cliente sintetico M5', salesOwnerId: actors.operator.userId } });
   for (const userId of [actors.human1.userId, actors.human2.userId]) await db.clientReadGrant.create({ data: { userId, clientId: client.id, active: true, createdById: actors.admin.userId, updatedById: actors.admin.userId } });
-  const project = await db.project.create({ data: { clientId: client.id, title: 'Caso sintetico ' + code, consultantId: actors.operator.userId } });
+  const project = await db.project.create({ data: { clientId: client.id, title: 'Caso sintetico ' + code } });
   const lead = await db.lead.create({ data: { firstName: 'Test', lastName: 'M5', clientId: client.id, assignedToId: actors.operator.userId } });
   const intake = await db.controlledIntake.create({ data: { channel: 'EMAIL', sourceId: randomUUID(), sourceOccurredAt: new Date(),
     acquisitionMode: 'MANUAL_CONTROLLED', mappingVersion: 'm5-synthetic-v1', payloadHash: randomBytes(32).toString('hex'), leadId: lead.id,

@@ -11,7 +11,7 @@ async function main() {
   assert.ok(password && password.length >= 24);
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({ data: [
-    { id: ids.owner, email: 'preanalysis-owner@invalid.test', name: 'Consulente Preanalisi', passwordHash, role: 'consulente' },
+    { id: ids.owner, email: 'preanalysis-owner@invalid.test', name: 'Admin Preanalisi', passwordHash, role: 'admin' },
     { id: ids.foreign, email: 'preanalysis-foreign@invalid.test', name: 'Consulente Estraneo', passwordHash, role: 'consulente' },
     { id: ids.noRead, email: 'preanalysis-no-read@invalid.test', name: 'Consulente Senza Dossier', passwordHash, role: 'consulente' },
     { id: ids.readOnly, email: 'preanalysis-read-only@invalid.test', name: 'Revisore Sola Lettura', passwordHash, role: 'revisore' },

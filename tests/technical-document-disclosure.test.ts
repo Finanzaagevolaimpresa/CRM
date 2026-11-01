@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Document, DocumentVersion } from '@prisma/client';
 import { originalDisclosure, disclosureDigest, disclosureSource, readDisclosure, technicalVersionDisclosureAllowed,
-  restrictedDocumentMetadata, type DisclosureDb, type DisclosureSnapshot } from '../src/lib/technical-document-disclosure';
+  restrictedDocumentMetadata, technicalVersionDisclosuresAllowed, technicalDisclosureModel, type DisclosureDb, type DisclosureSnapshot } from '../src/lib/technical-document-disclosure';
 const document = {id:'synthetic-document',title:'Elaborato geometrico',fileName:'elaborato.pdf',type:'tecnico',
   documentCategory:'tecnica',serviceArea:'progetto',mimeType:'application/pdf',status:'validato',deletedAt:null,
   checksum:'a'.repeat(64),storagePath:'synthetic/private/elaborato.pdf',sizeBytes:100} as unknown as Document;
@@ -55,4 +55,41 @@ test('revocation of classification is append-only and serialized; tampered histo
 test('Admin and ordinary commercial admission remain separate from this technical ceiling',async()=>{
  for(const role of ['admin','commerciale'])assert.equal(await technicalVersionDisclosureAllowed(fixture(false).db,{role},document,version),true);
  assert.equal(await technicalVersionDisclosureAllowed(fixture(false).db,{role:'amministrazione',technicalRestricted:true},document,version),false);
+});
+
+
+test('batched disclosure isolates exact journals, metadata and signed/payment bindings under shared locks', async () => {
+  const f = fixture(), otherDocument = { ...document, id: 'other-document', title: 'Altro elaborato' };
+  const otherVersion = { ...version, id: 'other-version', documentId: otherDocument.id };
+  const rows = f.rows.map(row => ({ ...row, recordId: version.id, model: technicalDisclosureModel }));
+  const queries: string[] = [];
+  let signed: Array<{ signedDocumentId: string }> = [];
+  const db = { ...f.db, $queryRawUnsafe: async (sql: string) => {
+    queries.push(sql); return sql.includes('row_number()') ? rows : [];
+  }, contract: { findMany: async () => signed }, payment: { findMany: async () => [] },
+  practiceFormalization: { findMany: async () => [] } } as unknown as DisclosureDb;
+  const entries = [{ document, version }, { document: otherDocument, version: otherVersion }];
+  assert.deepEqual([...await technicalVersionDisclosuresAllowed(db, { role: 'backoffice' }, entries)], [version.id]);
+  assert.equal(queries.length, 2, 'one ordered shared-lock query and one bounded journal query');
+  assert.match(queries[0], /lock_shared/); assert.match(queries[0], /ORDER BY 1/);
+  signed = [{ signedDocumentId: document.id }];
+  assert.equal((await technicalVersionDisclosuresAllowed(db, { role: 'consulente' }, entries)).size, 0);
+  signed = [];
+  rows[0].recordId = otherVersion.id;
+  await assert.rejects(technicalVersionDisclosuresAllowed(db, { role: 'consulente' }, entries), /INTEGRITY/);
+});
+test('a malformed, oversized or incomplete batch cannot borrow another version classification', async () => {
+  const f = fixture(), base = { ...f.rows[0], recordId: version.id, model: technicalDisclosureModel };
+  let rows = [base];
+  const db = { ...f.db, $queryRawUnsafe: async (sql: string) => sql.includes('row_number()') ? rows : [],
+    contract: { findMany: async () => [] }, payment: { findMany: async () => [] },
+    practiceFormalization: { findMany: async () => [] } } as unknown as DisclosureDb;
+  const entries = [{ document, version }];
+  rows = Array.from({ length: 1001 }, () => base);
+  await assert.rejects(technicalVersionDisclosuresAllowed(db, { role: 'consulente' }, entries), /UNAVAILABLE/);
+  rows = [{ ...base, afterHash: '0'.repeat(64) }];
+  await assert.rejects(technicalVersionDisclosuresAllowed(db, { role: 'consulente' }, entries), /INTEGRITY/);
+  await assert.rejects(technicalVersionDisclosuresAllowed(db, { role: 'consulente' }, [...entries, ...entries]), /UNAVAILABLE/);
+  rows = [];
+  assert.equal((await technicalVersionDisclosuresAllowed(db, { role: 'consulente' }, entries)).size, 0);
 });

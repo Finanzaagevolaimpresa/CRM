@@ -51,7 +51,8 @@ export async function guardProjectResources(tx: Prisma.TransactionClient, userId
     ]);
     contexts.push(...practices, ...revisions);
   }
-  for (const context of contexts.sort((a, b) => `${a.projectId ?? ''}:${a.clientServiceId ?? ''}`.localeCompare(`${b.projectId ?? ''}:${b.clientServiceId ?? ''}`))) {
+  const uniqueContexts = [...new Map(contexts.map(context => [JSON.stringify([context.clientId ?? null, context.companyId ?? null, context.projectId ?? null, context.clientServiceId ?? null]), context])).values()];
+  for (const context of uniqueContexts.sort((a, b) => `${a.projectId ?? ''}:${a.clientServiceId ?? ''}`.localeCompare(`${b.projectId ?? ''}:${b.clientServiceId ?? ''}`))) {
     await assertProjectOperational(tx, context);
   }
   const scope = await loadSelectiveProjectScope(tx, userId);

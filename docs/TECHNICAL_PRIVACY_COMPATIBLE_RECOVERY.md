@@ -1,0 +1,11 @@
+# Recupero compatibile con la riservatezza tecnica
+
+Stato: proposta implementata nel candidato, da qualificare su HEAD/tree esatti e riesaminare. Nessuna immagine qui descritta è ammessa automaticamente alla produzione.
+
+Il ritorno alla sola immagine storica precedente al divieto non è accettabile: ripristinerebbe potenziali accessi a note, pagamenti o contratti firmati. Lo script scripts/admin-residuals/compose-compatibility.mjs compone invece la baseline storica PR245 con i lettori compatibili schema74/75, l’intero diff di riservatezza successivo a PR248 e le dipendenze mancanti. Conserva tutti i confini pagina/API/azione, la classificazione delle versioni e l’ammissione corrente dei profili tecnici. La ricevuta elenca ogni blob, hash, dipendenza e modifica. Non è l’immagine storica invariata.
+
+Durante questo ritorno gli editor dei collegamenti, delle versioni private, dei profili di ruolo, della classificazione documentale e del recupero SMTP sono sospesi. Il blocco riguarda anche le azioni server, prima di qualsiasi scrittura; non consiste soltanto nel togliere un collegamento. Restano le letture delle rettifiche già registrate, le prove originali, i profili effettivi, le versioni private e gli esiti SMTP autorevoli già riconciliati. Nessuna decisione o ricevuta viene riscritta.
+
+La qualifica deve costruire entrambe le immagini, dimostrare candidato→ritorno→ripresa sullo stesso DB e sugli stessi byte sintetici, verificare il gate di revoca delle sessioni e l’impronta invariata, quindi controllare nuovamente i profili Consulente, Backoffice, misto, Admin e Commerciale. Il test dedicato copre anche URL e versioni dirette, permessi ampi e responsabilità esistente. Un build riuscito da solo non qualifica il recupero.
+
+L’immagine composta conserva necessariamente il nuovo codice del limite tecnico. Un difetto in tale limite non si risolve assumendo sicuro il vecchio rilascio: serve una correzione qualificata o un contenimento specifico. Questa dipendenza e i risultati esatti sono parte del riesame indipendente. L’archivio di recupero, il backup DB+file fresco e la prova di ripristino devono essere riferiti alla release ammessa; i PASS storici non si trasferiscono al nuovo diff.
