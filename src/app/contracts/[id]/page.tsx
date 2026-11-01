@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,7 @@ import { contractOperationalState, contractOperationalLabel } from '@/lib/contra
 import { hasPermission } from '@/lib/permission-evaluator';
 import { recordUpdatePermission } from '@/lib/record-update-context';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('contract.read');
   const { id } = await params;
   const context = await getContractReadAccess(session, id);
@@ -80,3 +81,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         <SecondaryLink href={`/clients/${contract.clientId}#documenti`}>Apri documenti del cliente</SecondaryLink></div>}</Card> : null}
   </div>;
 }
+
+export default withTechnicalPage("/contracts/[id]", Page);

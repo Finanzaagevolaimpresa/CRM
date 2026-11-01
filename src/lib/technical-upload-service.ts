@@ -82,14 +82,14 @@ export async function readOwnTechnicalUploads(db: PrismaClient, claimed: AuthSes
       if (!r || r.actorId !== a.actorId || r.assignmentId !== a.assignmentId || r.assignmentRevision !== a.assignmentRevision
         || canonicalJson(r.target) !== canonicalJson(target)) denied();
       const review = await loadTechnicalUploadReviewForSubmission(tx, state, row.commandId);
-      deposits.push({ commandId: r.commandId, title: r.command.title, fileName: r.command.file.fileName,
-        sizeBytes: r.sizeBytes, createdAt: r.createdAt, previewMime: r.command.file.previewMime,
-        review: review ? { verdict: review.command.verdict, reason: review.command.reason, recordedAt: review.receipt.recordedAt } : null });
+      deposits.push({ commandId: r.commandId, title: 'Deposito privato', fileName: 'File in revisione Admin',
+        sizeBytes: r.sizeBytes, createdAt: r.createdAt, previewMime: null,
+        review: review ? { verdict: review.command.verdict, reason: null, recordedAt: review.receipt.recordedAt } : null });
     }
     const physical = await readTechnicalUploadPhysicalQuota(technicalUploadStorageKey(a, '00000000-0000-4000-8000-000000000000'), a.profile);
     if (physical.files < a.consumedFiles || physical.bytes < a.consumedBytes) unavailable();
     return { target, assignmentId: a.assignmentId, assignmentRevision: a.assignmentRevision, contextSha256: a.contextSha256,
-      profile: a.profile, consumedFiles: physical.files, consumedBytes: physical.bytes,
+      profile: { ...a.profile, purpose: 'Deposito per revisione Admin' }, consumedFiles: physical.files, consumedBytes: physical.bytes,
       retainedWithoutReceipt: physical.files - a.consumedFiles, deposits };
   });
 }

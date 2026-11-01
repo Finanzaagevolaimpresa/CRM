@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { randomUUID } from 'node:crypto';
 import { notFound, redirect } from 'next/navigation';
@@ -9,7 +10,7 @@ import { OperationalLinkError } from '@/lib/admin-operational-link-contract';
 import { AdminRecordError } from '@/lib/admin-records';
 import { AdminOperationalLinkEditor } from '@/components/admin-operational-link-editor';
 import { PageHeader } from '@/components/ui';
-export default async function Page({ params, searchParams }: { params: Promise<{ model: string; id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ model: string; id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireSession(); if (session.role !== 'admin') notFound();
   const { model, id } = await params, query = await searchParams;
   if (query.decision && !z.string().uuid().safeParse(query.decision).success) notFound();
@@ -26,3 +27,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   return <div className="crm-space-y-6"><PageHeader title={'Collegamenti · ' + data.label} description="Correzione amministrativa con anteprima, conferma e storico conservato."/>
     <AdminOperationalLinkEditor key={model + ':' + id + ':' + query.command} data={data} commandId={String(query.command)} recovering={Boolean(query.decision)}/></div>;
 }
+
+export default withTechnicalPage("/admin/links/[model]/[id]", Page);

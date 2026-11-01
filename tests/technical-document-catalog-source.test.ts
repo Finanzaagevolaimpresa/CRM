@@ -18,7 +18,7 @@ class TechnicalAssignmentError extends Error { constructor(readonly code: string
 type Option = { fileId: string; documentId: string; title: string; allowDownload: boolean };
 type Result = { options: Option[]; validUntil: number };
 type Exports = { readAdmittedTechnicalDocumentOptions: (tx: object, state: object, context: object) => Promise<Result> };
-async function read(count: number, options: { denied?: Set<string>; failure?: Error; missingMetadata?: boolean; limited?: boolean } = {}) {
+async function read(count: number, options: { denied?: Set<string>; failure?: Error; missingMetadata?: boolean; restricted?: boolean; limited?: boolean } = {}) {
   const batches: string[][] = [], ids = Array.from({ length: count }, (_, i) => `version-${String(i).padStart(3, '0')}`);
   const sandbox = { exports: {} as Exports, Error, TechnicalAssignmentError,
     listTechnicalDocumentCandidates: async () => ({ documentsLimited: options.limited === true,
@@ -29,7 +29,8 @@ async function read(count: number, options: { denied?: Set<string>; failure?: Er
       if (options.failure) throw options.failure;
       if (batch.some(id => options.denied?.has(id))) throw new TechnicalAssignmentError('DENIED');
       return { documents: choices.map(row => ({ ...row, documentId: `doc-${row.fileId}` })),
-        metadata: options.missingMetadata ? [] : choices.map(row => ({ fileId: row.fileId, title: `Admitted ${row.fileId}` })),
+        excludedVersionIds: options.restricted ? new Set(batch) : new Set(),
+        metadata: options.missingMetadata || options.restricted ? [] : choices.map(row => ({ fileId: row.fileId, title: `Admitted ${row.fileId}` })),
         paths: new Map(batch.map(id => [id, '/PRIVATE_STORAGE_DO_NOT_PROJECT'])), validUntil: 10_000 - Number(batch[batch.length - 1].slice(-3)) };
     },
   };
@@ -59,6 +60,7 @@ test('mixed denials are bisected without losing valid neighbours or duplicating 
 test('storage, serialization and missing metadata abort the whole catalogue rather than looking empty', async () => {
   for (const message of ['STORAGE_FAILURE', '40001', '40P01']) await assert.rejects(read(1, { failure: new Error(message) }), new RegExp(message));
   await assert.rejects(read(1, { missingMetadata: true }), /UNAVAILABLE/);
+  assert.deepEqual((await read(3, { restricted: true })).result.options, []);
   for (const message of ['SELECTIVE_CLIENT_DOCUMENT_UNAVAILABLE', 'SELECTIVE_PRACTICE_DOCUMENT_UNAVAILABLE'])
     assert.deepEqual((await read(3, { failure: new Error(message) })).result.options, []);
 });

@@ -1,3 +1,4 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
 import { Prisma } from '@prisma/client';
 import type { AuthSession, Permission } from './auth';
 import { canViewClient, canViewLead, canViewProject, canViewTechnicalPractice } from './access-control';
@@ -20,7 +21,7 @@ export async function currentRecordUpdateUser(tx: Tx, id: string) {
   const user = await tx.user.findUnique({ where: { id }, select: { id: true, name: true, email: true, role: true,
     active: true, deletedAt: true, recordUpdateEpoch: true, permissionOverrides: { select: { permission: true, allowed: true } } } });
   if (!user || !user.active || user.deletedAt) return null;
-  return { ...user, userId: user.id, clientReadScope: await loadClientReadScope(tx, id), ...await loadSelectiveProjectScope(tx, id) };
+  return { ...user, userId: user.id, technicalRestricted: await currentTechnicalRestriction(tx, user.id, user), clientReadScope: await loadClientReadScope(tx, id), ...await loadSelectiveProjectScope(tx, id) };
 }
 type RecordUser = NonNullable<Awaited<ReturnType<typeof currentRecordUpdateUser>>>;
 export type RecordUpdateContext = {

@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
 import { NextResponse } from 'next/server';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -6,6 +7,7 @@ import { technicalTargetReference } from '@/lib/technical-assignment-display';
 import { readPrivateDocumentBounded } from '@/lib/storage';
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request, { params }: { params: Promise<{ kind: string; id: string; versionId: string }> }) {
+  await assertTechnicalFileRoute("/technical-work/[kind]/[id]/documents/[versionId]");
   const session = await requireSession(), p = await params;
   const download = new URL(request.url).searchParams.get('download') === '1';
   try {

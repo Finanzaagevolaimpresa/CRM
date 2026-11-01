@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -9,7 +10,7 @@ import { PrimaryButton, SecondaryLink } from '@/components/actions';
 
 export const dynamic = 'force-dynamic';
 const field = 'w-full rounded-xl border p-2';
-export default async function Page({ searchParams }: { searchParams: Promise<{ result?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ result?: string }> }) {
   const session = await requirePermission('practice_communications.read'), query = await searchParams;
   let data: Awaited<ReturnType<typeof readCommunicationAdministration>>;
   try { data = await readCommunicationAdministration(prisma, session); }
@@ -43,3 +44,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ r
     <Card title="Risposte da riconciliare"><p>Collegamento non univoco: scegli una comunicazione della pratica dopo aver verificato la risposta. Le 100 risposte più vecchie non ancora collegate sono mostrate qui.</p>{data.replies.map(reply => <article className="my-4 rounded-xl border p-4" key={reply.id}><h3 className="font-bold">{reply.subject}</h3><p>{reply.sender} · {reply.receivedAt.toISOString()}</p><p className="whitespace-pre-wrap">{reply.body}</p><SecondaryLink href={`/admin/records/CommunicationReply/${reply.id}`}>Fonte originale e rettifiche amministrative</SecondaryLink><form action={act} className="mt-3 grid gap-3"><input type="hidden" name="intent" value="link" /><input type="hidden" name="replyId" value={reply.id} /><label>Riferimento CRM della comunicazione<input required className={field} name="messageId" /></label><label>Motivo del collegamento<textarea required minLength={10} maxLength={1000} className={field} name="reason" /></label><PrimaryButton type="submit">Collega alla pratica</PrimaryButton></form></article>)}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/settings/communications", Page);

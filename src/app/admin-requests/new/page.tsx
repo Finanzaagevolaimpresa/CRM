@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -7,7 +8,7 @@ import { readAdminRequestEntry, isRequestUnavailable } from '@/lib/admin-request
 import { AdminRequestForm } from '@/components/admin-request-form';
 import { PageHeader } from '@/components/ui';
 export const dynamic = 'force-dynamic';
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; id?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; id?: string }> }) {
   const query = await searchParams, user = await requireSession(); let entry;
   try { entry = await readAdminRequestEntry(prisma, user, { kind: query.kind, targetId: query.id }); }
   catch (error) { if (isRequestUnavailable(error)) notFound(); throw error; }
@@ -25,3 +26,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     </AdminRequestForm>
   </div>;
 }
+
+export default withTechnicalPage("/admin-requests/new", Page);

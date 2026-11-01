@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -11,7 +12,7 @@ import { loadActivePrivilegedStepUpKey } from '@/lib/application-key-registry';
 import { markRecordUpdateReadAction } from '@/lib/record-update-actions';
 import { recordUpdateChangedLabels } from '@/lib/record-update-labels';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession(), { id } = await params;
   if (!z.string().uuid().safeParse(id).success) notFound();
   const row = await readSelectedRecordNotice(prisma, session, await loadActivePrivilegedStepUpKey(prisma), id);
@@ -29,3 +30,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       </form>}
     </Card></div>;
 }
+
+export default withTechnicalPage("/notifications/updates/[id]", Page);

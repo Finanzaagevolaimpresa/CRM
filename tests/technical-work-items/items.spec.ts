@@ -31,8 +31,8 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
   await page.getByLabel('Titolo', { exact: true }).check();
   const selected = page.getByLabel(checklist ? 'Checklist · Checklist scelta' : 'Attività · Attività tecnica scelta', { exact: true });
   await selected.check(); const card = selected.locator('..').locator('..');
-  for (const name of checklist ? ['Titolo', 'Note tecniche', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
-  await card.getByLabel(checklist ? 'Consenti modifica note tecniche' : 'Consenti modifica priorità', { exact: true }).check();
+  for (const name of checklist ? ['Titolo', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
+  await card.getByLabel(checklist ? 'Consenti modifica titolo' : 'Consenti modifica priorità', { exact: true }).check();
   await expect(page.getByText('Checklist finanziaria esclusa', { exact: false })).toHaveCount(0);
   await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Selezione sintetica di elementi e campi');
@@ -45,8 +45,8 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
 async function prepare(page: Page, row: Row, checklist = false) {
   await page.goto(item(row, checklist)); await page.locator('[data-technical-item-ready="true"]').waitFor();
   for (const value of row.excluded) expect(await page.content()).not.toContain(value);
-  await page.getByLabel(checklist ? 'Modifica note tecniche' : 'Modifica priorità', { exact: true }).check();
-  if (checklist) await page.getByRole('textbox', { name: 'Note tecniche', exact: true }).fill('Nota tecnica aggiornata');
+  await page.getByLabel(checklist ? 'Modifica titolo' : 'Modifica priorità', { exact: true }).check();
+  if (checklist) await page.getByRole('textbox', { name: 'Titolo', exact: true }).fill('Checklist tecnica aggiornata');
   else await page.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('urgente');
   await page.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma le modifiche', exact: true })).toBeVisible();
@@ -73,7 +73,8 @@ test('personal Admin selects different items for two technicians; native edits p
   await prepare(b, row, true); await screenshot(b, 'checklist-preview'); await save(b);
   expect(await count(row)).toBe(2);
   expect((await db.task.findUniqueOrThrow({ where: { id: row.taskId } })).priority).toBe('urgente');
-  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: row.checklistId } })).notes).toBe('Nota tecnica aggiornata');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: row.checklistId } })).title).toBe('Checklist tecnica aggiornata');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: row.checklistId } })).notes).toBe('Nota iniziale');
   expect((await tc.request.get(item(row, true))).status()).toBe(404); expect((await bc.request.get(item(row))).status()).toBe(404);
   for (const person of [row.salesA, row.salesB]) { const sc = await browser.newContext(), s = await sc.newPage(); await login(s, person.email);
     for (const url of [item(row), item(row, true)]) expect((await sc.request.get(url)).status()).toBe(404);

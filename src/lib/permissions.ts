@@ -1,3 +1,4 @@
+import { technicalPermissionCeiling } from './technical-confidentiality';
 import type { RoleCode } from '@prisma/client';
 import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 
@@ -99,6 +100,7 @@ export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = 
 };
 
 export function roleHasPermission(role: RoleCode, permission: Permission) {
+  if (!technicalPermissionCeiling({ role }, permission)) return false;
   if (permission === 'video.read') return Object.hasOwn(rolePermissions, role);
   if (permission === 'video.manage') return role === 'admin';
   if (permission === 'communications.internal.read') return Object.hasOwn(rolePermissions, role);

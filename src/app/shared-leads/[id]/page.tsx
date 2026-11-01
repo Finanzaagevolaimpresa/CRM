@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
@@ -6,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { readLeadSharing } from '@/lib/selective-lead-access';
 import { readLeadEditing } from '@/lib/selective-lead-edit-access';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('lead.read'), { id } = await params;
   const projection = await readLeadSharing(prisma, session, id).catch(() => null);
   const editing = projection ? await readLeadEditing(prisma, session, id).catch(() => null) : null;
@@ -20,3 +21,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       : <EmptyState title="Selezione non disponibile">L’accesso può essere scaduto, revocato o sospeso. Chiedi all’amministratore di verificare la selezione.</EmptyState>}
   </div>;
 }
+
+export default withTechnicalPage("/shared-leads/[id]", Page);

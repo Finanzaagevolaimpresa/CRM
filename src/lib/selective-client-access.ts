@@ -1,3 +1,5 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
+import { fieldsForDisclosure, isTechnicalAccount } from './technical-confidentiality';
 import { selectedDocumentMode } from './selected-document-formats';
 import { selectedDocumentResponseMime } from './selected-document-content';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -49,7 +51,7 @@ function allowed(actor: Pick<AuthSession, 'role' | 'active' | 'permissionOverrid
 async function liveUser(tx: Tx, id: string) {
   const user = await tx.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user || !user.active || user.deletedAt) deny();
-  return user;
+  return { ...user, technicalRestricted: await currentTechnicalRestriction(tx, user.id, user) };
 }
 async function sessionLive(tx: Tx, current: AuthSession & { registryExpiresAt: Date }) {
   const now = await clock(tx);
@@ -89,7 +91,7 @@ async function transaction<T>(db: PrismaClient, claimed: AuthSession, recipientI
     }
     const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
     if (!row || row.revokedAt || !row.active || row.deletedAt) deny();
-    const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+    const current = { ...claimed, role: row.role, technicalRestricted: row.technicalRestricted, active: row.active, permissionOverrides: [...row.permissionOverrides],
       registryExpiresAt: row.expiresAt, clientReadScope: await loadClientReadScope(tx, claimed.userId),
       ...await loadSelectiveClientScope(tx, claimed.userId) };
     const actor = await liveUser(tx, claimed.userId), authorityUser = await liveUser(tx, binding.userId);
@@ -147,7 +149,7 @@ export async function previewClientSharing(db: PrismaClient, claimed: AuthSessio
     const targetScope = await loadSelectiveClientScope(tx, input.recipientId);
     return { token: createSelectiveClientPreview(state.key, input, selected.admission, selected.now.getTime()), input,
       fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, input.fields),
-      documents: selected.documents.snapshots, companies: selected.companies.projection, people: selected.people.projection,
+      documents: selected.documents.snapshots, companies: isTechnicalAccount(state.current) ? [] : selected.companies.projection, people: isTechnicalAccount(state.current) ? [] : selected.people.projection,
       recipient: { name: selected.target.name, email: selected.target.email, role: selected.target.role },
       replacesFullAccess: canViewClient({ userId: selected.target.id, role: selected.target.role, clientReadScope: await loadClientReadScope(tx, selected.target.id), ...targetScope }, selected.row),
       replacesSelection: !!selected.previous };
@@ -301,8 +303,8 @@ export async function readClientSharing(db: PrismaClient, claimed: AuthSession, 
   return transaction(db, claimed, null, null, async (tx, state) => {
     const selected = await authorizedClientSharing(tx, state, clientId);
     if (!readSelectiveClientGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
-    return { clientId, revision: selected.grant.revision, fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, selected.payload.selection.fields),
-      documents: selected.documents.snapshots, companies: selected.companies.projection, people: selected.people.projection, expiresAt: selected.payload.selection.expiresAt };
+    return { clientId, revision: selected.grant.revision, fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, fieldsForDisclosure(state.current, 'Client', selected.payload.selection.fields)),
+      documents: selected.documents.snapshots, companies: isTechnicalAccount(state.current) ? [] : selected.companies.projection, people: isTechnicalAccount(state.current) ? [] : selected.people.projection, expiresAt: selected.payload.selection.expiresAt };
   });
 }
 

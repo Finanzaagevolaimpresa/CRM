@@ -1,3 +1,4 @@
+import { technicalVersionDisclosureAllowed } from './technical-document-disclosure';
 import { Prisma, type Document } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { isSensitiveDocument } from './access-control';
@@ -93,7 +94,7 @@ async function readClientDocumentOptions(tx: Tx, manager: Recipient, clientId: s
  * document route remains excluded for a selected client. This function admits
  * only exact versions, preserving independent project ceilings and lifecycle. */
 export async function selectClientDocuments(tx: Tx, authorityId: string, target: Recipient, clientId: string,
-  choices: readonly ClientDocumentChoice[]): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string> }> {
+  choices: readonly ClientDocumentChoice[]): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string>; disclosedVersionIds: Set<string> }> {
   return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadIndependentProjectExclusions);
 }
 
@@ -103,13 +104,13 @@ export async function selectClientDocuments(tx: Tx, authorityId: string, target:
  * personal project/document selections remain independent ceilings. */
 export async function selectClientDocumentsForTechnicalAssignment(tx: Tx, authorityId: string, target: Recipient, clientId: string,
   choices: readonly ClientDocumentChoice[]) {
-  return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadTechnicalDocumentProjectCeilings);
+  return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadTechnicalDocumentProjectCeilings, false);
 }
 
 async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recipient, clientId: string,
-  choices: readonly ClientDocumentChoice[], ceilings: typeof loadIndependentProjectExclusions): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string> }> {
-  const snapshots: ClientDocumentSnapshot[] = [], paths = new Map<string, string>();
-  if (!choices.length) return { snapshots, paths };
+  choices: readonly ClientDocumentChoice[], ceilings: typeof loadIndependentProjectExclusions, enforceDisclosure = true): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string>; disclosedVersionIds: Set<string> }> {
+  const snapshots: ClientDocumentSnapshot[] = [], paths = new Map<string, string>(), disclosedVersionIds = new Set<string>();
+  if (!choices.length) return { snapshots, paths, disclosedVersionIds };
   if (!target.active || target.permissionOverrides.some(p => p.permission === 'document.download' && !p.allowed)) unavailable();
   const scope = await ceilings(tx, target.id);
   const ordered = [...choices].sort((a, b) => a.versionId.localeCompare(b.versionId));
@@ -145,6 +146,9 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
       || scope.selectiveDocumentIds?.includes(document.id)
       || (document.projectId && scope.selectiveProjectIds?.includes(document.projectId))
       || (document.clientServiceId && scope.selectiveServiceIds?.includes(document.clientServiceId))) return unavailable();
+    const disclosed = await technicalVersionDisclosureAllowed(tx, target, document, version);
+    if (enforceDisclosure && !disclosed) return unavailable();
+    if (disclosed) disclosedVersionIds.add(version.id);
     const [company, project, service, contracts, payments, formalizations, materials] = await Promise.all([
       document.companyId ? tx.company.findUnique({ where: { id: document.companyId } }) : null,
       document.projectId ? tx.project.findUnique({ where: { id: document.projectId } }) : null,
@@ -170,5 +174,5 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
     });
     snapshots.push(snapshot); paths.set(version.id, version.storagePath);
   }
-  return { snapshots, paths };
+  return { snapshots, paths, disclosedVersionIds };
 }

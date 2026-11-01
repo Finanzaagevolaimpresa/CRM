@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
 import { getSession, requirePermission, hasPermission } from '@/lib/auth';
@@ -10,6 +11,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/dossiers/[id]/export");
   const actor = await requirePermission('dossier.read'), { id } = await params;
   const context = await getLegacyDossierReadAccess(actor, id);
   if (!context) return new NextResponse('Non disponibile', { status: 404 });

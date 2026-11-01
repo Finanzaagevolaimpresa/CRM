@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -7,7 +8,7 @@ import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { getLegacyDossierReadAccess } from '@/lib/read-access';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('dossier.read');
   const { id } = await params;
   const context = await getLegacyDossierReadAccess(session, id);
@@ -31,3 +32,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card title="Contenuto"><div className="whitespace-pre-wrap text-sm text-fai-gray">{dossier.markdownContent ?? 'Nessun dato presente'}</div></Card>
   </div>;
 }
+
+export default withTechnicalPage("/dossiers/[id]", Page);

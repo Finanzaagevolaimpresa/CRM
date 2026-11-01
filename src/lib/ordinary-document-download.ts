@@ -1,3 +1,5 @@
+import { technicalVersionDisclosureAllowed } from './technical-document-disclosure';
+import { isTechnicalAccount } from './technical-confidentiality';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import type { AuthSession } from './auth';
@@ -29,7 +31,7 @@ export async function readOrdinaryDocument(db: PrismaClient, claimed: AuthSessio
     await lockInternalUser(tx, claimed.userId);
     const user = await tx.user.findUnique({ where: { id: claimed.userId }, include: { permissionOverrides: true } });
     if (!user?.active || user.deletedAt) throw new DocumentDownloadError(403);
-    const session = { ...claimed, role: user.role, active: user.active, permissionOverrides: [...user.permissionOverrides],
+    const session = { ...claimed, role: user.role, technicalRestricted: registry?.technicalRestricted ?? claimed.technicalRestricted, active: user.active, permissionOverrides: [...user.permissionOverrides],
       clientReadScope: await loadClientReadScope(tx, claimed.userId), ...await guardProjectResources(tx, claimed.userId, [{ documentId: id }]) };
     if (!hasPermission(session, 'document.download')) throw new DocumentDownloadError(403);
     const document = await tx.document.findFirst({ where: { id, deletedAt: null } });
@@ -55,6 +57,10 @@ export async function readOrdinaryDocument(db: PrismaClient, claimed: AuthSessio
     if (!ordinary && !review) throw new DocumentDownloadError(403);
     const version = ordinary && versionId ? await tx.documentVersion.findFirst({ where: { id: versionId, documentId: id } }) : null;
     if (ordinary && versionId && !version) throw new DocumentDownloadError(404);
+    if (isTechnicalAccount(session)) {
+      const exact = version ?? await tx.documentVersion.findFirst({ where: { documentId: id, storagePath: document.storagePath, checksum: document.checksum }, orderBy: { version: 'desc' } });
+      if (!exact || !await technicalVersionDisclosureAllowed(tx, session, document, exact)) throw new DocumentDownloadError(404);
+    }
     const path = review?.storagePath ?? version?.storagePath ?? document.storagePath;
     const checksum = review?.checksum ?? version?.checksum ?? document.checksum;
     if (!await (runtime.exists ?? privateDocumentExists)(path)) throw new DocumentDownloadError(404);

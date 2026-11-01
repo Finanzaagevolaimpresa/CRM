@@ -30,6 +30,7 @@ export async function readAdmittedTechnicalDocumentOptions(tx: Prisma.Transactio
       validUntil = Math.min(validUntil, result.validUntil);
       for (const snapshot of result.documents) {
         const metadata = result.metadata.find(row => row.fileId === snapshot.fileId);
+        if (result.excludedVersionIds?.has(snapshot.fileId)) continue;
         if (!metadata) throw new TechnicalAssignmentError('UNAVAILABLE');
         admitted.push({ ...snapshot, ...metadata });
       }

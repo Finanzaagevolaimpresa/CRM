@@ -1,3 +1,4 @@
+import { isTechnicalAccount, type TechnicalConfidentialityActor } from './technical-confidentiality';
 import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
 
@@ -11,7 +12,7 @@ export type CommunicationRecipientSelection = z.infer<typeof communicationRecipi
 export const emptyCommunicationRecipientSelection = (): CommunicationRecipientSelection => ({
   to: { userIds: [], groups: [] }, cc: { userIds: [], groups: [] }, bcc: { userIds: [], groups: [] },
 });
-export type CommunicationDirectoryPerson = {
+export type CommunicationDirectoryPerson = TechnicalConfidentialityActor & {
   id: string; name: string; email: string; role: string; active: boolean; deletedAt: Date | null;
 };
 const address = z.string().trim().max(254).email().transform(value => {
@@ -57,4 +58,14 @@ export function resolveCommunicationRecipients(raw: unknown, directory: readonly
   const all = buckets.flatMap(key => result[key]);
   if (!result.to.length || all.length > 20 || new Set(all.map(value => value.toLowerCase())).size !== all.length) invalid();
   return { selection, recipients: result, people, evidenceHash: canonicalSha256(evidence) };
+}
+
+/** Free text and arbitrary attachments have no technical-content classification.
+ * A typed address must not bypass the restrictions of its known CRM account. */
+export function assertUnclassifiedTechnicalRecipients(directory: readonly CommunicationDirectoryPerson[],
+  recipients: { to: readonly string[]; cc: readonly string[]; bcc: readonly string[] }) {
+  const targets = new Set([...recipients.to, ...recipients.cc, ...recipients.bcc].map(v => address.parse(v).toLowerCase()));
+  if (directory.some(person => isTechnicalAccount(person) && targets.has(address.parse(person.email).toLowerCase()))) {
+    throw new Error('COMMUNICATION_TECHNICAL_CONTENT_UNCLASSIFIED');
+  }
 }

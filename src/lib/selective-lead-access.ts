@@ -1,3 +1,5 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
+import { fieldsForDisclosure } from './technical-confidentiality';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -40,7 +42,7 @@ function allowed(actor: Pick<AuthSession, 'role' | 'active' | 'permissionOverrid
 async function liveUser(tx: Tx, id: string) {
   const user = await tx.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user || !user.active || user.deletedAt) deny();
-  return user;
+  return { ...user, technicalRestricted: await currentTechnicalRestriction(tx, user.id, user) };
 }
 async function sessionLive(tx: Tx, current: AuthSession & { registryExpiresAt: Date }) {
   const now = await clock(tx);
@@ -79,7 +81,7 @@ async function transaction<T>(db: PrismaClient, claimed: AuthSession, recipientI
     }
     const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
     if (!row || row.revokedAt || !row.active || row.deletedAt) deny();
-    const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+    const current = { ...claimed, role: row.role, technicalRestricted: row.technicalRestricted, active: row.active, permissionOverrides: [...row.permissionOverrides],
       registryExpiresAt: row.expiresAt, ...await loadSelectiveProjectScope(tx, claimed.userId) };
     const actor = await liveUser(tx, claimed.userId), authorityUser = await liveUser(tx, binding.userId);
     if (!allowed(current) || authorityUser.role !== 'admin' || !allowed(authorityUser, true)) deny();
@@ -243,7 +245,7 @@ export async function readLeadSharing(db: PrismaClient, claimed: AuthSession, le
       || receipt.revision !== grant.revision || receipt.operation !== 'GRANT' || receipt.fieldCount !== payload.selection.fields.length
       || receipt.keyVersion !== state.key.version || !verifySelectiveLeadProof(state.key, 'receipt', receipt, revision.command.receiptProof)) deny();
     if (!readSelectiveLeadGrant(raw, state.key, current, (await clock(tx)).getTime())) deny();
-    return { leadId, revision: grant.revision, fields: leadFieldProjection(row as unknown as Record<string, unknown>, payload.selection.fields),
+    return { leadId, revision: grant.revision, fields: leadFieldProjection(row as unknown as Record<string, unknown>, fieldsForDisclosure(state.current, 'Lead', payload.selection.fields)),
       expiresAt: payload.selection.expiresAt };
   });
 }

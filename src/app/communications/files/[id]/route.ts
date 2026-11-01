@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
 import { NextResponse } from 'next/server';
 import { unstable_rethrow } from 'next/navigation';
 import { requireSession } from '@/lib/auth';
@@ -7,6 +8,7 @@ import { readCommunicationFile } from '@/lib/communication-files';
 
 export const dynamic = 'force-dynamic';
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/communications/files/[id]");
   try {
     const session = await requireSession();
     assertOrdinaryEmailRequestOrigin({ origin: request.headers.get('origin'), secFetchSite: request.headers.get('sec-fetch-site') }, process.env);

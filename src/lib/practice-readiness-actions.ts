@@ -1,4 +1,5 @@
 "use server";
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { redirect } from "next/navigation";
 import { requirePermission } from "./auth";
 import { prisma } from "./prisma";
@@ -57,6 +58,7 @@ async function run(
   redirect(`/practice-readiness?updated=${result.id ?? result.practiceId}`);
 }
 export async function proposePracticeOfferRevisionAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:proposePracticeOfferRevisionAction");
   const selection = String(form.get("commercialOfferSelection") ?? "");
   const separator = selection.lastIndexOf("|");
   if (separator > 0) {
@@ -66,29 +68,38 @@ export async function proposePracticeOfferRevisionAction(form: FormData) {
   return run(form, proposePracticeOfferRevision);
 }
 export async function createPracticeReadinessAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:createPracticeReadinessAction");
   return run(form, createPracticeReadiness);
 }
 export async function formalizePracticeAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:formalizePracticeAction");
   return run(form, formalizePractice);
 }
 export async function linkPracticeClientServiceAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:linkPracticeClientServiceAction");
   return run(form, linkPracticeClientService);
 }
 export async function recordPracticeFundingAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:recordPracticeFundingAction");
   return run(form, recordPracticeFunding);
 }
 export async function confirmPracticeFundingAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:confirmPracticeFundingAction");
   return run(form, confirmPracticeFunding);
 }
 export async function reversePracticeFundingAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:reversePracticeFundingAction");
   return run(form, reversePracticeFunding);
 }
 export async function decidePracticeMaterialAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:decidePracticeMaterialAction");
   return run(form, decidePracticeMaterial);
 }
 export async function attestPracticeMaterialsCompleteAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:attestPracticeMaterialsCompleteAction");
   return run(form, attestPracticeMaterialsComplete);
 }
 export async function startPracticeAction(form: FormData) {
+  await assertTechnicalServerAction("practice-readiness-actions:startPracticeAction");
   return run(form, startPractice);
 }

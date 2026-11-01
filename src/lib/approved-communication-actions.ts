@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -20,6 +21,7 @@ async function origin() {
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new ApprovedCommunicationError('DENIED');
 }
 export async function mutateApprovedMessageAction(form: FormData): Promise<WorkflowFormState> {
+  await assertTechnicalServerAction("approved-communication-actions:mutateApprovedMessageAction");
   const session = await requireSession();
   await origin();
   const context = communicationContextSchema.parse({ kind: value(form, 'contextKind'), id: value(form, 'contextId') });
@@ -63,6 +65,7 @@ export async function mutateApprovedMessageAction(form: FormData): Promise<Workf
 }
 
 export async function mutateCommunicationAdministrationAction(form: FormData) {
+  await assertTechnicalServerAction("approved-communication-actions:mutateCommunicationAdministrationAction");
   const session = await requirePermission('practice_communications.read');
   await origin();
   const intent = value(form, 'intent');

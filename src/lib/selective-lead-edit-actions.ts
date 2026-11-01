@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { cookies, headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -48,6 +49,7 @@ function refresh() {
   }
 }
 export async function prepareSelectedLeadEdit(_state: LeadEditUiState, form: FormData): Promise<LeadEditUiState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:prepareSelectedLeadEdit");
   const session = await requirePermission('lead.read');
   try {
     await origin();
@@ -56,6 +58,7 @@ export async function prepareSelectedLeadEdit(_state: LeadEditUiState, form: For
   } catch (error) { return failure(error); }
 }
 export async function confirmSelectedLeadEdit(_state: LeadEditUiState, form: FormData): Promise<LeadEditUiState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:confirmSelectedLeadEdit");
   // The narrow signed capability supplies only the two selected operations.
   // Requiring a broad role permission here would undo that separate decision.
   const session = await requirePermission('lead.read');
@@ -68,6 +71,7 @@ export async function confirmSelectedLeadEdit(_state: LeadEditUiState, form: For
   } catch (error) { return failure(error); }
 }
 export async function checkSelectedLeadEdit(_state: LeadEditUiState, form: FormData): Promise<LeadEditUiState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:checkSelectedLeadEdit");
   const session = await requirePermission('lead.read');
   try {
     await origin();
@@ -78,6 +82,7 @@ export async function checkSelectedLeadEdit(_state: LeadEditUiState, form: FormD
   } catch (error) { return failure(error); }
 }
 export async function prepareLeadEditingAccess(_state: LeadEditManagementState, form: FormData): Promise<LeadEditManagementState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:prepareLeadEditingAccess");
   const session = await requirePermission('lead.read');
   try {
     await origin();
@@ -86,6 +91,7 @@ export async function prepareLeadEditingAccess(_state: LeadEditManagementState, 
   } catch (error) { return failure(error); }
 }
 export async function confirmLeadEditingAccess(_state: LeadEditManagementState, form: FormData): Promise<LeadEditManagementState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:confirmLeadEditingAccess");
   const session = await requirePermission('lead.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_EDIT_CONFIRM', { inline: true });
@@ -97,6 +103,7 @@ export async function confirmLeadEditingAccess(_state: LeadEditManagementState, 
   } catch (error) { return failure(error); }
 }
 export async function revokeLeadEditingAccess(_state: LeadEditManagementState, form: FormData): Promise<LeadEditManagementState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:revokeLeadEditingAccess");
   const session = await requirePermission('lead.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_EDIT_REVOKE', { inline: true });
@@ -108,6 +115,7 @@ export async function revokeLeadEditingAccess(_state: LeadEditManagementState, f
   } catch (error) { return failure(error); }
 }
 export async function checkLeadEditingDecision(_state: LeadEditManagementState, form: FormData): Promise<LeadEditManagementState> {
+  await assertTechnicalServerAction("selective-lead-edit-actions:checkLeadEditingDecision");
   const session = await requirePermission('lead.read');
   try {
     await origin();

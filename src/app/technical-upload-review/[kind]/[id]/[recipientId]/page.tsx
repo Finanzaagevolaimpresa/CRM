@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -15,7 +16,7 @@ import { parseTechnicalUploadTarget, technicalUploadReviewPath, technicalUploadV
 import { technicalAssignmentReference } from '@/lib/technical-assignment-decision';
 import { technicalManagementPath } from '@/lib/technical-assignment-display';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string; recipientId: string }>;
+  async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string; recipientId: string }>;
   searchParams: Promise<{ reviewDecision?: string; acquisitionDecision?: string }> }) {
   const session = await requireSession(), p = await params, target = parseTechnicalUploadTarget(p);
   if (!target.success) notFound();
@@ -49,3 +50,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     </div></Card>)}
   </div>;
 }
+
+export default withTechnicalPage("/technical-upload-review/[kind]/[id]/[recipientId]", Page);

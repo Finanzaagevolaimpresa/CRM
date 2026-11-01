@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
@@ -14,7 +15,7 @@ import { technicalUploadPath } from '@/lib/technical-upload-display';
 import { operationalRomeTime } from '@/lib/operational-time';
 export const dynamic = 'force-dynamic';
 const dateFields = new Set(['dueDate', 'submittedAt', 'nextClientUpdateAt']);
-export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
+  async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
   searchParams: Promise<{ workDecision?: string }> }) {
   const session = await requireSession(), p = await params;
   const target = technicalTargetReference.safeParse({ kind: p.kind === 'projects' ? 'Project' : p.kind === 'practices' ? 'TechnicalPractice' : null, targetId: p.id });
@@ -50,3 +51,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       previewAction={prepareTechnicalWork} confirmAction={saveTechnicalWork} receiptAction={checkTechnicalWork} /></Card>}
   </div>;
 }
+
+export default withTechnicalPage("/technical-work/[kind]/[id]", Page);

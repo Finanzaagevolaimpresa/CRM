@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -12,6 +13,7 @@ import { transitionLeadLifecycle } from './lead-lifecycle';
 import { LeadLifecycleError } from './lead-lifecycle-lock';
 
 export async function changeLeadLifecycle(_previous: { ok: boolean; message: string }, form: FormData) {
+  await assertTechnicalServerAction("lead-lifecycle-actions:changeLeadLifecycle");
   const session = await requirePermission('lead.write');
   await requireEnforcedPrivilegedMutation(session, 'LEAD_LIFECYCLE');
   const store = await cookies();

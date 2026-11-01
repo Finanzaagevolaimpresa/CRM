@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
@@ -6,6 +7,7 @@ import { DocumentDownloadError, readOrdinaryDocument } from '@/lib/ordinary-docu
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/documents/[id]/view");
   const headers = { 'Cache-Control': 'private, no-store, max-age=0', 'Pragma': 'no-cache',
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'" };

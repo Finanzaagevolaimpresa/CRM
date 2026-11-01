@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { requirePermission } from './auth';
@@ -10,6 +11,7 @@ import { reassignExceptionTask } from './exception-task-assignment';
 const input = z.object({ id: z.string().min(1).max(128), updatedAt: z.string().datetime(), assignedToId: z.string().min(1).max(128) });
 type State = { ok: boolean; message: string };
 export async function assignExceptionTask(_state: State, form: FormData): Promise<State> {
+  await assertTechnicalServerAction("exception-task-actions:assignExceptionTask");
   const actor = await requirePermission('user.write');
   if (actor.role !== 'admin') return { ok: false, message: 'Operazione riservata all’amministratore.' };
   await requireEnforcedPrivilegedMutation(actor, 'R05_TASK_EXCEPTION_ASSIGN');

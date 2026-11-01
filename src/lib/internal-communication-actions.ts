@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { cookies, headers } from 'next/headers';
 import { unstable_rethrow } from 'next/navigation';
@@ -21,6 +22,7 @@ async function admission(confirm: boolean) {
 }
 
 export async function previewInternalCommunicationAction(raw: unknown) {
+  await assertTechnicalServerAction("internal-communication-actions:previewInternalCommunicationAction");
   try {
     const a = await admission(false);
     return { status: 'PREVIEW' as const, preview: await previewInternalCommunication(prisma, a.session, raw, a.credentials) };
@@ -28,6 +30,7 @@ export async function previewInternalCommunicationAction(raw: unknown) {
 }
 
 export async function confirmInternalCommunicationAction(raw: unknown, evidenceHash: string) {
+  await assertTechnicalServerAction("internal-communication-actions:confirmInternalCommunicationAction");
   try {
     const a = await admission(true);
     const result = await confirmInternalCommunication(prisma, a.session, raw, evidenceHash, a.credentials);
@@ -42,6 +45,7 @@ export async function confirmInternalCommunicationAction(raw: unknown, evidenceH
 }
 
 export async function archiveInternalCommunicationAction(raw: unknown) {
+  await assertTechnicalServerAction("internal-communication-actions:archiveInternalCommunicationAction");
   try {
     const a = await admission(true);
     await archiveInternalCommunication(prisma, a.session, raw, a.credentials);

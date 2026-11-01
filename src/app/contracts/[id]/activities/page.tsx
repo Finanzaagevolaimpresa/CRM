@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader } from '@/components/ui';
@@ -10,7 +11,7 @@ import { RecordUpdateError } from '@/lib/record-update-contract';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 import { SerializableConflictError } from '@/lib/serializable';
 
-export default async function ActivitiesPage({ params }: { params: Promise<{ id: string }> }) {
+  async function ActivitiesPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession(), { id } = await params;
   let setup: Awaited<ReturnType<typeof contractActivitiesSetup>>;
   try { setup = await contractActivitiesSetup(prisma, session, id); }
@@ -30,3 +31,5 @@ export default async function ActivitiesPage({ params }: { params: Promise<{ id:
     <Card title="Compila e controlla"><ContractActivitiesForm setup={setup} /></Card>
   </div>;
 }
+
+export default withTechnicalPage("/contracts/[id]/activities", ActivitiesPage);

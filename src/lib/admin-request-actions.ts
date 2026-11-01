@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -12,6 +13,7 @@ import { submitAdminRequest, changeAdminRequest, isRequestUnavailable } from './
 
 const value = (form: FormData, key: string) => String(form.get(key) ?? '');
 export async function mutateAdminRequest(form: FormData) {
+  await assertTechnicalServerAction("admin-request-actions:mutateAdminRequest");
   const session = await requireSession(), h = await headers();
   if (!isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) requestDenied();

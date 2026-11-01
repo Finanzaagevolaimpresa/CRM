@@ -6,7 +6,7 @@ import { recordUpdatePermission } from './record-update-context';
 import { mapSerializableConflict, SerializableConflictError } from './serializable';
 import { loadAdminRoleProfile } from './admin-role-profile-store';
 import { profileRole, roleProfileCommand, roleProfileModel, normalizeRoleProfile,
-  roleProfileDigest as digest, RoleProfileError } from './admin-role-profile-contract';
+  originalRoleProfile, roleProfileDigest as digest, RoleProfileError } from './admin-role-profile-contract';
 
 type Tx = Prisma.TransactionClient;
 type Authority = Awaited<ReturnType<typeof updateActor>>;
@@ -43,7 +43,7 @@ export async function readAdminRoleProfile(db: PrismaClient, session: AuthSessio
   return transaction(db, async tx => {
     const current = await authority(tx, session), profile = await loadAdminRoleProfile(tx, role);
     await current.finish();
-    return { role, current: profile.current!, version: profile.version, history: [...profile.history].reverse().slice((page - 1) * 50, page * 50),
+    return { role, current: profile.current!, effectiveOverrides: profile.effectiveOverrides, version: profile.version, history: [...profile.history].reverse().slice((page - 1) * 50, page * 50),
       page, hasMore: profile.history.length > page * 50, canWrite: recordUpdatePermission(current.actor, 'user.write'), totalRevisions: profile.history.length };
   });
 }
@@ -61,9 +61,9 @@ export async function saveAdminRoleProfile(db: PrismaClient, session: AuthSessio
     }
     const profile = await loadAdminRoleProfile(tx, input.role, true);
     if (profile.version !== input.expectedVersion) throw new RoleProfileError('STALE');
-    if (digest(overrides) === digest(profile.current!.overrides)) throw new RoleProfileError('INVALID');
+    if (digest(overrides) === digest(profile.current!.overrides) && profile.current!.catalogueHash === originalRoleProfile(input.role).catalogueHash) throw new RoleProfileError('INVALID');
     await journal(tx, current, input, requestHash, 'UPDATE', profile.current,
-      { ...profile.current!, revision: profile.current!.revision + 1, overrides });
+      { ...profile.current!, catalogueHash: originalRoleProfile(input.role).catalogueHash, revision: profile.current!.revision + 1, overrides });
     await current.finish(); return { replayed: false };
   });
 }

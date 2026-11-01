@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
@@ -20,6 +21,7 @@ function failure(error: unknown) {
   return { ok: false as const, definite, stepUpRequired, message };
 }
 export async function previewProjectHandoffAction(raw: unknown) {
+  await assertTechnicalServerAction("project-handoff-actions:previewProjectHandoffAction");
   const session = await requireSession();
   try {
     const key = await loadActivePrivilegedStepUpKey(prisma);
@@ -28,6 +30,7 @@ export async function previewProjectHandoffAction(raw: unknown) {
   } catch (error) { return failure(error); }
 }
 export async function confirmProjectHandoffAction(raw: unknown, preview: unknown) {
+  await assertTechnicalServerAction("project-handoff-actions:confirmProjectHandoffAction");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'R05_RESPONSIBILITY', { inline: true });
@@ -43,6 +46,7 @@ export async function confirmProjectHandoffAction(raw: unknown, preview: unknown
   } catch (error) { return failure(error); }
 }
 export async function verifyProjectHandoffAction(projectId: string, commandId: string) {
+  await assertTechnicalServerAction("project-handoff-actions:verifyProjectHandoffAction");
   const session = await requireSession();
   try { return { ok: true as const, result: await readProjectHandoffReceipt(prisma, session, projectId, commandId) }; }
   catch { return { ok: false as const, message: 'Verifica non disponibile. Mantieni il riferimento e non ripetere la creazione.' }; }

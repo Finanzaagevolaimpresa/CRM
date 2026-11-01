@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -30,6 +31,7 @@ function refresh() {
   for (const path of ['/clients', '/shared-clients', '/dashboard', '/search', '/notifications', '/communications']) revalidatePath(path);
 }
 export async function prepareClientSharing(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
+  await assertTechnicalServerAction("selective-client-actions:prepareClientSharing");
   const session = await requirePermission('client.read');
   try {
     const preview = await previewClientSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')));
@@ -37,6 +39,7 @@ export async function prepareClientSharing(_previous: ClientSharingState, form: 
   } catch (error) { return failure(error); }
 }
 export async function confirmClientSharingAction(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
+  await assertTechnicalServerAction("selective-client-actions:confirmClientSharingAction");
   const session = await requirePermission('client.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_CLIENT_ACCESS_CONFIRM', { inline: true });
@@ -48,6 +51,7 @@ export async function confirmClientSharingAction(_previous: ClientSharingState, 
   } catch (error) { return failure(error); }
 }
 export async function revokeClientSharingAction(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
+  await assertTechnicalServerAction("selective-client-actions:revokeClientSharingAction");
   const session = await requirePermission('client.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_CLIENT_ACCESS_REVOKE', { inline: true });
@@ -59,6 +63,7 @@ export async function revokeClientSharingAction(_previous: ClientSharingState, f
   } catch (error) { return failure(error); }
 }
 export async function checkClientSharingReceipt(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
+  await assertTechnicalServerAction("selective-client-actions:checkClientSharingReceipt");
   const session = await requirePermission('client.read');
   try {
     const receipt = await readClientSharingReceipt(prisma, session, String(form.get('commandId') ?? ''), String(form.get('clientId') ?? ''));

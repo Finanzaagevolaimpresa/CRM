@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic='force-dynamic';
 import { randomUUID } from 'node:crypto';
 import { notFound, redirect } from 'next/navigation';
@@ -12,7 +13,7 @@ import { TechnicalAssignmentError } from '@/lib/technical-assignment-transaction
 import { RecordUpdateError } from '@/lib/record-update-contract';
 import { AdminOperationalLifecycleEditor } from '@/components/admin-operational-lifecycle-editor';
 import { PageHeader } from '@/components/ui';
-export default async function Page({params,searchParams}:{
+  async function Page({params,searchParams}:{
   params:Promise<{model:string;id:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>;
 }){
   const session=await requireSession();if(session.role!=='admin')notFound();
@@ -33,3 +34,5 @@ export default async function Page({params,searchParams}:{
     <AdminOperationalLifecycleEditor key={model+':'+id+':'+query.command} data={data} commandId={String(query.command)} recovering={Boolean(query.decision)}/>
   </div>;
 }
+
+export default withTechnicalPage("/admin/lifecycle/[model]/[id]", Page);

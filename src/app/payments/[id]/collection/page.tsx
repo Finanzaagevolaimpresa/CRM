@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -11,7 +12,7 @@ import { RecordUpdateError } from '@/lib/record-update-contract';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 import { SerializableConflictError } from '@/lib/serializable';
 
-export default async function CollectionPage({ params, searchParams }: {
+  async function CollectionPage({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ q?: string }>;
 }) {
   const session = await requireSession(), { id } = await params, { q = '' } = await searchParams;
@@ -40,3 +41,5 @@ export default async function CollectionPage({ params, searchParams }: {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/payments/[id]/collection", CollectionPage);

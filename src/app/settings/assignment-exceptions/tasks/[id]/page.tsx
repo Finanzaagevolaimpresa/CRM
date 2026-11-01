@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card } from '@/components/ui';
@@ -9,7 +10,7 @@ import { internalSessionMode } from '@/lib/session';
 import { withSerializableTransaction } from '@/lib/serializable';
 
 export const dynamic = 'force-dynamic';
-export default async function ExceptionTaskPage({ params }: { params: Promise<{ id: string }> }) {
+  async function ExceptionTaskPage({ params }: { params: Promise<{ id: string }> }) {
   const actor = await requirePermission('user.write');
   if (actor.role !== 'admin' || internalSessionMode() !== 'registry') notFound();
   const { id } = await params;
@@ -22,3 +23,5 @@ export default async function ExceptionTaskPage({ params }: { params: Promise<{ 
     <ExceptionTaskForm id={task.id} updatedAt={task.updatedAt.toISOString()} assignedToId={task.assignedToId} users={users} />
   </Card><Link href="/settings/assignment-exceptions?kind=tasks">Torna alla coda attività</Link></div>;
 }
+
+export default withTechnicalPage("/settings/assignment-exceptions/tasks/[id]", ExceptionTaskPage);

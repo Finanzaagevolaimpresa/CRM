@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth';
@@ -7,7 +8,7 @@ import { SelectiveProjectSharing } from '@/components/selective-project-sharing'
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { selectiveSelectionSchema } from '@/lib/selective-project-policy';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession();
   if (!await mayManageSelectiveAccess(prisma, session)) notFound();
   const { id } = await params;
@@ -33,3 +34,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     })} />
   </div>;
 }
+
+export default withTechnicalPage("/projects/[id]/share", Page);

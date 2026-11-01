@@ -1,5 +1,6 @@
 import type { Document, Prisma, PrismaClient } from '@prisma/client';
 import type { AuthSession } from './auth';
+import { technicalVersionDisclosureAllowed } from './technical-document-disclosure';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { loadTechnicalDocumentAcquisition } from './technical-document-acquisition-persistence';
 import { technicalDocumentPrivateVisibility } from './technical-document-visibility';
@@ -116,6 +117,8 @@ export async function readPersonalAcquiredDocument(db: PrismaClient, claimed: Au
       || !await canAccessFinancialDocument(tx, state.current, identity)) return deny();
     const selected = acquiredVersionDocument(saved, versionId ?? saved.version.id);
     if (!selected) return deny();
+    const version = await tx.documentVersion.findUnique({ where: { id: versionId ?? saved.version.id } });
+    if (!version || !await technicalVersionDisclosureAllowed(tx, state.current, selected, version)) return deny();
     const r = saved.source;
     const bytes = !versionId || versionId === saved.version.id
       ? await readTechnicalUploadPrivateFile({ storageKey: r.storageKey, sha256: r.contentSha256, sizeBytes: r.sizeBytes })

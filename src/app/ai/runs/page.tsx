@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { Card, EmptyState, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
@@ -5,7 +6,7 @@ import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { listAccessibleAiRuns } from '@/lib/read-access';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('ai.review');
   const runs = await listAccessibleAiRuns(session, 100);
   const agents = runs.length
@@ -30,3 +31,5 @@ export default async function Page() {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/ai/runs", Page);

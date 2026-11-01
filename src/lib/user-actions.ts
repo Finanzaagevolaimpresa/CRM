@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { cookies, headers } from 'next/headers';
 import { ZodError } from 'zod';
 import { getSession } from './auth';
@@ -17,6 +18,7 @@ const codes = { CREATE: 'USER_CREATE', ACTIVATE: 'USER_ACTIVATE', DEACTIVATE: 'U
   PROFILE: 'USER_ACCOUNT_UPDATE', PASSWORD_RESET: 'USER_ACCOUNT_UPDATE', REMOVE: 'USER_ACCOUNT_UPDATE',
   RESTORE: 'USER_ACCOUNT_UPDATE', REVOKE_SESSIONS: 'USER_ACCOUNT_UPDATE', REVOKE_SESSION: 'USER_ACCOUNT_UPDATE' } as const;
 export async function submitAdminUserCommand(form: FormData): Promise<AdminUserCommandState> {
+  await assertTechnicalServerAction("user-actions:submitAdminUserCommand");
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false, message: 'Accedi con l’account Admin. Le scelte nel modulo sono conservate.' };
   try {
@@ -54,6 +56,7 @@ export async function submitAdminUserCommand(form: FormData): Promise<AdminUserC
   }
 }
 export async function checkAdminUserCommand(input: unknown, close = false): Promise<AdminUserCommandState> {
+  await assertTechnicalServerAction("user-actions:checkAdminUserCommand");
   const session = await getSession(), h = await headers();
   if (!session || session.role !== 'admin' || !isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) return { ok: false, uncertain: true, message: 'Sessione o origine non disponibile. Nessuna operazione ripetuta.' };

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { OrdinaryEmailRecovery } from '@/components/ordinary-email-recovery';
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
@@ -90,7 +91,7 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
     :<PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>{fields}</PreservedWorkflowForm>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string; replaceDraft?: string; draftCommand?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string; replaceDraft?: string; draftCommand?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const pendingFile = query.fileCommand || query.fileId || query.fileOperation
     ? z.object({commandId:z.string().uuid(),id:z.string().uuid(),operation:z.enum(['UPLOAD','REVOKE'])}).strict()
@@ -225,3 +226,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     <p className="text-xs text-slate-500">Fino a 100 comunicazioni per pagina, filtrate per accesso. L’invio dal CRM richiede la conferma personale della versione esatta. L’accettazione SMTP non attesta consegna o lettura.</p>
   </div>;
 }
+
+export default withTechnicalPage("/communications", Page);

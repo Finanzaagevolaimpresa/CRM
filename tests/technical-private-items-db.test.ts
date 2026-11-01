@@ -71,7 +71,7 @@ async function grant(p: Prepared, person: Person, target = p.target) {
     scopeGeneration: option.scopeGeneration, scopeSha256: option.scopeSha256 };
   const choice: TechnicalWorkItemGrant = option.kind === 'Task' ? { ...identity, kind: 'Task',
     readableFields: ['title', 'priority'], editableFields: ['priority'] } : { ...identity, kind: 'ChecklistItem',
-    readableFields: ['title', 'notes'], editableFields: ['notes'] };
+    readableFields: ['title', 'status'], editableFields: ['title'] };
   return assignTechnical(db, admin, target, person, { workItems: [choice] });
 }
 test('GET and personal preview write no rows; task and checklist commit with one minimal atomic audit each', options, async () => {

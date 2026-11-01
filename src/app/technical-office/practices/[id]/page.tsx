@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { RomeDateTimeInput } from '@/components/rome-date-time-input';
 import { mayManagePracticeSharing } from '@/lib/selective-practice-access';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
@@ -28,7 +29,7 @@ const auditLabel = (event: string) => auditEventLabels[event] ?? event.replaceAl
 const isRedundantOperationalAudit = (event: { category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }, events: Array<{ category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }>) => event.category === 'audit' && events.some((candidate) => candidate.category !== 'audit' && candidate.dedupeKey && candidate.dedupeKey === event.dedupeKey && Math.abs(+new Date(candidate.date) - +new Date(event.date)) <= 120000 && ((event.type === 'Cambio stato pratica tecnica' && candidate.type === 'stato pratica tecnica') || (event.type === 'Aggiornamento pratica tecnica' && ['stato pratica tecnica', 'aggiornamento pratica tecnica'].includes(candidate.type))));
 
 
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ timelineFilter?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ timelineFilter?: string }> }) {
   const session = await requirePermission('technical.read');
   const { id } = await params;
   const query = await searchParams;
@@ -177,3 +178,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/technical-office/practices/${practice.id}?timelineFilter=${value}`}>{label}</Link>)}</div>}><p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Aggrega eventi già presenti nel CRM per questa pratica: stati, comunicazioni, documenti, task/scadenze e audit log autorizzati.</p><ActivityTimeline events={timeline} timeZone="Europe/Rome" /></Card>
   </div>;
 }
+
+export default withTechnicalPage("/technical-office/practices/[id]", Page);

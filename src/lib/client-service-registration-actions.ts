@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -30,11 +31,13 @@ function failure(error: unknown) {
   return { ok: false as const, uncertain: !certain, message };
 }
 export async function previewServiceRegistrationAction(raw: unknown) {
+  await assertTechnicalServerAction("client-service-registration-actions:previewServiceRegistrationAction");
   const session = await actor();
   try { return { ok: true as const, preview: await previewServiceRegistration(prisma, session, raw) }; }
   catch (error) { return failure(error); }
 }
 export async function confirmServiceRegistrationAction(raw: unknown, digest: string) {
+  await assertTechnicalServerAction("client-service-registration-actions:confirmServiceRegistrationAction");
   const session = await actor();
   try {
     const result = await confirmServiceRegistration(prisma, session, raw, digest);
@@ -44,6 +47,7 @@ export async function confirmServiceRegistrationAction(raw: unknown, digest: str
   } catch (error) { return failure(error); }
 }
 export async function verifyServiceRegistrationAction(clientId: string, commandId: string) {
+  await assertTechnicalServerAction("client-service-registration-actions:verifyServiceRegistrationAction");
   const session = await actor();
   try { return { ok: true as const, result: await readServiceRegistrationReceipt(prisma, session, clientId, commandId) }; }
   catch { return { ok: false as const, message: 'Verifica non disponibile. Non ripetere il salvataggio finché l’esito non è chiarito.' }; }

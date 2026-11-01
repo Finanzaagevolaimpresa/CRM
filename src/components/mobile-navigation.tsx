@@ -11,19 +11,22 @@ import { SidebarLogo } from "@/components/sidebar-logo";
 
 export function MobileNavigation({
   role,
+  technicalRestricted = false,
   notificationCount = 0,
   effectivePermissions = [],
 }: {
   role?: RoleCode | null;
+  technicalRestricted?: boolean;
   notificationCount?: number;
   effectivePermissions?: Permission[];
 }) {
   const pathname = usePathname();
-  return <NavigationForPath key={pathname} role={role} notificationCount={notificationCount} effectivePermissions={effectivePermissions} />;
+  return <NavigationForPath key={pathname} role={role} technicalRestricted={technicalRestricted} notificationCount={notificationCount} effectivePermissions={effectivePermissions} />;
 }
 
-function NavigationForPath({ role, notificationCount, effectivePermissions }: {
+function NavigationForPath({ role, technicalRestricted, notificationCount, effectivePermissions }: {
   role?: RoleCode | null;
+  technicalRestricted: boolean;
   notificationCount: number;
   effectivePermissions: Permission[];
 }) {
@@ -125,7 +128,7 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           <span className="sr-only">Gestionale CRM</span>
         </Link>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-          <NavLinks effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={role} onNavigate={closeAfterNavigation} />
+          <NavLinks effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={role} technicalRestricted={technicalRestricted} onNavigate={closeAfterNavigation} />
         </div>
         <form action={logoutAction} className="crm-navigation-logout mt-3 shrink-0 border-t border-white/15 pt-3">
           <button className="min-h-11 w-full rounded-xl bg-white/8 px-3 py-2 text-left text-sm font-bold text-white transition hover:bg-white/15 focus:outline-compat focus:ring-2 focus:ring-fai-lime" type="submit">Esci dal CRM</button>

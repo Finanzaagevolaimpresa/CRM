@@ -68,3 +68,55 @@ test('a consistent historical journal is still denied after revocation, expiry o
     assert.equal(readTechnicalAssignmentJournal(journal,key,{...current,...delta},now),null);
   assert.equal(readTechnicalAssignmentJournal(journal,key,current,new Date(p.selection.expiresAt)),null);
 });
+
+
+test('batched overviews retain exact per-person journals when database rows arrive out of order', async () => {
+  const { loadTechnicalAssignmentOverviewJournals } = await import('../src/lib/technical-assignment-storage');
+  const { decodeTechnicalAssignmentRecord } = await import('../src/lib/technical-assignment-record');
+  const { readRetainedTechnicalAssignmentJournal } = await import('../src/lib/technical-assignment-journal');
+  const other = structuredClone(journal);
+  other.assignment.payload.id = 'ce55a1a8-77d5-419b-8a2a-e186b0726215';
+  other.assignment.payload.commandId = 'd358f3b1-26fc-4ed6-b0a9-70bf17b0b33b';
+  other.assignment.payload.selection.userId = 'tech_b';
+  // Rebind each signed part of the second real-shaped decision.
+  other.assignment.proof = technicalAssignmentProof(key, 'assignment', other.assignment.payload);
+  other.decision.id = other.assignment.payload.commandId;
+  other.decision.recipientId = 'tech_b';
+  other.decision.receipt = { ...other.decision.receipt, commandId: other.decision.id,
+    assignmentId: other.assignment.payload.id, revisionId: '2b53cb39-0ca5-47ea-81fe-2ceafab5c067' };
+  other.decision.receiptProof = technicalAssignmentProof(key, 'receipt', other.decision.receipt);
+  other.revision = { ...other.revision, id: other.decision.receipt.revisionId,
+    assignmentId: other.assignment.payload.id, commandId: other.decision.id,
+    payload: other.assignment.payload, proof: other.assignment.proof };
+  other.audit = { ...other.audit, id: other.revision.id, entityId: other.revision.id };
+  const entries = [journal, other];
+  const records = entries.map(j => {
+    const result = decodeTechnicalAssignmentRecord({ id: j.assignment.payload.id, kind: p.selection.kind,
+      projectId: null, practiceId: p.targetId, recipientId: j.assignment.payload.selection.userId, revision: 1,
+      payload: j.assignment.payload, proof: j.assignment.proof, revokedAt: null });
+    assert(result); return result;
+  });
+  type Tx = Parameters<typeof loadTechnicalAssignmentOverviewJournals>[0];
+  const txFor = (decisions: unknown[], revisions: unknown[], audits: unknown[]): Tx => {
+    const rows = [decisions, revisions];
+    return { $queryRaw: async () => rows.shift(), auditLog: { findMany: async () => audits } } as unknown as Tx;
+  };
+  const decisions = entries.map(j => j.decision).reverse(), revisions = entries.map(j => j.revision), audits = entries.map(j => j.audit).reverse();
+  const loaded = await loadTechnicalAssignmentOverviewJournals(txFor(decisions, revisions, audits), records);
+  for (const [index, record] of records.entries()) {
+    const retained = readRetainedTechnicalAssignmentJournal(loaded.get(record.id), key, now);
+    assert(retained); assert.equal(retained.assignment.payload.selection.userId, entries[index].assignment.payload.selection.userId);
+  }
+  // Missing or foreign evidence for B must never be filled from A.
+  for (const [ds, rs, as] of [
+    [decisions.filter(d => d.id !== other.decision.id), revisions, audits],
+    [decisions, revisions.filter(r => r.id !== other.revision.id), audits],
+    [decisions, revisions, audits.filter(a => a.id !== other.audit.id)],
+    [decisions, revisions.map(r => r.id === other.revision.id ? { ...r, transactionId: 43n } : r), audits],
+    [decisions, revisions, audits.map(a => a.id === other.audit.id ? { ...a, actorId: 'foreign_admin' } : a)],
+  ]) {
+    const result = await loadTechnicalAssignmentOverviewJournals(txFor(ds, rs, as), records);
+    assert(readRetainedTechnicalAssignmentJournal(result.get(records[0].id), key, now));
+    assert.equal(readRetainedTechnicalAssignmentJournal(result.get(records[1].id), key, now), null);
+  }
+});

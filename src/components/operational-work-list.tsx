@@ -32,7 +32,12 @@ export async function OperationalWorkList({ session, kind, path, title, query: r
 }) {
   const query = operationalWorkQuery(raw);
   if (!query) notFound();
-  const catalogue = await loadOperationalWorkCatalogue(prisma, session, kind).catch(() => null);
+  const catalogue = await loadOperationalWorkCatalogue(prisma, session, kind).catch(error => {
+    // Bounded category only: no record IDs, query, message, user or SQL values.
+    const code = error && typeof error === 'object' && typeof error.code === 'string'
+      && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : 'UNAVAILABLE';
+    console.error('operational_work_unavailable', code); return null;
+  });
   const data = catalogue ? selectOperationalWork(catalogue.records, query) : null;
   const inAssignments = path === '/technical-work';
   const route = (page: number) => operationalWorkListPath(path, query, page, inAssignments ? kind : undefined);

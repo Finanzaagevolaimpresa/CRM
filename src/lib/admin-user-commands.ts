@@ -95,7 +95,7 @@ export async function executeAdminUserCommand(db: PrismaClient, actor: AuthSessi
       result = await createInternalUserWithAudit(tx, actor, { id: input.userId, name: created.name, email: created.email,
         role: created.role, active: created.active ?? true, passwordHash: passwordHash! });
       if (result.ok && preset.current && preset.current.revision > 0) {
-        result = await updatePermissionOverridesWithAudit(tx, actor, input.userId, preset.current.overrides);
+        result = await updatePermissionOverridesWithAudit(tx, actor, input.userId, preset.effectiveOverrides);
         if (result.ok) await tx.auditLog.create({ data: { actorId: actor.userId, event: 'admin_role_profile_applied', entityType: 'User', entityId: input.userId,
           after: { role: created.role, profileRevision: preset.current.revision, profileHash: preset.version, existingAccount: false } } });
       }
@@ -104,7 +104,7 @@ export async function executeAdminUserCommand(db: PrismaClient, actor: AuthSessi
       if (!before || before.role === 'admin') fail('DENIED');
       const preset = await loadAdminRoleProfile(tx, before.role);
       if (values.roleProfileVersion !== preset.version) fail('STALE');
-      result = await updatePermissionOverridesWithAudit(tx, actor, input.userId, preset.current!.overrides);
+      result = await updatePermissionOverridesWithAudit(tx, actor, input.userId, preset.effectiveOverrides);
       if (result.ok) await tx.auditLog.create({ data: { actorId: actor.userId, event: 'admin_role_profile_applied', entityType: 'User', entityId: input.userId,
         after: { role: before.role, profileRevision: preset.current!.revision, profileHash: preset.version, existingAccount: true } } });
     }

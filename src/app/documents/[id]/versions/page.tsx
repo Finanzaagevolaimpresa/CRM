@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/lib/auth';
@@ -9,7 +10,7 @@ import { DocumentVersionUpload } from '@/components/document-version-upload';
 import { Card, PageHeader } from '@/components/ui';
 import { operationalRomeTime } from '@/lib/operational-time';
 
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ before?: string | string[] }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ before?: string | string[] }> }) {
   const actor = await getSession(); if (!actor) notFound();
   const { id } = await params;
   const query = await searchParams;
@@ -24,6 +25,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <p>Versione corrente: {state.currentVersion ?? 'non disponibile'}.</p>
       {before !== undefined && <a href={`/documents/${encodeURIComponent(id)}/versions`} className="font-bold underline">Torna alle versioni recenti</a>}
       <ul className="grid gap-3">{state.versions.map(v => <li key={v.id} className="flex flex-wrap items-center gap-3 rounded-xl border p-3">
+        {actor.role === 'admin' && <a className="underline" href={`/admin/document-disclosure/${v.id}`}>Classifica riservatezza della versione</a>}
         <strong>Versione {v.version}</strong><time dateTime={v.createdAt}>{operationalRomeTime(v.createdAt)}</time>
         <a href={`/documents/${encodeURIComponent(id)}/view?versionId=${encodeURIComponent(v.id)}`} target="_blank" rel="noopener noreferrer" className="font-bold underline">Visualizza versione {v.version}</a>
         <a href={`/documents/${encodeURIComponent(id)}/download?versionId=${encodeURIComponent(v.id)}`} className="font-bold underline">Scarica versione {v.version}</a>
@@ -34,3 +36,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       : <Card title="Caricamento non disponibile"><p>I permessi, lo stato corrente o un collegamento a un flusso verificato non consentono qui una nuova versione. La consultazione resta limitata ai documenti autorizzati.</p></Card>}
   </div>;
 }
+
+export default withTechnicalPage("/documents/[id]/versions", Page);

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -11,7 +12,7 @@ import { getPreAnalysisReadAccess } from '@/lib/read-access';
 import { isEditableManualPreAnalysis } from '@/lib/preanalysis-policy';
 import { canEditProject } from '@/lib/access-control';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('dossier.read');
   const { id } = await params;
   const context = await getPreAnalysisReadAccess(session, id);
@@ -35,3 +36,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     {editable ? <Card title="Bozza interna modificabile"><PreAnalysisForm action={updateManualPreAnalysis} hidden={{ id: pre.id, version: pre.updatedAt.toISOString() }} values={pre} /></Card> : <Card title="Contenuto in sola lettura"><p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{manualDraft ? 'Puoi consultare questa bozza, ma il tuo profilo non è autorizzato a modificarla per il progetto.' : 'Questa pre-analisi non è una bozza manuale non revisionata e non può essere modificata in questo percorso.'}</p><h3 className="font-bold">Sintesi interna</h3><p data-preanalysis-field="internalSummary" className="whitespace-pre-wrap text-sm text-fai-gray">{pre.internalSummary ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Scenario A</h3><p className="whitespace-pre-wrap">{pre.scenarioA ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Scenario B</h3><p className="whitespace-pre-wrap">{pre.scenarioB ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Condizioni bloccanti</h3><p className="whitespace-pre-wrap">{pre.blockingConditions ?? 'Nessun dato presente'}</p><h3 className="mt-4 font-bold">Documenti richiesti</h3><p className="whitespace-pre-wrap">{pre.requiredDocuments ?? 'Nessun dato presente'}</p></Card>}
   </div>;
 }
+
+export default withTechnicalPage("/preanalyses/[id]", Page);

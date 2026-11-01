@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, PageHeader } from '@/components/ui';
@@ -21,7 +22,7 @@ const messages: Record<string, string> = {
   disabled: 'Protezione privilegiata esplicitamente disabilitata per il deploy dormiente.',
 };
 
-export default async function SecurityPage({
+  async function SecurityPage({
   searchParams,
 }: {
   searchParams: Promise<{ status?: string; returnTo?: string }>;
@@ -98,3 +99,5 @@ export default async function SecurityPage({
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/security", SecurityPage);

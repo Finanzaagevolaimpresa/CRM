@@ -1,3 +1,5 @@
+import { savePrivateDocumentFile } from '../../src/lib/storage';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { syntheticPerson } from '../selective-sharing/fixtures';
@@ -37,11 +39,13 @@ export async function technicalFixture(db: PrismaClient, admin: Person, password
   const documents = [];
   for (let index = 0; index < 3; index++) {
     const bytes = Buffer.from(`DOCUMENTO_TECNICO_SINTETICO_${index}`), checksum = createHash('sha256').update(bytes).digest('hex');
+    const stored = await savePrivateDocumentFile({ clientId: client.id, file: new File([bytes], 'technical.txt', { type: 'text/plain' }), fileName: 'technical.txt' });
     const doc = await db.document.create({ data: { clientId: client.id, projectId: project.id,
       title: `Documento tecnico sintetico ${index + 1}`, fileName: `tecnico-${index + 1}.txt`,
       type: 'text/plain', mimeType: 'text/plain', documentCategory: 'altro', serviceArea: 'progetto_investimento',
-      storagePath: `technical-synthetic/${randomUUID()}.txt`, sizeBytes: bytes.length, checksum, uploadedById: admin.user.id } });
+      storagePath: stored.storagePath, sizeBytes: bytes.length, checksum, uploadedById: admin.user.id } });
     const version = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum, storagePath: doc.storagePath } });
+    if (index < 2) await classifySyntheticTechnicalVersion(db, admin, version.id, true);
     documents.push({ doc, version, bytes });
   }
   const contract = await db.contract.create({ data: { clientId: client.id, contractNumber: `FINANZIARIO_${randomUUID()}`,
@@ -68,9 +72,9 @@ export async function assignmentInput(db: PrismaClient, admin: Person, target: T
     userId: person.user.id, responsibility: 'co_responsabile', actions: [...(options.statusOnly ? ['update_status'] : ['update_fields', 'update_status']),
       ...(options.workItems?.some(item => item.kind === 'Task') ? ['manage_deadlines'] : []),
       ...(options.workItems?.some(item => item.kind === 'ChecklistItem') ? ['manage_checklist'] : [])],
-    readableFields: options.statusOnly ? ['status'] : target.kind === 'Project' ? ['title', 'description', 'status']
-      : ['title', 'status', 'priority', 'clientVisibleStatus', 'targetEntity', 'targetPortal', 'protocolNumber', 'nextClientUpdateAt'],
-    editableFields: options.statusOnly ? [] : target.kind === 'Project' ? ['description'] : ['clientVisibleStatus', 'priority', 'targetPortal', 'protocolNumber', 'nextClientUpdateAt'],
+    readableFields: options.statusOnly ? ['status'] : target.kind === 'Project' ? ['title', 'priority', 'status']
+      : ['title', 'status', 'priority', 'targetEntity', 'targetPortal', 'protocolNumber', 'nextClientUpdateAt'],
+    editableFields: options.statusOnly ? [] : target.kind === 'Project' ? ['title'] : ['priority', 'targetPortal', 'protocolNumber', 'nextClientUpdateAt'],
     expiresAt: options.expiresAt ?? new Date(Date.now() + 3600_000).toISOString(), documents,
     ...(options.workItems ? { workItems: options.workItems } : {}) });
   return { commandId: randomUUID(), targetId: target.targetId, expectedRevision: setup.revision,
@@ -91,7 +95,7 @@ export async function revokeTechnical(db: PrismaClient, admin: Person, target: T
   return confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'REVOKE', input, preview.token, true);
 }
 export async function workInput(db: PrismaClient, person: Person, target: TechnicalTargetReference,
-  patch: Record<string, string | null> = { clientVisibleStatus: 'Istruttoria tecnica completata' }) {
+  patch: Record<string, string | null> = { targetPortal: 'PORTALE-SINTETICO' }) {
   const view = await readTechnicalWork(db, person.session, target);
   return technicalWorkCommand.parse({ commandId: randomUUID(), assignmentId: view.assignmentId,
     assignmentRevision: view.assignmentRevision, expectedContextSha256: view.contextSha256, expectedTargetSha256: view.targetSha256,

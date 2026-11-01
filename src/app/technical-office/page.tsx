@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader, Stat, StatusBadge, Table, formatDateTime } from '@/components/ui';
@@ -21,7 +22,7 @@ const buckets = [
   ['respinta', 'Respinte'],
 ] as const;
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('technical.read');
   if (isOperationalTechnician(session.role)) return <OperationalTechnicalHome session={session} />;
   const [practices, clients, projects, services, users] = await Promise.all([
@@ -74,3 +75,5 @@ export default async function Page() {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/technical-office", Page);

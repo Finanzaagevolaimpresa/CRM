@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader } from '@/components/ui';
@@ -7,7 +8,7 @@ import { readRecordUpdateEmailQueue } from '@/lib/record-update-email-queue';
 import { RecordUpdateError } from '@/lib/record-update-contract';
 
 export const dynamic = 'force-dynamic';
-export default async function Page() {
+  async function Page() {
   const session = await requireSession();
   let rows;
   try { rows = await readRecordUpdateEmailQueue(prisma, session); }
@@ -27,3 +28,5 @@ export default async function Page() {
     <p className="text-xs text-slate-600">Fino a 100 proposte correnti. Il salvataggio della bozza, l’approvazione personale e l’esito dell’invio restano passaggi distinti.</p>
   </div>;
 }
+
+export default withTechnicalPage("/communications/updates", Page);

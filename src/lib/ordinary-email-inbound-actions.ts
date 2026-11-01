@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { headers } from 'next/headers';
 import { unstable_rethrow } from 'next/navigation';
@@ -10,6 +11,7 @@ import { refreshStoredOrdinaryReplies } from './ordinary-email-inbound-store';
 
 /** Current native reader only. No step-up, connector call or mailbox intake. */
 export async function refreshOrdinaryRepliesAction(input: unknown): Promise<'UPDATED' | 'MORE' | 'CHECK_CURRENT'> {
+  await assertTechnicalServerAction("ordinary-email-inbound-actions:refreshOrdinaryRepliesAction");
   try {
     const session = await requireAnyPermission(['practice_communications.read','communications.internal.read']), h = await headers();
     assertOrdinaryEmailRequestOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site') }, process.env);

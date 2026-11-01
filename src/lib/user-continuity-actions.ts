@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { revalidatePath } from 'next/cache';
 import { cookies } from 'next/headers';
@@ -13,6 +14,7 @@ import { userIdSchema } from './validation';
 import type { AccountFormState } from './user-account-contract';
 
 export async function removeInternalAccount(_state: AccountFormState, form: FormData): Promise<AccountFormState> {
+  await assertTechnicalServerAction("user-continuity-actions:removeInternalAccount");
   const session = await requireSession();
   if (session.role !== 'admin') return { ok: false, message: 'Operazione riservata all’amministratore.' };
   const input = userIdSchema.safeParse(Object.fromEntries(form));
@@ -32,6 +34,7 @@ export async function removeInternalAccount(_state: AccountFormState, form: Form
 }
 
 export async function restoreInternalAccount(_state: AccountFormState, form: FormData): Promise<AccountFormState> {
+  await assertTechnicalServerAction("user-continuity-actions:restoreInternalAccount");
   const session = await requireSession();
   if (session.role !== 'admin') return { ok: false, message: 'Operazione riservata all’amministratore.' };
   const input = userIdSchema.safeParse(Object.fromEntries(form));

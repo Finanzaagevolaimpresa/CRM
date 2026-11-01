@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -16,7 +17,7 @@ import { canViewPreAnalysisListRecord } from '@/lib/business-list-access';
 import { canEditProject } from '@/lib/access-control';
 import { ProjectLifecycleControls } from '@/components/project-lifecycle-controls';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession();
   const { id } = await params;
   if (isSelectiveProject(session, id)) {
@@ -94,3 +95,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/projects/[id]", Page);

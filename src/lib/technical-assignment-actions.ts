@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { headers, cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -34,6 +35,7 @@ async function origin() {
  * item and returns only the current catalogue for the personal Admin. */
 export async function searchTechnicalWorkItemCatalogue(raw: unknown): Promise<{
   ok: boolean; message: string; catalogue?: TechnicalWorkItemCatalogue }> {
+  await assertTechnicalServerAction("technical-assignment-actions:searchTechnicalWorkItemCatalogue");
   try {
     const session = await requireSession();
     await origin();
@@ -52,6 +54,7 @@ export async function searchTechnicalWorkItemCatalogue(raw: unknown): Promise<{
 /** A catalogue search is a current read, never a document grant or a download. */
 export async function searchTechnicalDocumentCatalogue(raw: unknown): Promise<{
   ok: boolean; message: string; catalogue?: TechnicalDocumentCatalogue }> {
+  await assertTechnicalServerAction("technical-assignment-actions:searchTechnicalDocumentCatalogue");
   try {
     const session = await requireSession();
     await origin();
@@ -67,6 +70,7 @@ export async function searchTechnicalDocumentCatalogue(raw: unknown): Promise<{
   } catch { return { ok: false, message: 'Catalogo documenti non disponibile con lo stato o i permessi correnti. Ricarica per verificare le scelte.' }; }
 }
 export async function prepareTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  await assertTechnicalServerAction("technical-assignment-actions:prepareTechnicalAssignment");
   const session = await requireSession();
   try {
     await origin();
@@ -77,6 +81,7 @@ export async function prepareTechnicalAssignment(_state: TechnicalAssignmentMana
   } catch (error) { return failure(error, true); }
 }
 export async function saveTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  await assertTechnicalServerAction("technical-assignment-actions:saveTechnicalAssignment");
   const session = await requireSession();
   try {
     await origin();
@@ -109,6 +114,7 @@ export async function saveTechnicalAssignment(_state: TechnicalAssignmentManagem
   }
 }
 export async function checkTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  await assertTechnicalServerAction("technical-assignment-actions:checkTechnicalAssignment");
   const session = await requireSession();
   try {
     await origin();
@@ -122,6 +128,7 @@ export async function checkTechnicalAssignment(_state: TechnicalAssignmentManage
 }
 
 export async function settleTechnicalAssignmentAction(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  await assertTechnicalServerAction("technical-assignment-actions:settleTechnicalAssignmentAction");
   const session = await requireSession();
   try {
     await origin();

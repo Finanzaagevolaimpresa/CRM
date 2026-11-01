@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
@@ -8,6 +9,7 @@ import { declareContractSignature, recordContractSignature } from './contract-si
 import { ContractSignatureError } from './contract-signature-policy';
 
 export async function declareContractSignatureAction(_previous: { error: string | null }, form: FormData): Promise<{ error: string | null }> {
+  await assertTechnicalServerAction("contract-signature-actions:declareContractSignatureAction");
   const actor = await requireSession();
   let result;
   try {
@@ -26,6 +28,7 @@ export async function declareContractSignatureAction(_previous: { error: string 
 }
 
 export async function recordContractSignatureAction(_previous: { error: string | null }, form: FormData): Promise<{ error: string | null }> {
+  await assertTechnicalServerAction("contract-signature-actions:recordContractSignatureAction");
   const actor = await requireSession();
   let result;
   try {

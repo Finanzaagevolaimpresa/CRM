@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, Table } from '@/components/ui';
@@ -9,7 +10,7 @@ import { internalSessionMode } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const labels = { leads: 'Lead', clients: 'Clienti', projects: 'Progetti', tasks: 'Attività', services: 'Servizi', practices: 'Pratiche' };
-export default async function AssignmentExceptionsPage({ searchParams }: { searchParams: Promise<{ kind?: string; after?: string }> }) {
+  async function AssignmentExceptionsPage({ searchParams }: { searchParams: Promise<{ kind?: string; after?: string }> }) {
   const session = await requirePermission('user.write');
   if (session.role !== 'admin') notFound();
   if (internalSessionMode() !== 'registry') return <Card title="Coda eccezioni">Gestione non disponibile.</Card>;
@@ -29,3 +30,5 @@ export default async function AssignmentExceptionsPage({ searchParams }: { searc
     {result.next ? <Link className="mt-4 inline-block" href={`/settings/assignment-exceptions?kind=${kind}&after=${encodeURIComponent(result.next)}`}>Pagina successiva</Link> : null}
   </Card><Link href="/settings/users">Torna agli utenti</Link></div>;
 }
+
+export default withTechnicalPage("/settings/assignment-exceptions", AssignmentExceptionsPage);

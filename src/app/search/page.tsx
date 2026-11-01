@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
@@ -65,7 +66,7 @@ function ResultsSection({ group }: { group: ResultGroup }) {
   );
 }
 
-export default async function Page({ searchParams }: { searchParams?: Promise<{ q?: string }> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<{ q?: string }> }) {
   const session = await requireSession();
   const params = await searchParams;
   const q = (params?.q ?? '').trim();
@@ -208,3 +209,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     </div>
   );
 }
+
+export default withTechnicalPage("/search", Page);

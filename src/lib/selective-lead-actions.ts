@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -30,6 +31,7 @@ function refresh() {
   for (const path of ['/leads', '/shared-leads', '/dashboard', '/search', '/notifications', '/communications']) revalidatePath(path);
 }
 export async function prepareLeadSharing(_previous: LeadSharingState, form: FormData): Promise<LeadSharingState> {
+  await assertTechnicalServerAction("selective-lead-actions:prepareLeadSharing");
   const session = await requirePermission('lead.read');
   try {
     const preview = await previewLeadSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')));
@@ -37,6 +39,7 @@ export async function prepareLeadSharing(_previous: LeadSharingState, form: Form
   } catch (error) { return failure(error); }
 }
 export async function confirmLeadSharingAction(_previous: LeadSharingState, form: FormData): Promise<LeadSharingState> {
+  await assertTechnicalServerAction("selective-lead-actions:confirmLeadSharingAction");
   const session = await requirePermission('lead.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_ACCESS_CONFIRM', { inline: true });
@@ -48,6 +51,7 @@ export async function confirmLeadSharingAction(_previous: LeadSharingState, form
   } catch (error) { return failure(error); }
 }
 export async function revokeLeadSharingAction(_previous: LeadSharingState, form: FormData): Promise<LeadSharingState> {
+  await assertTechnicalServerAction("selective-lead-actions:revokeLeadSharingAction");
   const session = await requirePermission('lead.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_LEAD_ACCESS_REVOKE', { inline: true });
@@ -59,6 +63,7 @@ export async function revokeLeadSharingAction(_previous: LeadSharingState, form:
   } catch (error) { return failure(error); }
 }
 export async function checkLeadSharingReceipt(_previous: LeadSharingState, form: FormData): Promise<LeadSharingState> {
+  await assertTechnicalServerAction("selective-lead-actions:checkLeadSharingReceipt");
   const session = await requirePermission('lead.read');
   try {
     const receipt = await readLeadSharingReceipt(prisma, session, String(form.get('commandId') ?? ''));

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requirePermission } from '@/lib/auth';
@@ -10,7 +11,7 @@ import { prepareHistoricalConversionAction, saveHistoricalConversionAction, chec
 import type { HistoricalConversionViewReceipt } from '@/lib/commercial-lead-historical-view';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ historicalConversionCommand?: string | string[] }>;
 }) {
   const session = await requirePermission('lead.read'), { id } = await params, query = await searchParams;
@@ -43,3 +44,5 @@ export default async function Page({ params, searchParams }: {
       previewAction={prepareHistoricalConversionAction} confirmAction={saveHistoricalConversionAction} outcomeAction={checkHistoricalConversionAction} />
   </div>;
 }
+
+export default withTechnicalPage("/leads/[id]/historical-conversion", Page);

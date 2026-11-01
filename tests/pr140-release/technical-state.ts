@@ -1,6 +1,6 @@
+import { ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
@@ -11,7 +11,6 @@ import { readTechnicalWork } from '../../src/lib/technical-assignment-access';
 import { readTechnicalAssignmentManagement } from '../../src/lib/technical-assignment-management';
 import { readTechnicalWorkItem, previewTechnicalWorkItem, confirmTechnicalWorkItem } from '../../src/lib/technical-work-item-service';
 import { technicalWorkItemGrant } from '../../src/lib/technical-work-item-grant';
-import { localPathFromStoragePath } from '../../src/lib/storage';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { leadProof } from '../selective-leads/fixtures';
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../../src/lib/technical-private-item-service';
@@ -27,8 +26,7 @@ async function main() {
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
   const f = await technicalFixture(db, admin, await bcrypt.hash(password, 10));
   for (const doc of f.documents) {
-    const file = localPathFromStoragePath(doc.doc.storagePath);
-    await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, doc.bytes, { flag: 'wx', mode: 0o600 });
+    await ensureSyntheticTechnicalBytes(db, doc.doc.storagePath, doc.bytes);
   }
   const previous = process.env.PRIVILEGED_ACCESS_MODE; process.env.PRIVILEGED_ACCESS_MODE = 'enforced';
   try {

@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { parseTechnicalUploadTarget } from '@/lib/technical-upload-display';
@@ -6,6 +7,7 @@ import { readTechnicalUploadForAdmin } from '@/lib/technical-upload-review-servi
 import { technicalUploadFileResponse, technicalUploadNotFound } from '@/lib/technical-upload-response';
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request, { params }: { params: Promise<{ kind: string; id: string; recipientId: string; commandId: string }> }) {
+  await assertTechnicalFileRoute("/technical-upload-review/[kind]/[id]/[recipientId]/files/[commandId]");
   const session = await requireSession(), p = await params, target = parseTechnicalUploadTarget(p);
   if (!target.success) return technicalUploadNotFound();
   const ref = technicalAssignmentReference.safeParse({ ...target.data, recipientId: p.recipientId });

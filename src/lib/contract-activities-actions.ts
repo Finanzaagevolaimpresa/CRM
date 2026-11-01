@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -28,10 +29,12 @@ function failure(error: unknown) {
   return { ok: false as const, uncertain: !certain, message };
 }
 export async function previewContractActivitiesAction(raw: unknown) {
+  await assertTechnicalServerAction("contract-activities-actions:previewContractActivitiesAction");
   try { return { ok: true as const, preview: await previewContractActivities(prisma, await actor(), raw) }; }
   catch (error) { return failure(error); }
 }
 export async function confirmContractActivitiesAction(raw: unknown, digest: string) {
+  await assertTechnicalServerAction("contract-activities-actions:confirmContractActivitiesAction");
   try {
     const result = await confirmContractActivities(prisma, await actor(), raw, digest);
     for (const path of ['/contracts', `/contracts/${result.contractId}`, `/contracts/${result.contractId}/activities`,
@@ -40,6 +43,7 @@ export async function confirmContractActivitiesAction(raw: unknown, digest: stri
   } catch (error) { return failure(error); }
 }
 export async function verifyContractActivitiesAction(clientId: string, contractId: string, commandId: string) {
+  await assertTechnicalServerAction("contract-activities-actions:verifyContractActivitiesAction");
   try { return { ok: true as const, result: await readContractActivitiesReceipt(prisma, await actor(), clientId, contractId, commandId) }; }
   catch { return { ok: false as const, message: 'Verifica non disponibile. Non ripetere il salvataggio finché l’esito non è chiarito.' }; }
 }

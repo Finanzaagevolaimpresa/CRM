@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { practiceOutsideSelection } from '@/lib/selective-practice-policy';
 import Link from 'next/link';
@@ -7,7 +8,7 @@ import { prisma } from '@/lib/prisma';
 import { responsibilityContext } from '@/lib/responsibility';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; after?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; after?: string }> }) {
   const session = await requireAnyPermission(['lead.read', 'technical.read']), query = await searchParams;
   const kind = query.kind === 'TechnicalPractice' || !hasPermission(session, 'lead.read') ? 'TechnicalPractice' : 'Lead';
   const canRead = hasPermission(session, kind === 'Lead' ? 'lead.read' : 'technical.read');
@@ -27,3 +28,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       {rows.length > 25 && <Link href={`/assignments?${new URLSearchParams({ kind, after: rows[24].id })}`}>Altre assegnazioni</Link>}
     </Card></div>;
 }
+
+export default withTechnicalPage("/assignments", Page);

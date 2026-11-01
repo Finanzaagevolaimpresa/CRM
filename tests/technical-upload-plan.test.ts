@@ -24,7 +24,7 @@ const confirm = (data = bytes, state = current, time = now + 1) =>
 
 test('preview describes server-observed bytes, remaining quota and private purpose', () => {
   assert.deepEqual(preview.summary, { title: input.title, fileName: 'Relazione.pdf', sizeBytes: bytes.length,
-    contentSha256: createHash('sha256').update(bytes).digest('hex'), purpose: current.profile.purpose,
+    contentSha256: createHash('sha256').update(bytes).digest('hex'), purpose: 'Deposito per revisione Admin',
     visibility: 'PRIVATE_PENDING_ADMIN_REVIEW', remainingFilesAfter: 2, remainingBytesAfter: 2048 - bytes.length });
   assert.throws(() => previewTechnicalUploadDeposit(key, { ...input, file: preview.command.file }, 'Relazione.pdf', bytes, current, now));
 });
@@ -106,4 +106,12 @@ test('one approved revision shares a physical quota bucket across sessions and c
   const q = previewTechnicalUploadDeposit(key, { ...input, assignmentRevision: revision.assignmentRevision }, 'Relazione.pdf', bytes, revision, now);
   const other = confirmTechnicalUploadDeposit(key, q.command, q.token, bytes, true, revision, now + 1); assert.ok(other);
   assert.notEqual(other.privateFile.storageKey.split('/')[2], first.privateFile.storageKey.split('/')[2]);
+});
+
+test('readable preview token and summary reveal no Admin purpose, while a purpose change still invalidates it', () => {
+  const decoded = Buffer.from(preview.token, 'base64url').toString('utf8');
+  assert.equal(decoded.includes(current.profile.purpose), false);
+  assert.equal(JSON.stringify(preview.summary).includes(current.profile.purpose), false);
+  assert.equal(Object.hasOwn(JSON.parse(decoded).payload, 'admission'), false);
+  assert.equal(confirm(bytes, { ...current, profile: { ...current.profile, purpose: 'Reserved new purpose' } }), null);
 });

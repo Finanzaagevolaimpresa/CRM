@@ -1,3 +1,5 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
+import { fieldsForDisclosure } from './technical-confidentiality';
 import { selectedDocumentMode } from './selected-document-formats';
 import { selectedDocumentResponseMime } from './selected-document-content';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -48,7 +50,7 @@ function allowed(actor: Pick<AuthSession, 'role' | 'active' | 'permissionOverrid
 async function liveUser(tx: Tx, id: string) {
   const user = await tx.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user || !user.active || user.deletedAt) deny();
-  return user;
+  return { ...user, technicalRestricted: await currentTechnicalRestriction(tx, user.id, user) };
 }
 async function sessionLive(tx: Tx, current: AuthSession & { registryExpiresAt: Date }) {
   const now = await clock(tx);
@@ -87,7 +89,7 @@ async function transaction<T>(db: PrismaClient, claimed: AuthSession, recipientI
     }
     const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
     if (!row || row.revokedAt || !row.active || row.deletedAt) deny();
-    const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+    const current = { ...claimed, role: row.role, technicalRestricted: row.technicalRestricted, active: row.active, permissionOverrides: [...row.permissionOverrides],
       registryExpiresAt: row.expiresAt, clientReadScope: await loadClientReadScope(tx, claimed.userId),
       ...await loadSelectiveProjectScope(tx, claimed.userId) };
     const actor = await liveUser(tx, claimed.userId), authorityUser = await liveUser(tx, binding.userId);
@@ -311,7 +313,7 @@ export async function readPracticeSharing(db: PrismaClient, claimed: AuthSession
     const selected = await authorizedPracticeSharing(tx, state, practiceId);
     if (!readSelectivePracticeGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
     return { practiceId, revision: selected.grant.revision,
-      fields: practiceFieldProjection(selected.row as unknown as Record<string, unknown>, selected.payload.selection.fields),
+      fields: practiceFieldProjection(selected.row as unknown as Record<string, unknown>, fieldsForDisclosure(state.current, 'TechnicalPractice', selected.payload.selection.fields)),
       documents: selected.documents.snapshots, expiresAt: selected.payload.selection.expiresAt };
   });
 }

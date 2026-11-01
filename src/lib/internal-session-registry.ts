@@ -1,3 +1,4 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
 import { Prisma, type PrismaClient, type RoleCode } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import {
@@ -132,7 +133,7 @@ export async function resolveInternalSession(
       role: row.role,
       active: row.active,
       deletedAt: row.deletedAt,
-      permissionOverrides,
+      permissionOverrides, technicalRestricted: await currentTechnicalRestriction(db, row.userId, { role: row.role, permissionOverrides }),
     },
   };
 }
@@ -175,7 +176,7 @@ export async function lockAuthoritativeInternalSession(
     FOR SHARE
   `);
   return Object.freeze({
-    ...session,
+    ...session, technicalRestricted: await currentTechnicalRestriction(tx, session.userId, { role: session.role, permissionOverrides }),
     permissionOverrides: Object.freeze(permissionOverrides),
   });
 }

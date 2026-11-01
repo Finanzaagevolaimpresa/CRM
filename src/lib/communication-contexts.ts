@@ -1,3 +1,5 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
+import { assertUnclassifiedTechnicalRecipients } from './communication-recipient-policy';
 import type { Prisma } from '@prisma/client';
 import type { CommunicationPrincipal } from './communication-principal';
 import { canViewClient, canViewLead } from './access-control';
@@ -64,4 +66,15 @@ export async function lockedCommunicationRecipients(tx: Tx, selection: Communica
   const directory = await tx.user.findMany({ select: { id: true, name: true, email: true, role: true, active: true, deletedAt: true }, orderBy: { id: 'asc' } });
   try { return resolveCommunicationRecipients(selection, directory, external, participantIds); }
   catch { throw new ApprovedCommunicationError('CONFLICT'); }
+}
+
+export async function assertCommunicationTechnicalRecipients(tx: Tx, recipients: { to: string[]; cc: string[]; bcc: string[] }) {
+  await lockCommunicationDirectory(tx);
+  const addresses = [...recipients.to, ...recipients.cc, ...recipients.bcc];
+  const users = await tx.user.findMany({ where: { OR: addresses.map(email => ({ email: { equals: email, mode: 'insensitive' as const } })) },
+    select: { id: true, name: true, email: true, role: true, active: true, deletedAt: true, permissionOverrides: { select: { permission: true, allowed: true } } } });
+  const directory = [];
+  for (const user of users) directory.push({ ...user, technicalRestricted: await currentTechnicalRestriction(tx, user.id, user) });
+  try { assertUnclassifiedTechnicalRecipients(directory, recipients); }
+  catch { throw new ApprovedCommunicationError('DENIED'); }
 }

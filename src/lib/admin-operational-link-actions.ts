@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { cookies, headers } from 'next/headers';
 import { ZodError } from 'zod';
 import { getSession } from './auth';
@@ -34,14 +35,17 @@ function failure(error: unknown): LinkResult {
   return { ok: false, uncertain: true, message: 'Esito da verificare prima di ripetere qualsiasi operazione.' };
 }
 export async function previewAdminOperationalLinkAction(raw: unknown) {
+  await assertTechnicalServerAction("admin-operational-link-actions:previewAdminOperationalLinkAction");
   const session = await actor(); if (!session) return { error: 'Sessione Admin o origine non ammessa.' };
   try { return await previewAdminOperationalLink(prisma, session, raw); } catch (error) { return { error: failure(error).message }; }
 }
 export async function searchAdminOperationalLinkAction(raw: unknown) {
+  await assertTechnicalServerAction("admin-operational-link-actions:searchAdminOperationalLinkAction");
   const session = await actor(); if (!session) return { error: 'Sessione Admin o origine non ammessa.' };
   try { return await searchAdminOperationalLink(prisma, session, raw); } catch (error) { return { error: failure(error).message }; }
 }
 export async function saveAdminOperationalLinkAction(raw: unknown): Promise<LinkResult> {
+  await assertTechnicalServerAction("admin-operational-link-actions:saveAdminOperationalLinkAction");
   const session = await actor(); if (!session) return { ok: false, message: 'Sessione Admin o origine non ammessa.' };
   const readiness = await privilegedAccessReadiness(session);
   if (!readiness.active) return { ok: false, stepUp: readiness.mode === 'enforced' && readiness.keyReady, message: 'Riconferma l’identità qui sotto. La bozza resta disponibile.' };
@@ -54,6 +58,7 @@ export async function saveAdminOperationalLinkAction(raw: unknown): Promise<Link
   } catch (error) { return failure(error); }
 }
 export async function reconcileAdminOperationalLinkAction(raw: unknown): Promise<LinkResult> {
+  await assertTechnicalServerAction("admin-operational-link-actions:reconcileAdminOperationalLinkAction");
   const session = await actor(); if (!session) return { ok: false, uncertain: true, message: 'Accedi come Admin e verifica lo stesso tentativo.' };
   try {
     const value = await reconcileAdminOperationalLink(prisma, session, raw);

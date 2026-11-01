@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { SecondaryLink } from '@/components/actions';
 import { LeadAcquisitionList } from '@/components/lead-acquisition-list';
@@ -8,7 +9,7 @@ import { LeadAcquisitionDenied, readLeadAcquisitions } from '@/lib/lead-acquisit
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>;
   searchParams?: Promise<Record<string, string | undefined>>;
 }) {
@@ -23,3 +24,5 @@ export default async function Page({ params, searchParams }: {
     <PaginationNav pathname={`/leads/${id}/requests`} params={{}} {...page} />
   </div>;
 }
+
+export default withTechnicalPage("/leads/[id]/requests", Page);

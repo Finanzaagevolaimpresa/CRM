@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
@@ -8,7 +9,7 @@ import { canViewPreAnalysisListRecord } from '@/lib/business-list-access';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
   const reviewOnly = (await searchParams)?.dashboard === "revisioni";
   const session = await requirePermission('dossier.read');
   const [items, clientRows, projectRows, companyRows] = await Promise.all([
@@ -41,3 +42,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     <Card title="Elenco operativo">{visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pre-analisi disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Progetto', 'Stato', 'Sintesi', 'Tracciabilità', 'Azione']} rows={visibleItems.map((item) => [clientById.get(item.clientId)?.displayName ?? '—', projectById.get(item.projectId)?.title ?? '—', <StatusBadge status={item.status} key="s" />, item.internalSummary ?? 'Bozza interna', <MetaCell key="m" createdAt={item.createdAt} updatedAt={item.updatedAt} />, <Link className="font-bold text-fai-blue underline" href={`/preanalyses/${item.id}`} key="a">Apri</Link>])} />}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/preanalyses", Page);

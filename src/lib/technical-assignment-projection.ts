@@ -1,3 +1,4 @@
+import { technicalFieldsFor } from './technical-confidentiality';
 import { isFinancialDocument, type FinancialDocumentMetadata } from './financial-privacy-policy';
 import { admitsTechnicalAssignmentRead, type CurrentTechnicalAssignmentAdmission, type TechnicalAssignmentSelection } from './technical-assignment-contract';
 
@@ -15,7 +16,7 @@ export function projectTechnicalFields(
 ): { fields: Record<string, TechnicalValue> } | null {
   if (!current.recordReadAllowed || !admitsTechnicalAssignmentRead(current, selection, target, now)) return null;
   const fields: Record<string, TechnicalValue> = {};
-  for (const key of selection.readableFields) {
+  for (const key of technicalFieldsFor(selection.kind, selection.readableFields)) {
     if (!Object.hasOwn(row, key)) return null;
     const value = row[key];
     if (value === null || typeof value === 'string') fields[key] = value;
@@ -33,7 +34,7 @@ export type CurrentTechnicalDocument = FinancialDocumentMetadata & {
   contentSha256: string; contextSha256: string;
   fileName: string; mimeType: string; sizeBytes: number;
   deleted: boolean; contextValid: boolean; readable: boolean;
-  financialBindingsChecked: boolean; hasFinancialBinding: boolean;
+  financialBindingsChecked: boolean; hasFinancialBinding: boolean; technicalDisclosureAllowed?: boolean;
   sensitive: boolean; sensitiveReadAllowed: boolean;
 };
 const previewTypes = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'text/plain']);
@@ -46,6 +47,7 @@ export function projectTechnicalDocument(
   if (!current.recordReadAllowed || !admitsTechnicalAssignmentRead(current, selection, target, now)
       || document.targetId !== target.targetId || document.kind !== target.kind
       || document.deleted || !document.contextValid || !document.readable
+      || document.technicalDisclosureAllowed !== true
       || !document.financialBindingsChecked || document.hasFinancialBinding || isFinancialDocument(document)
       || (document.sensitive && !document.sensitiveReadAllowed)
       || !Number.isSafeInteger(document.sizeBytes) || document.sizeBytes < 1

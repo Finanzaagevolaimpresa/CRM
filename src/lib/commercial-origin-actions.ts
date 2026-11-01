@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { revalidatePath } from 'next/cache';
 import { requirePermission } from './auth';
@@ -9,6 +10,7 @@ import { recordCommercialOrigin } from './commercial-origin';
 import { UserFacingActionError } from './action-errors';
 
 export async function saveCommercialOrigin(_previous: { ok: boolean; message: string }, form: FormData) {
+  await assertTechnicalServerAction("commercial-origin-actions:saveCommercialOrigin");
   const actor = await requirePermission('client.write');
   if (actor.role !== 'admin') return { ok: false, message: 'La provenienza può essere registrata o rettificata soltanto dall’amministratore.' };
   await requireEnforcedPrivilegedMutation(actor, 'R05_COMMERCIAL_ORIGIN');

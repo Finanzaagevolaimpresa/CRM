@@ -145,3 +145,53 @@ export async function persistTechnicalAssignmentDecision(tx: Tx, state: Technica
   if (!verified || canonicalSha256(verified.decision.receipt) !== canonicalSha256(d.receipt)) return unavailable();
   return verified.decision.receipt;
 }
+
+/** Bounded overview read. Lock the same current rows and verify every exact
+ * decision/revision/audit linkage, without six round-trips per recipient. */
+export async function lockTechnicalAssignmentOverview(tx: Tx, requested: { kind: Lookup['kind']; targetId: string }, recipientIds: string[]) {
+  const recipients = z.array(id).max(200).parse(recipientIds);
+  if (new Set(recipients).size !== recipients.length) unavailable();
+  if (!recipients.length) return [];
+  const target = z.object({ kind: z.enum(['Project', 'TechnicalPractice']), targetId: id }).strict().parse(requested);
+  const column = target.kind === 'Project' ? '"projectId"' : '"practiceId"';
+  const rows = await tx.$queryRaw<unknown[]>(Prisma.sql`
+    SELECT id,kind,"projectId","practiceId","recipientId",revision,payload,proof,"revokedAt"
+    FROM "TechnicalAssignment" WHERE kind=${target.kind} AND ${Prisma.raw(column)}=${target.targetId}
+      AND "recipientId" IN (${Prisma.join(recipients)}) ORDER BY "recipientId" FOR SHARE`);
+  if (rows.length !== recipients.length) unavailable();
+  const records = rows.map((row): StoredTechnicalAssignment => {
+    const record = decodeTechnicalAssignmentRecord(row);
+    if (!record || record.kind !== target.kind || record.targetId !== target.targetId || !recipients.includes(record.recipientId)) return unavailable();
+    return record;
+  });
+  if (new Set(records.map(record => record.recipientId)).size !== recipients.length) unavailable();
+  return records;
+}
+export async function loadTechnicalAssignmentOverviewJournals(tx: Tx, records: readonly StoredTechnicalAssignment[]) {
+  if (records.length > 200 || new Set(records.map(r => r.id)).size !== records.length) unavailable();
+  if (!records.length) return new Map<string, Awaited<ReturnType<typeof loadTechnicalAssignmentJournal>>>();
+  const decisions = await tx.$queryRaw<DecisionRow[]>(Prisma.sql`
+    SELECT id,"actorId","sessionId",kind,"targetId","recipientId","expectedRevision",
+      operation,"requestDigest",receipt,"receiptProof","transactionId"
+    FROM "TechnicalAssignmentDecision" WHERE id IN (${Prisma.join(records.map(r => Prisma.sql`${r.payload.commandId}::uuid`))})`);
+  const revisions = await tx.$queryRaw<RevisionRow[]>(Prisma.sql`
+    SELECT id,"assignmentId",revision,"commandId",payload,proof,"revokedAt","transactionId"
+    FROM "TechnicalAssignmentRevision" WHERE ("assignmentId",revision) IN
+      (${Prisma.join(records.map(r => Prisma.sql`(${r.id}::uuid,${r.revision})`))})`);
+  const audits = await tx.auditLog.findMany({ where: { id: { in: revisions.map(r => r.id) } },
+    select: { id: true, actorId: true, event: true, entityType: true, entityId: true, before: true, after: true } });
+  const result = new Map<string, Awaited<ReturnType<typeof loadTechnicalAssignmentJournal>>>();
+  for (const record of records) {
+    const ds = decisions.filter(d => d.id === record.payload.commandId);
+    const rs = revisions.filter(r => r.assignmentId === record.id && r.revision === record.revision);
+    if (ds.length !== 1 || rs.length !== 1) { result.set(record.id, null); continue; }
+    const decision = ds[0], revision = rs[0], matches = audits.filter(a => a.id === revision.id);
+    if (matches.length !== 1 || revision.revokedAt !== null
+      && (!(revision.revokedAt instanceof Date) || !Number.isFinite(revision.revokedAt.getTime()))) {
+      result.set(record.id, null); continue;
+    }
+    result.set(record.id, { assignment: { payload: record.payload, proof: record.proof, revokedAt: record.revokedAt },
+      decision, revision: { ...revision, revokedAt: revision.revokedAt?.toISOString() ?? null }, audit: matches[0] });
+  }
+  return result;
+}

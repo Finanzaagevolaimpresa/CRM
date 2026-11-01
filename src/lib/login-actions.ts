@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
@@ -76,6 +77,7 @@ async function createLoginSession(email: string, password: string) {
 }
 
 export async function loginAction(formData: FormData) {
+  await assertTechnicalServerAction("login-actions:loginAction");
   const email = String(formData.get('email') ?? '');
   const password = String(formData.get('password') ?? '');
 
@@ -89,6 +91,7 @@ export async function loginAction(formData: FormData) {
 }
 
 export async function demoAdminLoginAction() {
+  await assertTechnicalServerAction("login-actions:demoAdminLoginAction");
   if (process.env.APP_ENV !== 'development') {
     redirect('/login');
   }
@@ -103,6 +106,7 @@ export async function demoAdminLoginAction() {
 }
 
 export async function logoutAction() {
+  await assertTechnicalServerAction("login-actions:logoutAction");
   const token = (await cookies()).get(cookieName)?.value;
   let mode: 'legacy' | 'registry';
   try { mode = internalSessionMode(); } catch { redirect('/login?error=logout-unavailable'); }

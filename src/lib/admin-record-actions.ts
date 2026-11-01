@@ -1,9 +1,11 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { cookies, headers } from 'next/headers';
 import { prepareAdminContextMove, prepareAdminCatalogPublication } from './admin-records';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
 export async function prepareAdminCatalogPublicationAction(id: string) {
+  await assertTechnicalServerAction("admin-record-actions:prepareAdminCatalogPublicationAction");
   const session = await getSession();
   if (!session) return { ok: false as const };
   try { return { ok: true as const, value: await prepareAdminCatalogPublication(prisma, session, id) }; }
@@ -21,12 +23,14 @@ import { SerializableConflictError } from './serializable';
 export type AdminSaveResult = { ok: boolean; message: string; stepUp?: boolean; uncertain?: boolean; closed?: boolean;
   receipt?: { commandId: string; model: string; id: string; replayed: boolean; closed?: boolean } };
 export async function searchAdminRecordReferencesAction(input: unknown) {
+  await assertTechnicalServerAction("admin-record-actions:searchAdminRecordReferencesAction");
   const session = await getSession();
   if (!session || session.role !== 'admin') return { error: 'Sessione Admin non disponibile.' } as const;
   try { return await searchAdminRecordReferences(prisma, session, input); }
   catch { return { error: 'Ricerca non disponibile per questi permessi o parametri. La selezione è conservata.' } as const; }
 }
 export async function saveAdminRecordAction(raw: unknown): Promise<AdminSaveResult> {
+  await assertTechnicalServerAction("admin-record-actions:saveAdminRecordAction");
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false, message: 'Sessione Admin non disponibile. I dati nel modulo sono conservati.' };
   const requestHeaders = await headers();
@@ -62,6 +66,7 @@ export async function saveAdminRecordAction(raw: unknown): Promise<AdminSaveResu
   }
 }
 export async function verifyAdminRecordAction(commandId: string): Promise<AdminSaveResult> {
+  await assertTechnicalServerAction("admin-record-actions:verifyAdminRecordAction");
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false, uncertain: true, message: 'Accedi nuovamente come Admin per verificare questo esito.' };
   try {
@@ -73,6 +78,7 @@ export async function verifyAdminRecordAction(commandId: string): Promise<AdminS
 }
 
 export async function closeAdminRecordAction(input: { commandId: string; model: string; id: string }): Promise<AdminSaveResult> {
+  await assertTechnicalServerAction("admin-record-actions:closeAdminRecordAction");
   const session = await getSession(), h = await headers();
   if (!session || session.role !== 'admin' || !isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) return { ok: false, uncertain: true, message: 'Sessione o origine non ammessa.' };
@@ -84,6 +90,7 @@ export async function closeAdminRecordAction(input: { commandId: string; model: 
 }
 
 export async function prepareAdminContextMoveAction(raw: unknown) {
+  await assertTechnicalServerAction("admin-record-actions:prepareAdminContextMoveAction");
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false as const, message: 'Sessione Admin non disponibile.' };
   try { return { ok: true as const, value: await prepareAdminContextMove(prisma, session, raw) }; }

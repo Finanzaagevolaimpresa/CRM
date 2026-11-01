@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
@@ -8,7 +9,7 @@ import { prisma } from '@/lib/prisma';
 import { listVideos, VideoLibraryError } from '@/lib/video-library';
 import { uploadVideoAction, verifyVideoUploadAction } from '@/lib/video-actions';
 export const dynamic = 'force-dynamic';
-export default async function Page() {
+  async function Page() {
   const session = await requireSession(); let rows;
   try { rows = await listVideos(prisma, session, '', true); }
   catch (error) { if (error instanceof VideoLibraryError) notFound(); throw error; }
@@ -23,3 +24,5 @@ export default async function Page() {
     </section>
   </div>;
 }
+
+export default withTechnicalPage("/videos/manage", Page);

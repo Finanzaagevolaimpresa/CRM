@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { cookies, headers } from 'next/headers';
 import { unstable_rethrow } from 'next/navigation';
@@ -26,6 +27,7 @@ async function native() {
     stepUpToken: jar.get(privilegedStepUpCookieName)?.value } };
 }
 export async function previewOrdinaryRecoveryAction(_previous: OrdinaryRecoveryResult, form: FormData): Promise<OrdinaryRecoveryResult> {
+  await assertTechnicalServerAction("ordinary-email-reconciliation-actions:previewOrdinaryRecoveryAction");
   try {
     const admitted = await native();
     return await previewStoredOrdinaryRecovery(prisma,admitted.session,
@@ -33,6 +35,7 @@ export async function previewOrdinaryRecoveryAction(_previous: OrdinaryRecoveryR
   } catch (error) { unstable_rethrow(error); return { status: 'UNAVAILABLE' }; }
 }
 export async function confirmOrdinaryRecoveryAction(_previous: OrdinaryRecoveryResult, form: FormData): Promise<OrdinaryRecoveryResult> {
+  await assertTechnicalServerAction("ordinary-email-reconciliation-actions:confirmOrdinaryRecoveryAction");
   try {
     const admitted = await native(), readiness = await privilegedAccessReadiness(admitted.session);
     if (!readiness.active) return readiness.mode === 'enforced' && readiness.keyReady

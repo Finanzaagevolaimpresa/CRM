@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -11,7 +12,7 @@ import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
 import { readTechnicalWorkItem } from '@/lib/technical-work-item-service';
 import { prepareTechnicalWorkItem, saveTechnicalWorkItem, checkTechnicalWorkItem } from '@/lib/technical-work-item-actions';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ kind: string; id: string; itemKind: string; itemId: string }>;
   searchParams: Promise<{ itemDecision?: string }> }) {
   const session = await requireSession(), p = await params;
@@ -34,3 +35,5 @@ export default async function Page({ params, searchParams }: {
       previewAction={prepareTechnicalWorkItem} confirmAction={saveTechnicalWorkItem} receiptAction={checkTechnicalWorkItem} />}
   </div>;
 }
+
+export default withTechnicalPage("/technical-work/[kind]/[id]/items/[itemKind]/[itemId]", Page);

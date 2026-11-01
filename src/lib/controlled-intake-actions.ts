@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -11,6 +12,7 @@ import {
 import { prisma } from './prisma';
 
 export async function recordControlledIntake(form: FormData) {
+  await assertTechnicalServerAction("controlled-intake-actions:recordControlledIntake");
   const actor = await requirePermission('lead.write');
   const raw = Object.fromEntries(form.entries());
   const date = new Date(String(raw.sourceOccurredAt));
@@ -23,12 +25,14 @@ export async function recordControlledIntake(form: FormData) {
 }
 
 export async function decideControlledDuplicate(form: FormData) {
+  await assertTechnicalServerAction("controlled-intake-actions:decideControlledDuplicate");
   const actor = await requirePermission('lead.write');
   await decideControlledIntakeDuplicate(prisma, actor, Object.fromEntries(form.entries()));
   revalidatePath('/controlled-intakes');
 }
 
 export async function classifyAuthenticated1265(form: FormData) {
+  await assertTechnicalServerAction("controlled-intake-actions:classifyAuthenticated1265");
   const actor = await requirePermission('lead.write');
   const intake = await linkAuthenticated1265Projection(prisma, actor, Object.fromEntries(form.entries()));
   redirect(`/controlled-intakes?created=${intake.id}#intake-${intake.id}`);

@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -8,6 +9,7 @@ import { ProjectLifecycleError, transitionProjectLifecycle } from './project-lif
 import { ZodError } from 'zod';
 
 export async function changeProjectLifecycle(_previous: { ok: boolean; message: string }, form: FormData) {
+  await assertTechnicalServerAction("project-lifecycle-actions:changeProjectLifecycle");
   const session = await requireSession();
   let destination: string;
   try {

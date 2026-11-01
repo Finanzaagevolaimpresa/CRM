@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -8,6 +9,7 @@ import { ApprovedCommunicationError } from '@/lib/approved-communication-contrac
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/communications/[id]/package");
   if (!isAllowedMutationOrigin({ origin: request.headers.get('origin'), secFetchSite: request.headers.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) return new NextResponse('Operazione non autorizzata.', { status: 403 });
   const session = await getSession();

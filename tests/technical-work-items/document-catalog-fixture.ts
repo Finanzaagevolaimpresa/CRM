@@ -1,14 +1,13 @@
+import { classifySyntheticTechnicalVersion, ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { PrismaClient } from '@prisma/client';
 import type { TechnicalFixture } from '../technical-assignments/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
-import { localPathFromStoragePath } from '../../src/lib/storage';
 
 export async function documentCatalogueFixture(db: PrismaClient, f: TechnicalFixture,
   documentCount = 65, versionsPerDocument = 1, writeBytes = false) {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  void writeBytes; // Exact-version classification now requires actual synthetic bytes for every positive option.
   const prefix = randomUUID(), documents = [], files = [], result = [];
   for (let i = 0; i < documentCount; i++) {
     const id = `${prefix}-doc-${String(i).padStart(3, '0')}`, title = `Catalogo documentale sintetico ${String(i).padStart(3, '0')}`;
@@ -19,7 +18,7 @@ export async function documentCatalogueFixture(db: PrismaClient, f: TechnicalFix
       const storagePath = `technical-synthetic/${fileId}.txt`;
       files.push({ id: fileId, documentId: id, version, checksum, storagePath });
       versions.push({ fileId, version, checksum, storagePath, text: bytes.toString() });
-      if (writeBytes) { const file = localPathFromStoragePath(storagePath); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, bytes, { flag: 'wx', mode: 0o600 }); }
+      await ensureSyntheticTechnicalBytes(db, storagePath, bytes);
     }
     const last = versions[versions.length - 1];
     documents.push({ id, clientId: f.client.id, projectId: f.project.id, title, fileName,
@@ -28,5 +27,6 @@ export async function documentCatalogueFixture(db: PrismaClient, f: TechnicalFix
     result.push({ id, title, fileName, versions });
   }
   await db.document.createMany({ data: documents }); await db.documentVersion.createMany({ data: files });
+  for (const file of files) await classifySyntheticTechnicalVersion(db, f.admin, file.id);
   return result;
 }

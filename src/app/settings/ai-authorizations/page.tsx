@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import type { Prisma } from '@prisma/client';
@@ -22,7 +23,7 @@ const sections = [
   { title: 'Storico completo', statuses: null },
 ] as const;
 
-export default async function AiAuthorizationsPage() {
+  async function AiAuthorizationsPage() {
   const session = await requireSession();
   const canRequest = hasPermission(session, 'ai.execution.request');
   const canAudit = session.role === 'admin' && hasPermission(session, 'ai.execution.audit');
@@ -99,3 +100,5 @@ export default async function AiAuthorizationsPage() {
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/ai-authorizations", AiAuthorizationsPage);

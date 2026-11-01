@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { RomeDateTimeInput } from '@/components/rome-date-time-input';
 import Link from 'next/link';
 import { technicalPracticeListFilter, technicalPracticeStatuses as statuses, technicalPracticePriorities as priorities } from '@/lib/technical-practice-list-filter';
@@ -13,7 +14,7 @@ import { isOperationalTechnician } from '@/lib/operational-work';
 
 export const dynamic = 'force-dynamic';
 
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requirePermission('technical.read');
   const rawQuery = await searchParams ?? {};
   if (isOperationalTechnician(session.role) && rawQuery.new !== '1') return <OperationalWorkList session={session}
@@ -65,3 +66,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/technical-office/practices", Page);

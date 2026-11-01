@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { requirePermission, hasPermission } from '@/lib/auth';
@@ -15,7 +16,7 @@ import { contractOperationalState, contractOperationalLabel } from '@/lib/contra
 import { CommercialProgress } from '@/components/commercial-progress';
 import { readCommercialProgress } from '@/lib/commercial-progress';
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ client?: string; q?: string; after?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ client?: string; q?: string; after?: string }> }) {
   const session = await requirePermission('client.read');
   const query = await searchParams;
   const technicalProgress = session.role === 'commerciale' ? await readCommercialProgress(prisma, session, query) : null;
@@ -106,3 +107,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
     <p className="text-sm">Dopo un esito incerto, ricarica questa scheda e verifica i record già salvati prima di ripetere. Gli input non salvati non vengono conservati.</p>
   </div>;
 }
+
+export default withTechnicalPage("/progress", Page);

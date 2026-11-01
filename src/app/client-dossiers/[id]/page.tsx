@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { Card, EmptyState, PageHeader, StatusBadge, TimestampMeta, formatDateTime } from '@/components/ui';
@@ -13,7 +14,7 @@ import { buildClientServiceLabel } from '@/lib/client-service-label';
 import { getClientDossierReadAccess } from '@/lib/read-access';
 import { authorizeEngagementDossierDeliveryAction, recordEngagementDossierDeliveryAction, reviewEngagementDossierVersionAction, reviseEngagementDossierAction } from '@/lib/engagement-dossier-actions';
 
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ dossierError?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ dossierError?: string }> }) {
   const { id } = await params;
   const { dossierError } = await searchParams;
   const session = await requirePermission('dossier.read');
@@ -85,3 +86,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     {!hasPermission(session, 'dossier.read') ? <DisabledAction>Export .md / Word</DisabledAction> : null}
   </div>;
 }
+
+export default withTechnicalPage("/client-dossiers/[id]", Page);

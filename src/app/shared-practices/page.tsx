@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
@@ -6,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { listSharedPracticeIds } from '@/lib/selective-practice-access';
 import { parseCoreQueryPage } from '@/lib/core-query-policy';
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const session = await requirePermission('technical.read'), page = parseCoreQueryPage((await searchParams).page);
   const data = await listSharedPracticeIds(prisma, session, page).catch(() => null);
   return <div className="space-y-6"><PageHeader title="Pratiche condivise con me" description="Le selezioni personali restano separate dalle schede ordinarie. Ogni apertura verifica i permessi correnti." />
@@ -19,3 +20,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ p
       {data?.hasNext && <SecondaryLink href={`/shared-practices?page=${page + 1}`}>Successive</SecondaryLink>}</div>
   </div>;
 }
+
+export default withTechnicalPage("/shared-practices", Page);

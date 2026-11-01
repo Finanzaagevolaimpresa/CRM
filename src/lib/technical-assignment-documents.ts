@@ -19,7 +19,7 @@ export async function snapshotTechnicalAssignmentDocuments(tx: Prisma.Transactio
   choices: readonly { fileId: string; allowDownload: boolean }[]) {
   const target = state.recipient;
   if (!target || choices.length > 20 || new Set(choices.map(row => row.fileId)).size !== choices.length) return denied();
-  if (!choices.length) return { documents: [] as Choices, paths: new Map<string, string>(), metadata: [], validUntil: Number.MAX_SAFE_INTEGER };
+  if (!choices.length) return { documents: [] as Choices, paths: new Map<string, string>(), metadata: [], excludedVersionIds: new Set<string>(), validUntil: Number.MAX_SAFE_INTEGER };
   const selected = choices.map(row => ({ versionId: row.fileId, download: row.allowDownload }));
   const practiceContext = { id: context.targetId, clientId: context.clientId, projectId: context.projectId,
     clientServiceId: context.clientServiceId, serviceProjectId: context.projectId };
@@ -51,7 +51,8 @@ export async function snapshotTechnicalAssignmentDocuments(tx: Prisma.Transactio
       contentSha256: snapshot.checksum, contextSha256, allowDownload: snapshot.download });
   }
   return { documents, paths: result.paths,
-    metadata: result.snapshots.map(row => ({ documentId: row.documentId, fileId: row.versionId, version: row.version,
+    excludedVersionIds: new Set(result.snapshots.filter(row => !result.disclosedVersionIds.has(row.versionId)).map(row => row.versionId)),
+    metadata: result.snapshots.filter(row => result.disclosedVersionIds.has(row.versionId)).map(row => ({ documentId: row.documentId, fileId: row.versionId, version: row.version,
       title: row.title, fileName: row.fileName, mimeType: row.mimeType, allowDownload: row.download })),
     validUntil: Math.min(Number.MAX_SAFE_INTEGER, ...rows.flatMap(row => row.validUntil ? [row.validUntil.getTime()] : [])) };
 }

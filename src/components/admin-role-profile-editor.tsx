@@ -3,7 +3,9 @@ import { useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import type { readAdminRoleProfile } from '@/lib/admin-role-profiles';
 import { editableRolePermission, type RoleProfileSnapshot } from '@/lib/admin-role-profile-contract';
-import { permissionCatalog, roleHasPermission } from '@/lib/permissions';
+import { permissionCatalog } from '@/lib/permissions';
+import { evaluatePermission } from '@/lib/permission-evaluator';
+import { effectiveRoleProfileOverrides } from '@/lib/admin-role-profile-compatibility';
 import { saveAdminRoleProfileAction, reconcileAdminRoleProfileAction, type RoleProfileResult } from '@/lib/admin-role-profile-actions';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
@@ -12,7 +14,7 @@ const subscribe = () => () => {}, hydrated = () => true, server = () => false;
 export function AdminRoleProfileEditor({ data, commandId: initialCommandId, recovering }: { data: Data; commandId: string; recovering: boolean }) {
   const ready = useSyncExternalStore(subscribe, hydrated, server), sending = useRef(false);
   const [expectedVersion] = useState(data.version), [commandId] = useState(initialCommandId);
-  const [overrides, setOverrides] = useState(data.current.overrides), [reason, setReason] = useState(''),
+  const [overrides, setOverrides] = useState(data.effectiveOverrides), [reason, setReason] = useState(''),
     [confirmed, setConfirmed] = useState(false), [closeConfirmed, setCloseConfirmed] = useState(false), [busy, setBusy] = useState(false);
   const [result, setResult] = useState<RoleProfileResult | null>(recovering ? { ok: false, uncertain: true, message: 'Verifica il tentativo conservato.' } : null);
   const frozen = !ready || busy || !data.canWrite || Boolean(result?.uncertain || result?.ok || result?.closed), path = '/settings/roles/' + data.role;
@@ -22,7 +24,7 @@ export function AdminRoleProfileEditor({ data, commandId: initialCommandId, reco
     window.history.replaceState(window.history.state, '', url);
   }
   function restore(snapshot: Pick<RoleProfileSnapshot, 'overrides'>) {
-    if (frozen) return; setOverrides(snapshot.overrides); setConfirmed(false);
+    if (frozen) return; setOverrides(effectiveRoleProfileOverrides(data.role, snapshot.overrides)); setConfirmed(false);
   }
   async function save() {
     if (sending.current || frozen || !confirmed) return;
@@ -40,10 +42,11 @@ export function AdminRoleProfileEditor({ data, commandId: initialCommandId, reco
     finally { sending.current = false; setBusy(false); }
   }
   const effective = (permission: (typeof permissionCatalog)[number]['code']) =>
-    overrides.find(item => item.permission === permission)?.allowed ?? roleHasPermission(data.role, permission);
+    evaluatePermission({ role: data.role, active: true, permissionOverrides: overrides }, permission).allowed;
   return <div className="space-y-5" data-interactive-ready={ready}>
     <Link className="underline" href="/settings/roles">Torna ai ruoli</Link>
     <p>Profilo {data.role} · revisione {data.current.revision}. Si applica ai nuovi account; dalla scheda di un account esistente puoi applicare questa versione con una scelta esplicita. Le concessioni su clienti e documenti restano separate.</p>
+    <p>I limiti obbligatori di riservatezza prevalgono anche sui profili storici. Le opzioni oggi vietate sono escluse dalla bozza e dall’applicazione; lo storico rimane integro.</p>
     <form onSubmit={event => { event.preventDefault(); void save(); }} className="space-y-4">
       <fieldset disabled={frozen} className="space-y-3">{permissionCatalog.map(item => {
         const editable = editableRolePermission(data.role, item.code), override = overrides.find(value => value.permission === item.code);

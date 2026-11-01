@@ -87,7 +87,7 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
       await lockInternalUser(tx,id);
     const live=await lockAuthoritativeInternalSession(tx,{userId:claimed.userId,sessionId:claimed.sessionId!});
     if(!live || !live.active || live.deletedAt || live.revokedAt || !live.live) deny();
-    const current:CurrentSession={...claimed,role:live.role,active:live.active,
+    const current:CurrentSession={...claimed,role:live.role,technicalRestricted:live.technicalRestricted,active:live.active,
       permissionOverrides:[...live.permissionOverrides],registryExpiresAt:live.expiresAt,
       ...await (mode==='RECIPIENT' ? loadTechnicalAssignmentIndependentScope
         : inactiveRecipientForRevocation ? loadPersonalSelectiveProjectScope : loadSelectiveProjectScope)(tx,claimed.userId)};

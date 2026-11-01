@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { Card, EmptyState, PageHeader, Table, TimestampMeta } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { SecondaryLink } from '@/components/actions';
@@ -7,7 +8,7 @@ import { companyProfileFields } from '@/lib/record-profile-fields';
 import { recordProfileValues } from '@/lib/record-profile-view';
 import { getCompanyReadAccess } from '@/lib/read-access';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('company.read');
   const { id } = await params;
   const context = await getCompanyReadAccess(session, id);
@@ -27,3 +28,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card id="referenti" title="Titolari, soci e amministratori">{personRows.length === 0 ? <EmptyState title="Nessuna persona collegata" /> : <Table headers={['Persona','Ruolo','Email','Telefono','Quota']} rows={people.flatMap(link => { const person = personById.get(link.personId); return person ? [[`${person.firstName} ${person.lastName}`, link.role, person.email ?? '—', person.phone ?? '—', link.ownershipPercent !== null ? `${link.ownershipPercent}%` : '—']] : []; })} />}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/companies/[id]", Page);

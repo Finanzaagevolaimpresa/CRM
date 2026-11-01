@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -8,7 +9,7 @@ import { prisma } from '@/lib/prisma';
 import { readVideoSetup, VideoLibraryError } from '@/lib/video-library';
 import { previewVideoAction, confirmVideoAction, verifyVideoAction, searchVideoFilesAction } from '@/lib/video-actions';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession(), { id } = await params;
   if (!z.string().uuid().safeParse(id).success) notFound();
   let setup;
@@ -28,3 +29,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </section>
   </div>;
 }
+
+export default withTechnicalPage("/videos/manage/[id]", Page);

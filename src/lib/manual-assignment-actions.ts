@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
@@ -56,5 +57,7 @@ async function save(kind: 'client' | 'project', form: FormData): Promise<State> 
   revalidatePath('/clients/' + data.id); revalidatePath('/projects/' + data.id);
   return { ok: true, message: 'Responsabili aggiornati.' };
 }
-export async function assignClientOwners(_previous: State, form: FormData) { return save('client', form); }
-export async function assignProjectOwner(_previous: State, form: FormData) { return save('project', form); }
+export async function assignClientOwners(_previous: State, form: FormData) {
+  await assertTechnicalServerAction("manual-assignment-actions:assignClientOwners"); return save('client', form); }
+export async function assignProjectOwner(_previous: State, form: FormData) {
+  await assertTechnicalServerAction("manual-assignment-actions:assignProjectOwner"); return save('project', form); }

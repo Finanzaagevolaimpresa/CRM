@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { Card, PageHeader, StatusBadge, TimestampMeta, formatDateTime } from '@/components/ui';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
@@ -7,7 +8,7 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { createClientDossierFromAiOutputAndRedirect } from '@/lib/form-actions';
 import { getAiOutputReadAccess } from '@/lib/read-access';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('ai.review');
   const { id } = await params;
   const context = await getAiOutputReadAccess(session, id);
@@ -43,3 +44,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card title="Contenuto interno"><pre className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{output.content}</pre></Card>
   </div>;
 }
+
+export default withTechnicalPage("/ai/outputs/[id]", Page);

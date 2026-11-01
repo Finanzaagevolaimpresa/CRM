@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import { cookies, headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
@@ -14,12 +15,14 @@ import { SerializableConflictError } from './serializable';
 import type { AdminSaveResult } from './admin-record-actions';
 
 export async function searchAdminCommunicationFileContextsAction(raw: unknown) {
+  await assertTechnicalServerAction("admin-communication-file-actions:searchAdminCommunicationFileContextsAction");
   const session = await getSession();
   if (!session || session.role !== 'admin') return { ok: false as const };
   try { return { ok: true as const, value: await searchAdminCommunicationFileContexts(prisma, session, raw) }; }
   catch { return { ok: false as const }; }
 }
 export async function replaceAdminCommunicationFileAction(form: FormData): Promise<AdminSaveResult> {
+  await assertTechnicalServerAction("admin-communication-file-actions:replaceAdminCommunicationFileAction");
   const session = await getSession(), h = await headers();
   if (!session || session.role !== 'admin' || !isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) return { ok: false, message: 'Sessione Admin o origine non ammessa. La bozza è conservata.' };

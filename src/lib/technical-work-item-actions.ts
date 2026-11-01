@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -30,6 +31,7 @@ async function origin() {
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new TechnicalAssignmentError('DENIED');
 }
 export async function prepareTechnicalWorkItem(_state: TechnicalWorkItemState, form: FormData): Promise<TechnicalWorkItemState> {
+  await assertTechnicalServerAction("technical-work-item-actions:prepareTechnicalWorkItem");
   const session = await requireSession();
   try { await origin();
     const preview = await previewTechnicalWorkItem(prisma, session, technicalTargetReference.parse(json(form, 'target')), json(form, 'command'));
@@ -37,6 +39,7 @@ export async function prepareTechnicalWorkItem(_state: TechnicalWorkItemState, f
   } catch (error) { return failure(error); }
 }
 export async function saveTechnicalWorkItem(_state: TechnicalWorkItemState, form: FormData): Promise<TechnicalWorkItemState> {
+  await assertTechnicalServerAction("technical-work-item-actions:saveTechnicalWorkItem");
   const session = await requireSession();
   try { await origin(); const target = technicalTargetReference.parse(json(form, 'target'));
     const receipt = await confirmTechnicalWorkItem(prisma, session, target, json(form, 'command'), String(form.get('token') ?? ''), form.get('confirmed') === 'on');
@@ -46,6 +49,7 @@ export async function saveTechnicalWorkItem(_state: TechnicalWorkItemState, form
   } catch (error) { return failure(error); }
 }
 export async function checkTechnicalWorkItem(_state: TechnicalWorkItemState, form: FormData): Promise<TechnicalWorkItemState> {
+  await assertTechnicalServerAction("technical-work-item-actions:checkTechnicalWorkItem");
   const session = await requireSession();
   try { await origin();
     const outcome = await readTechnicalWorkItemOutcome(prisma, session, technicalTargetReference.parse(json(form, 'target')), String(form.get('commandId') ?? ''));

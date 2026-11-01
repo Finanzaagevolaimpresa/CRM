@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -8,7 +9,7 @@ import { ProjectHandoffForm } from '@/components/project-handoff-form';
 import { Card, PageHeader, StatusBadge } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ command?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ command?: string }> }) {
   const session = await requireSession(), { id } = await params, query = await searchParams;
   if (session.role !== 'admin') notFound();
   const resume = query.command ? z.string().uuid().safeParse(query.command) : null;
@@ -31,3 +32,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <ProjectHandoffForm setup={setup} resumeCommandId={resume?.success ? resume.data : undefined}/></Card>}
   </div>;
 }
+
+export default withTechnicalPage("/projects/[id]/technical-handoff", Page);

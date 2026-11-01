@@ -60,6 +60,7 @@ export function AdminPrivateDocumentVersionEditor({ data, commandId: initialComm
     <section className="space-y-3"><h2 className="font-bold">Versioni conservate</h2>{[...data.versions].reverse().map(v => <article key={v.versionId} className="border rounded-xl p-4 space-y-2">
       <p className="font-bold">Versione {v.version} · {v.fileName}</p><p>{new Date(v.at).toLocaleString('it-IT')} · {v.actor?.name} · {v.actor?.email}</p><p>{v.reason}</p>
       <p className="break-all">SHA256 {v.sha256} · {v.sizeBytes} byte</p>
+      <a className="block underline font-semibold" href={'/admin/document-disclosure/' + v.versionId}>Classifica riservatezza della versione</a>
       <div className="flex flex-wrap gap-4">{canPreviewSelectedDocument(v) && <a className="underline" href={'/acquired-documents/' + data.id + '?version=' + v.versionId} target="_blank" rel="noopener noreferrer">Apri versione {v.version}</a>}
         <a className="underline" href={'/acquired-documents/' + data.id + '?version=' + v.versionId + '&download=1'}>Scarica versione {v.version}</a></div>
     </article>)}</section>

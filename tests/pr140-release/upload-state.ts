@@ -1,7 +1,7 @@
+import { ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { PrismaClient } from '@prisma/client';
 import { syntheticSession } from '../selective-sharing/fixtures';
 import { leadProof } from '../selective-leads/fixtures';
@@ -9,7 +9,6 @@ import { technicalFixture, technicalTarget, assignmentInput, revokeTechnical } f
 import { previewTechnicalAssignment, confirmTechnicalAssignment } from '../../src/lib/technical-assignment-service';
 import { readOwnTechnicalUploads, previewTechnicalUpload, confirmTechnicalUpload, readOwnTechnicalUpload } from '../../src/lib/technical-upload-service';
 import { readTechnicalUploadReviewQueue, previewTechnicalUploadReview, confirmTechnicalUploadReview, readTechnicalUploadForAdmin } from '../../src/lib/technical-upload-review-service';
-import { localPathFromStoragePath } from '../../src/lib/storage';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { previewTechnicalDocumentAcquisition, confirmTechnicalDocumentAcquisition } from '../../src/lib/technical-document-acquisition-service';
 import { readPersonalAcquiredDocument } from '../../src/lib/technical-document-acquired-access';
@@ -23,8 +22,7 @@ async function main() {
   const admin = { user, ...await syntheticSession(db, user) };
   const f = await technicalFixture(db, admin, user.passwordHash, 'consulente'), target = technicalTarget(f);
   for (const doc of f.documents) {
-    const file = localPathFromStoragePath(doc.doc.storagePath);
-    await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, doc.bytes, { flag: 'wx', mode: 0o600 });
+    await ensureSyntheticTechnicalBytes(db, doc.doc.storagePath, doc.bytes);
   }
   const previous = process.env.PRIVILEGED_ACCESS_MODE; process.env.PRIVILEGED_ACCESS_MODE = 'enforced';
   try {

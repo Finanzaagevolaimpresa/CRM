@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { listDashboardTodayTasks } from "@/lib/dashboard-detail";
@@ -16,7 +17,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission, requirePermission } from "@/lib/auth";
 import { canEditTask, canViewTask } from "@/lib/access-control";
 import { listAccessibleTasks } from "@/lib/read-access";
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
   const todayOnly = (await searchParams)?.dashboard === "oggi";
   const session = await requirePermission("service.read");
   const [items, clientRows, projectRows, serviceRows, userRows] = await Promise.all([
@@ -95,3 +96,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     </div>
   );
 }
+
+export default withTechnicalPage("/tasks", Page);

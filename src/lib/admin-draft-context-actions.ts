@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
 import {cookies,headers} from 'next/headers';
 import {revalidatePath} from 'next/cache';
 import {ZodError} from 'zod';
@@ -33,6 +34,7 @@ function failure(error:unknown):DraftContextResult{
 const value=(form:FormData,name:string)=>String(form.get(name)??'');
 const addresses=(form:FormData,name:string)=>value(form,name).split(/[,;\r\n]+/).map(v=>v.trim()).filter(Boolean);
 export async function replaceAdminDraftAction(form:FormData):Promise<DraftContextResult>{
+  await assertTechnicalServerAction("admin-draft-context-actions:replaceAdminDraftAction");
   const session=await admission();if(!session)return {ok:false,message:'Sessione Admin o origine non ammessa.'};
   const ready=await privilegedAccessReadiness(session);
   if(!ready.active)return {ok:false,stepUp:ready.mode==='enforced'&&ready.keyReady,message:'Riconferma l’identità qui sotto e prosegui con la bozza conservata.'};
@@ -52,6 +54,7 @@ export async function replaceAdminDraftAction(form:FormData):Promise<DraftContex
   }catch(error){return failure(error);}
 }
 export async function reconcileAdminDraftAction(raw:unknown):Promise<DraftContextResult>{
+  await assertTechnicalServerAction("admin-draft-context-actions:reconcileAdminDraftAction");
   const session=await admission();if(!session)return {ok:false,uncertain:true,message:'Accedi come Admin per verificare il tentativo.'};
   try{
     const result=await reconcileAdminDraftReplacement(prisma,session,raw);

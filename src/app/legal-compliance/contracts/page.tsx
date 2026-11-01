@@ -1,4 +1,7 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Contracts from '@/app/contracts/page';
 import { requirePermission } from '@/lib/auth';
 export const dynamic = 'force-dynamic';
-export default async function Page() { await requirePermission('legal.read'); return Contracts(); }
+  async function Page() { await requirePermission('legal.read'); return Contracts({}); }
+
+export default withTechnicalPage("/legal-compliance/contracts", Page);

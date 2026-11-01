@@ -1,4 +1,6 @@
 'use client';
+import { technicalCollaborationSelection } from '@/lib/technical-collaboration';
+import { technicalFieldAllowed } from '@/lib/technical-confidentiality';
 
 import { selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
@@ -132,6 +134,9 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
     selectedAssignment: data.selectedAssignment, documents: data.documentOptions, workItems: data.workItemOptions }));
   // Keep the draft bound to the revision it was opened from. Revalidation after
   // saving must preserve the action receipt, never silently rebase old choices.
+  const [copySource, setCopySource] = useState('');
+  const [copiedExpiryRevision, setCopiedExpiryRevision] = useState(0);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [openedRevision] = useState(data.revision);
   const revisionChanged = openedRevision !== data.revision;
   const [responsibility, setResponsibility] = useState<TechnicalAssignmentSelection['responsibility']>(original.responsibility);
@@ -151,6 +156,24 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const [revocation, revokePreview, preparingRevoke] = useActionState(actions.previewAction, initial);
   const [revokeGeneration, setRevokeGeneration] = useState(0), [preparedRevokeGeneration, setPreparedRevokeGeneration] = useState(-1);
   const reference = data.recipient ? { ...data.target, recipientId: data.recipient.id } : null;
+
+  function copyTechnicalScope() {
+    if (!ready || submitted || revisionChanged || !data.recipient) return;
+    const source = data.assignments.find(item => item.id === copySource);
+    if (!source) return;
+    try {
+      const selection = technicalCollaborationSelection(source, data.recipient.id, new Date());
+      const draft = retainedTechnicalAssignmentEditor({ kind: data.target.kind, recipientId: data.recipient.id,
+        assignmentId: source.id, selectedAssignment: { ...source, recipientId: data.recipient.id, selection },
+        documents: data.documentOptions, workItems: data.workItemOptions });
+      setReadable(draft.readable); setEditable(draft.editable); setActions(draft.actions);
+      setDocuments(draft.documents); setItems(draft.workItems); setUploadChoices(draft.upload);
+      setExpires(draft.expires); setCopiedExpiryRevision(value => value + 1);
+      setResponsibility('supporto'); setReason(''); changed();
+      setCopyMessage('Perimetro copiato nella bozza per ' + data.recipient.name + ' · ' + data.recipient.email
+        + '. Note riservate escluse. Versioni, quote e scadenza sono conservate e saranno verificate per questa persona; conferma separatamente la responsabilità e l’anteprima.');
+    } catch { setCopyMessage('L’incarico sorgente non è disponibile per questa copia. Nessuna concessione modificata.'); }
+  }
   const expiry = expires ? new Date(expires).getTime() : NaN;
   const command = data.recipient ? { commandId, targetId: data.target.targetId, expectedRevision: openedRevision,
     expectedContextSha256: data.contextSha256, expectedRecipientEpoch: data.recipient.epoch,
@@ -159,7 +182,8 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       readableFields: readable, editableFields: editable, expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : '',
       documents: selectedTechnicalDocuments(chosenDocuments),
       workItems: selectedTechnicalWorkItemGrants(chosenItems, chosenActions) }, reason } : null;
-  const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible
+  const valid = readable.every(field => technicalFieldAllowed(data.target.kind, field))
+    && editable.every(field => technicalFieldAllowed(data.target.kind, field)) && !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible
     && chosenActions.every(action => data.allowedActions.includes(action)) && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId || revisionChanged;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
@@ -194,6 +218,17 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
     {recoverCommandId && reference && <Recovery reference={reference} commandId={recoverCommandId} action={actions.receiptAction} />}
     {data.recipient && <>
       <h2 className="break-words text-xl font-bold">{data.recipient.name} · {data.recipient.email}</h2>
+      <section className="space-y-3 rounded-xl border p-4"><h3 className="font-bold">Prepara lo stesso perimetro tecnico per questa persona</h3>
+        <p>La copia è una nuova decisione personale. Il responsabile originale e le sue prese in carico restano invariati.</p>
+        <label>Incarico esistente da cui copiare<select className={control} value={copySource} disabled={blocked}
+          onChange={event => setCopySource(event.target.value)}><option value="">Scegli una persona già incaricata</option>
+          {data.assignments.filter(item => item.recipientId !== data.recipient!.id && !item.revokedAt
+            && Date.parse(item.selection.expiresAt) > Date.parse(data.observedAt)).map(item => <option key={item.id} value={item.id}>
+            {item.recipientName} · {item.recipientEmail} · {technicalResponsibilityLabels[item.selection.responsibility]}
+          </option>)}</select></label>
+        <button type="button" className={button} disabled={blocked || !copySource} onClick={copyTechnicalScope}>Copia nella bozza, senza concedere accesso</button>
+        {copyMessage && <p role="status">{copyMessage}</p>}
+      </section>
       {original.retained && <p>Le scelte registrate sono riportate nel modulo, comprese le versioni fuori dalla pagina corrente.
         La modifica prepara una sostituzione completa: nessun accesso cambia prima dell’anteprima e della tua conferma.
         Scadenze e riferimenti sono conservati e saranno ricontrollati; nessun rinnovo automatico.</p>}
@@ -212,7 +247,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
           <fieldset><legend className="font-bold">Operazioni consentite</legend><div className="grid gap-3 sm:grid-cols-2">{Array.from(new Set([...data.allowedActions, ...chosenActions])).map(action => <label className="flex items-center gap-2 rounded-xl border p-3" key={action}>
             <input type="checkbox" checked={chosenActions.includes(action)} onChange={event => { setActions(old => event.target.checked ? [...old, action] : old.filter(item => item !== action)); if (!event.target.checked && action === 'update_fields') setEditable([]); }} />{technicalActionLabels[action]}{!data.allowedActions.includes(action) && <span> · Non più proponibile: rimuovi questa operazione per preparare la sostituzione.</span>}</label>)}</div></fieldset>
           <fieldset><legend className="font-bold">Informazioni da mostrare e campi modificabili</legend><div className="grid gap-3 sm:grid-cols-2">{data.fieldCatalogue.map(field => <div className="space-y-2 rounded-xl border p-3" key={field.key}>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={readable.includes(field.key)} onChange={event => { setReadable(old => event.target.checked ? [...old, field.key] : old.filter(item => item !== field.key)); if (!event.target.checked) setEditable(old => old.filter(item => item !== field.key)); }} />{field.label}</label>
+            <label className="flex items-center gap-2"><input type="checkbox" disabled={!technicalFieldAllowed(data.target.kind, field.key) && !readable.includes(field.key)} checked={readable.includes(field.key)} onChange={event => { setReadable(old => event.target.checked ? [...old, field.key] : old.filter(item => item !== field.key)); if (!event.target.checked) setEditable(old => old.filter(item => item !== field.key)); }} />{field.label}{!technicalFieldAllowed(data.target.kind, field.key) && <span> · Riservato: rimuovi l’eventuale scelta storica dalla nuova bozza.</span>}</label>
             {field.editable && <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={!readable.includes(field.key) || !chosenActions.includes('update_fields')} checked={editable.includes(field.key)} onChange={event => setEditable(old => event.target.checked ? [...old, field.key] : old.filter(item => item !== field.key))} />Consenti la modifica</label>}
           </div>)}</div></fieldset>
           <TechnicalDocumentChoices data={data} choices={chosenDocuments} onChange={value => { setDocuments(value); changed(); }}
@@ -221,7 +256,8 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
             onChange={value => { setItems(value); changed(); }} catalogueAction={catalogueAction}
             onReady={value => { setCatalogueReady(value); if (!value) changed(); }} />
           {chosenActions.includes('upload_document') && <TechnicalUploadProfileFields value={uploadChoices} onChange={setUploadChoices} />}
-          <RomeDateTimeInput label="Scadenza, entro 90 giorni" className={control} required value={expires} onChange={setExpires} />
+          {/* A deliberate copy replaces the wall time as well as the submitted instant. */}
+          <RomeDateTimeInput key={copiedExpiryRevision} label="Scadenza, entro 90 giorni" className={control} required value={expires} onChange={setExpires} />
           <label className="block font-semibold">Motivo dell’incarico<textarea className={control} value={reason} minLength={3} maxLength={500} required onChange={event => setReason(event.target.value)} /></label>
           <input type="hidden" name="operation" value="ASSIGN" /><input type="hidden" name="reference" value={JSON.stringify(reference)} />
           <input type="hidden" name="command" value={JSON.stringify(command)} />

@@ -15,7 +15,7 @@ const selection: TechnicalAssignmentSelection = { kind:target.kind, userId:'tech
 const document: CurrentTechnicalDocument = { documentId:'doc_a',fileId:'file_a_v1',version:1,
   targetId:target.targetId,kind:target.kind,contentSha256:'b'.repeat(64),contextSha256:'c'.repeat(64),
   fileName:'relazione-tecnica.pdf',mimeType:'application/pdf',sizeBytes:2050,deleted:false,contextValid:true,readable:true,
-  financialBindingsChecked:true,hasFinancialBinding:false,sensitive:false,sensitiveReadAllowed:false };
+  financialBindingsChecked:true,hasFinancialBinding:false,technicalDisclosureAllowed:true,sensitive:false,sensitiveReadAllowed:false };
 
 test('technical projection returns only individually selected fields, not owners, parent dossier or financial data', () => {
   const row = {title:'Relazione tecnica',dueDate:new Date('2026-11-01T09:00:00Z'),internalNotes:'private',
@@ -43,7 +43,7 @@ test('a selected technical PDF is previewable, while download needs its separate
   assert.ok(projectTechnicalDocument(current,download,target,document,'download',now));
 });
 test('financial metadata and canonical bindings independently override a selected document', () => {
-  for (const delta of [{fileName:'contratto.pdf'},{documentCategory:'pagamento'},{type:'fattura'},{hasFinancialBinding:true},{financialBindingsChecked:false},{fileName:'documenti.zip'}]) {
+  for (const delta of [{fileName:'contratto.pdf'},{documentCategory:'pagamento'},{type:'fattura'},{hasFinancialBinding:true},{financialBindingsChecked:false},{technicalDisclosureAllowed:false},{technicalDisclosureAllowed:undefined},{fileName:'documenti.zip'}]) {
     assert.equal(projectTechnicalDocument(current,selection,target,{...document,...delta},'preview',now),null);
   }
 });

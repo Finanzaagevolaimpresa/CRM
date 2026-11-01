@@ -65,8 +65,10 @@ export const technicalUploadAdmission = z.object({ target: technicalTargetRefere
   && value.consumedBytes <= value.consumedFiles * value.profile.maxFileBytes,
   'Current quota must correspond to bounded nonempty submissions');
 export type TechnicalUploadAdmission = z.infer<typeof technicalUploadAdmission>;
-const preview = z.object({ protocol: z.literal('TECHNICAL_UPLOAD_PREVIEW_V1'), command: technicalUploadCommand,
-  admission: technicalUploadAdmission, issuedAt: instant, expiresAt: instant }).strict();
+// A signed preview is readable by its holder: bind the complete admission by
+// digest, never serialize the Admin's unclassified purpose or profile notes.
+const preview = z.object({ protocol: z.literal('TECHNICAL_UPLOAD_PREVIEW_V2'), command: technicalUploadCommand,
+  admissionSha256: hash, issuedAt: instant, expiresAt: instant }).strict();
 const envelope = z.object({ payload: preview, proof: hash }).strict();
 const lifetime = 300_000;
 const maximumTokenLength = 32_000;
@@ -98,7 +100,7 @@ export function createTechnicalUploadPreview(key: PrivilegedStepUpKey, raw: Tech
   const command = technicalUploadCommand.parse(raw), admission = technicalUploadAdmission.parse(state);
   if (!instant.safeParse(now).success || admission.validUntil <= now || key.version !== admission.keyVersion
     || !admitted(command, admission)) throw new Error('TECHNICAL_UPLOAD_STALE');
-  const payload = preview.parse({ protocol: 'TECHNICAL_UPLOAD_PREVIEW_V1', command, admission, issuedAt: now,
+  const payload = preview.parse({ protocol: 'TECHNICAL_UPLOAD_PREVIEW_V2', command, admissionSha256: canonicalSha256(admission), issuedAt: now,
     expiresAt: Math.min(now + lifetime, admission.validUntil) });
   const token = Buffer.from(canonicalJson({ payload, proof: sign(key, 'preview', payload) })).toString('base64url');
   if (token.length > maximumTokenLength) throw new Error('TECHNICAL_UPLOAD_SIZE');
@@ -111,7 +113,7 @@ export function readTechnicalUploadPreview(key: PrivilegedStepUpKey, token: stri
       || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
     const text = Buffer.from(token, 'base64url').toString('utf8'), signed = envelope.parse(JSON.parse(text)), p = signed.payload;
     if (Buffer.from(text).toString('base64url') !== token || canonicalJson(signed) !== text
-      || canonicalJson(p.admission) !== canonicalJson(current) || key.version !== current.keyVersion
+      || p.admissionSha256 !== canonicalSha256(current) || key.version !== current.keyVersion
       || p.issuedAt > now || p.expiresAt <= now || p.expiresAt !== Math.min(p.issuedAt + lifetime, current.validUntil)
       || !admitted(p.command, current) || !signatureEquals(signed.proof, sign(key, 'preview', p))) return null;
     return p.command;

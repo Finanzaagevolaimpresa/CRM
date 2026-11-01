@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminOperationalShortcut } from '@/components/admin-operational-shortcut';
 import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { notFound } from 'next/navigation';
@@ -7,7 +8,7 @@ import { listPersonalAcquiredDocuments } from '@/lib/technical-document-acquired
 import { PageHeader, Card } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession(), { id } = await params;
   const documents = await listPersonalAcquiredDocuments(prisma, session, id).catch(() => null);
   if (!documents) notFound();
@@ -28,3 +29,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </div></Card>)}
   </div>;
 }
+
+export default withTechnicalPage("/clients/[id]/acquired-documents", Page);
