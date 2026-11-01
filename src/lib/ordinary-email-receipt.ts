@@ -5,6 +5,8 @@ export const ordinaryReceiptSchema = z.object({
   id: z.string().uuid(), revision: z.number().int().positive(), snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
   state: z.enum(['RESERVED','CLAIMED','ACCEPTED','NOT_SENT','UNCERTAIN']), createdAt: z.date(),
   outcome: z.enum(['ACCEPTED','NOT_SENT','UNCERTAIN']).nullable(), recordedAt: z.date().nullable(),
+  reconciliation: z.object({ id: z.string().uuid(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    recordedAt: z.string(), originalOutcome: z.enum(['ACCEPTED','NOT_SENT','UNCERTAIN']).nullable() }).strict().nullable().optional(),
 }).strict().refine(row => ['RESERVED','CLAIMED'].includes(row.state)
   ? row.outcome === null && row.recordedAt === null : row.outcome === row.state && row.recordedAt !== null);
 export type OrdinaryEmailReceipt = z.infer<typeof ordinaryReceiptSchema>;

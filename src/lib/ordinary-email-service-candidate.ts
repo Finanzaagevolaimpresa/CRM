@@ -1,3 +1,4 @@
+import { writeOrdinaryObservation } from './ordinary-email-observation';
 import type { PrismaClient } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { transmitOrdinaryEmailCandidate, type OrdinaryAttemptLease, type OrdinarySmtpDependencies } from './ordinary-email-smtp-candidate';
@@ -24,6 +25,7 @@ export async function confirmAndTransmitStoredOrdinaryEmail(
     const material = await loadStoredOrdinaryEmailMaterial(db, claimed, reserved.attemptId, runtime);
     const result = await transmitOrdinaryEmailCandidate(material, reserved.attemptId, control, {
       ...transport,
+      observeOutcome: runtime.observationSink ?? writeOrdinaryObservation,
       takeCommittedAttempt: async request => {
         lease = await takeStoredOrdinaryEmailAttempt(db, claimed, request, runtime);
         return lease;

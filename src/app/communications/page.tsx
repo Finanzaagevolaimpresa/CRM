@@ -1,3 +1,4 @@
+import { OrdinaryEmailRecovery } from '@/components/ordinary-email-recovery';
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { z } from 'zod';
@@ -180,6 +181,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <div role="region" aria-label="Testo del messaggio conservato" className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
+      {data.isAdmin && message.ordinaryReceipts.filter(receipt => ['RESERVED','CLAIMED','UNCERTAIN'].includes(receipt.state) || receipt.reconciliation).map(receipt =>
+        <OrdinaryEmailRecovery key={receipt.id} messageId={message.id} attemptId={receipt.id} />)}
       <div className="my-4 grid gap-4">
         {data.canWrite && message.operational && (!message.updateDeliveryId || message.updateDraft) && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
           key={`${message.id}-${message.currentRevision}-${message.snapshotHash}`} messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash}

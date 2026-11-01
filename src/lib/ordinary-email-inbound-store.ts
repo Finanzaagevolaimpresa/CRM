@@ -1,3 +1,4 @@
+import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -118,9 +119,8 @@ async function associateInTransaction(tx: Tx, claimed: AuthSession, itemId: stri
     if (!sent || !snapshot.success || sent.snapshotHash !== approvedMessageHash(snapshot.data)
       || snapshot.data.messageId !== state.row.id || snapshot.data.mailboxId !== item.mailboxId
       || ![...snapshot.data.to,...snapshot.data.cc,...snapshot.data.bcc].some(address => address.toLowerCase()===payload.sender.toLowerCase())) deny();
-    const accepted = await tx.$queryRaw<Array<{ id: string }>>`SELECT a."id" FROM "OrdinaryEmailAttempt" a
-      JOIN "OrdinaryEmailDecision" d ON d."id"=a."decisionId" JOIN "OrdinaryEmailOutcome" o ON o."attemptId"=a."id"
-      WHERE a."messageId"=${state.row.id}::uuid AND d."versionId"=${sent.id}::uuid AND a."state"='ACCEPTED' AND o."outcome"='ACCEPTED'`;
+    const accepted = (await readAdmittedOrdinaryEmailReceipts(tx,state.row.id))
+      .filter(receipt => receipt.revision === sent.revision && receipt.state === 'ACCEPTED' && receipt.outcome === 'ACCEPTED');
     if (accepted.length !== 1) deny();
     await tx.$queryRaw`SELECT "id" FROM "OrdinaryEmailInboundItem" WHERE "id"=${itemId}::uuid FOR UPDATE`;
     const [conflicts] = await tx.$queryRaw<Array<{ present: boolean }>>`SELECT EXISTS(SELECT 1 FROM "OrdinaryEmailInboundConflict" WHERE "itemId"=${itemId}::uuid) AS present`;
@@ -157,11 +157,10 @@ export async function refreshStoredOrdinaryReplies(db: Db, claimed: AuthSession,
   return db.$transaction(async tx => {
     const state = await loadOrdinaryReplyCandidateContext(tx,claimed,input.messageId,runtime);
     if (state.row.currentRevision !== input.revision || state.version.snapshotHash !== input.snapshotHash) deny();
-    const accepted = await tx.$queryRaw<Array<{ versionId: string }>>`SELECT d."versionId" FROM "OrdinaryEmailAttempt" a
-      JOIN "OrdinaryEmailDecision" d ON d."id"=a."decisionId" JOIN "OrdinaryEmailOutcome" o ON o."attemptId"=a."id"
-      WHERE a."messageId"=${input.messageId}::uuid AND a."state"='ACCEPTED' AND o."outcome"='ACCEPTED'`;
+    const accepted = (await readAdmittedOrdinaryEmailReceipts(tx,input.messageId))
+      .filter(receipt => receipt.state === 'ACCEPTED' && receipt.outcome === 'ACCEPTED');
     if (accepted.length !== 1) deny();
-    const sent = state.row.versions.find(version => version.id === accepted[0].versionId);
+    const sent = state.row.versions.find(version => version.revision === accepted[0].revision);
     const snapshot = approvedMessageSnapshotSchema.safeParse(sent?.snapshot);
     if (!sent || !snapshot.success || approvedMessageHash(snapshot.data) !== sent.snapshotHash
       || snapshot.data.messageId !== state.row.id || snapshot.data.mailboxId !== state.box.id) deny();
