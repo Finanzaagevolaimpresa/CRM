@@ -73,6 +73,10 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
   if(mode==='PERSONAL_DECISION' && !proof) deny();
   if(inactiveRecipientForRevocation && mode==='RECIPIENT') deny();
   return withSerializableTransaction(db,async tx=>{
+    // A complete catalogue may need time to read many versions, but a blocked
+    // row must release this transaction promptly so the independent history
+    // and revocation fallback remains usable. This setting is transaction-local.
+    if(mode==='MANAGEMENT_READ') await tx.$executeRaw`SET LOCAL lock_timeout = '4000ms'`;
     if(internalSessionMode()!=='registry' || !z.string().uuid().safeParse(claimed.sessionId).success) deny();
     const key=proof?.key ?? await loadActivePrivilegedStepUpKey(tx);
     if(!key || !await lockRegisteredPrivilegedStepUpKey(tx,key)) throw new TechnicalAssignmentError('UNAVAILABLE');

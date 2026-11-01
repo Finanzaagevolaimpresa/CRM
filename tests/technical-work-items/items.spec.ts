@@ -320,7 +320,8 @@ test('a real catalogue lock timeout leaves native history and personal revocatio
   await assign(admin, row, row.techA); await prepare(tech, row);
   const url = management(row) + '?recipient=' + row.techA.id;
   // Warm the actual page before holding the row, so compilation is not the
-  // timing condition. The real app keeps its unchanged 5s transaction timeout.
+  // timing condition. The real app has a 4s lock-wait limit inside its larger
+  // management-read budget; the fallback must not wait for this blocker.
   await admin.goto(url); await expect(admin.getByLabel('Motivo della revoca', { exact: true })).toBeVisible();
   let locked!: () => void, release!: () => void;
   const acquired = new Promise<void>(resolve => { locked = resolve; });
