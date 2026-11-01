@@ -21,7 +21,8 @@ export function mapSerializableConflict(error: unknown) {
   return error;
 }
 
-export async function withSerializableTransaction<T>(prisma: PrismaClient, fn: (tx: Prisma.TransactionClient) => Promise<T>) {
-  try { return await prisma.$transaction(fn, serializableOptions); }
+export async function withSerializableTransaction<T>(prisma: PrismaClient, fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  options: { timeout?: number } = {}) {
+  try { return await prisma.$transaction(fn, { ...serializableOptions, ...options }); }
   catch (error) { throw mapSerializableConflict(error); }
 }

@@ -105,7 +105,11 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     await assertSessionTime(tx,current);
     if(proof) await assertPersonal(tx,current,proof);
     return result;
-  });
+  // The bounded management catalogue can inspect 256 exact versions and their
+  // canonical references. Give this read its own finite budget; decisions and
+  // recipient operations retain their existing transaction limits. Session
+  // validity above is checked again at completion, not extended by this budget.
+  }, mode === 'MANAGEMENT_READ' ? { timeout: 30_000 } : undefined);
 }
 
 /** Read-only management loaders must keep their callbacks free of writes. */

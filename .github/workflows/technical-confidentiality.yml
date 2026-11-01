@@ -67,8 +67,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/technical-confidentiality-db.test.ts | tee "$TECHNICAL_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 11' "$TECHNICAL_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 11' "$TECHNICAL_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 12' "$TECHNICAL_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 12' "$TECHNICAL_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$TECHNICAL_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_EVIDENCE/postgresql.tap"
       - name: Ordinary login and activated registry fixture

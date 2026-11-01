@@ -16,6 +16,8 @@ import { previewTechnicalAssignment, confirmTechnicalAssignment } from '../src/l
 import { technicalCollaborationSelection } from '../src/lib/technical-collaboration';
 import { currentRecordUpdateUser } from '../src/lib/record-update-context';
 import { hasPermission } from '../src/lib/permission-evaluator';
+import { readTechnicalAssignmentManagement } from '../src/lib/technical-assignment-management';
+import { withTechnicalAssignmentManagementRead } from '../src/lib/technical-assignment-transaction';
 import { assertCommunicationTechnicalRecipients } from '../src/lib/communication-contexts';
 
 const enabled = process.env.RUN_TECHNICAL_CONFIDENTIALITY_DB_TESTS === '1';
@@ -171,4 +173,29 @@ test('ordinary technical record lists only current classified files; ownership, 
     await db.internalSession.update({ where: { id: person.session.sessionId! }, data: { revokedAt: new Date() } });
     await assert.rejects(listOrdinaryTechnicalDocuments(db, person.session, technicalTarget(f)), /UNAVAILABLE/);
   }
+});
+
+
+test('management catalog keeps financial bindings private and its longer read budget never extends a session', options, async () => {
+  const f = await fixture();
+  for (const person of [f.techA, f.techB]) for (const kind of ['Project', 'TechnicalPractice'] as const) {
+    const view = await readTechnicalAssignmentManagement(db, admin.session, technicalTarget(f, kind), person.user.id);
+    assert(view.documentCatalogueAvailable);
+    assert.deepEqual(view.documentOptions.map(row => row.fileId).sort(), f.documents.slice(0, 2).map(row => row.version.id).sort());
+    for (const forbidden of [f.documents[2].doc.title, f.documents[2].doc.fileName, f.documents[2].version.id])
+      assert(!JSON.stringify(view.documentCatalogue).includes(forbidden));
+  }
+  // A formerly technical version becomes accounting evidence without any
+  // change to its neutral metadata or earlier classification.
+  await db.payment.update({ where: { id: f.payment.id }, data: { accountingDocumentId: f.documents[0].doc.id } });
+  for (const person of [f.techA, f.techB]) {
+    const view = await readTechnicalAssignmentManagement(db, admin.session, technicalTarget(f), person.user.id);
+    assert.deepEqual(view.documentOptions.map(row => row.fileId), [f.documents[1].version.id]);
+  }
+  const read = await withTechnicalAssignmentManagementRead(db, admin.session, 'TechnicalPractice', f.techA.user.id,
+    tx => tx.$queryRaw<Array<{ ok: number }>>`SELECT 1 AS ok FROM pg_sleep(5.1)`);
+  assert.deepEqual(read, [{ ok: 1 }], 'a valid management read may outlast the old five-second default');
+  const expiring = { ...admin.session, expiresAt: Math.floor(Date.now() / 1000) + 1 };
+  await assert.rejects(withTechnicalAssignmentManagementRead(db, expiring, 'TechnicalPractice', f.techA.user.id,
+    tx => tx.$queryRaw`SELECT 1 AS ok FROM pg_sleep(1.2)`), /DENIED/);
 });
