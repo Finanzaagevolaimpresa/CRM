@@ -15,6 +15,7 @@ import { readPrivateDocumentBounded } from '../../src/lib/storage';
 import { readTechnicalUploadPrivateFile } from '../../src/lib/technical-upload-storage';
 import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
 import { syntheticSession } from '../selective-sharing/fixtures';
+import { readTechnicalRecoveryFootprint } from './technical-footprint';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -117,15 +118,10 @@ async function main() {
       assert.equal(sha256, version.checksum);
       selectedPracticeFiles.push({ versionId: version.id, sha256, sizeBytes: bytes.length });
     }
-    const technicalAssignments = await db.$queryRaw<Array<{ id: string; recipientId: string; practiceId: string | null; projectId: string | null; revokedAt: Date | null }>>`SELECT * FROM "TechnicalAssignment" ORDER BY id`;
-    const technicalClients = await db.technicalPractice.findMany({ where: { id: { in: technicalAssignments.flatMap(row => row.practiceId ? [row.practiceId] : []) } }, select: { clientId: true } });
-    const technicalDocuments = await db.document.findMany({ where: { clientId: { in: technicalClients.map(row => row.clientId) } }, orderBy: { id: 'asc' } });
-    const technicalFiles = [];
-    for (const doc of technicalDocuments) {
-      const bytes = await readPrivateDocumentBounded(doc.storagePath, 1024 * 1024);
-      const sha256 = createHash('sha256').update(bytes).digest('hex');
-      assert.equal(sha256, doc.checksum); technicalFiles.push({ id: doc.id, sizeBytes: bytes.length, sha256 });
-    }
+    const technicalFixture = JSON.parse(readFileSync(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, 'utf8')) as {
+      synthetic: boolean; clientId: string; supportEmail: string; mixedEmail: string;
+    };
+    const technicalFootprint = await readTechnicalRecoveryFootprint(db, technicalFixture);
     const uploadSubmissions = await db.technicalUploadSubmission.findMany({ orderBy: { id: 'asc' } });
     const uploadReviews = await db.technicalUploadReview.findMany({ orderBy: { commandId: 'asc' } });
     const uploadFiles = [];
@@ -154,17 +150,7 @@ async function main() {
       adminRequestEvents: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestEvent" ORDER BY id`,
       adminRequestDrafts: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestDraft" ORDER BY "requestId"`,
       adminRequestAudit: await db.auditLog.findMany({ where: { event: 'admin_request_changed' }, orderBy: { id: 'asc' } }),
-      technicalAssignments, technicalDocuments, technicalFiles,
-      technicalAuthority: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentAuthority" ORDER BY id`,
-      technicalDecisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentDecision" ORDER BY id`,
-      technicalRevisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentRevision" ORDER BY id`,
-      technicalWorkCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkCommand" ORDER BY id`,
-      technicalItemGenerations: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkItemGeneration" ORDER BY kind,"itemId"`,
-      technicalItemCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkItemCommand" ORDER BY id`,
-      technicalChecklist: await db.documentChecklistItem.findMany({ orderBy: { id: 'asc' } }),
-      technicalAudit: await db.auditLog.findMany({ where: { event: { in: ['technical_assignment_changed','technical_work_recorded','technical_work_item_recorded'] } }, orderBy: { id: 'asc' } }),
-      technicalUsers: await db.user.findMany({ where: { id: { in: technicalAssignments.map(row => row.recipientId) } }, orderBy: { id: 'asc' },
-        select: { id: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
+      ...technicalFootprint,
       selectivePracticeAuthority: await db.selectivePracticeAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectivePracticeGrants: await db.selectivePracticeGrant.findMany({ orderBy: { id: 'asc' } }),
       selectivePracticeRevisions: (await db.selectivePracticeRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
@@ -308,12 +294,6 @@ async function main() {
     assert.equal(data.acquiredDocuments.length, 1); assert.equal(data.documentAcquisitions.length, 1); assert.equal(data.acquisitionAudit.length, 1);
     assert.equal(data.adminRequests.length, 4); assert.equal(data.adminRequestEvents.length, 7);
     assert.equal(data.adminRequestDrafts.length, 2); assert.equal(data.adminRequestAudit.length, 7);
-    assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 5);
-    assert.equal(data.technicalAssignments.filter(row => row.revokedAt).length, 2);
-    assert.equal(data.technicalDecisions.length, 7); assert.equal(data.technicalRevisions.length, 7);
-    assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 9);
-    assert.equal(data.technicalItemCommands.length, 1); assert(data.technicalItemGenerations.length > 0);
-    assert.equal(data.technicalFiles.length, 7); assert.equal(data.technicalUsers.length, 4);
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectivePracticeRevisions.length, 4); assert.equal(data.selectivePracticeCommands.length, 4);
