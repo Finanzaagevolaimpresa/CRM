@@ -79,8 +79,11 @@ test('current and historical catalog remain readable and selectable', async ({ b
     deniedContext = await browser.newContext();
     const denied = await deniedContext.newPage();
     await login(denied, 'catalog-denied@invalid.test');
-    await denied.goto(`${app}/service-catalog`);
-    await expect(denied).toHaveURL(`${app}/dashboard`);
+    const forbidden = await denied.goto(`${app}/service-catalog`);
+    expect(forbidden?.status()).toBe(404);
+    await expect(denied.getByRole('heading', { name: 'Catalogo servizi' })).toHaveCount(0);
+    expect(await forbidden!.text()).not.toContain('TERMS-v1');
+    expect(await forbidden!.text()).not.toContain('Ottimizzazione Aziendale AI');
     writeFileSync(join(evidence, 'catalog-receipt.json'), JSON.stringify({ status: 'PASS', synthetic: true, provenancePerRevision: true, currentRevision: true, historicalRevision: true, historicalPrice: 1490, quoteOnly: true, fiscalDistinct: true, digitalTypes: 7, digitalConditions: true, selectionValidated: true, unauthorizedDenied: true, desktopScreenshot: true, mobileScreenshot: true }), { mode: 0o600 });
   } catch (error) {
     await page.screenshot({ path: join(evidence, 'catalog-failure.png'), fullPage: true });

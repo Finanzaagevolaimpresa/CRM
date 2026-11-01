@@ -281,8 +281,9 @@ test('project operation has its own exact grant and native status changes do not
   expect(persisted.title).toBe('Progetto tecnico aggiornato'); expect(persisted.description).toBe('Descrizione tecnica selezionabile');
   expect((await tc.request.get(work(row))).status()).toBe(404);
   await tech.goto('/search?q=' + encodeURIComponent('Progetto tecnico aggiornato'));
-  await expect(tech.getByRole('heading', { name: 'Progetti assegnati personalmente', exact: true })).toBeVisible();
-  const result = tech.getByRole('link', { name: 'Progetto tecnico aggiornato', exact: true });
+  await expect(tech.getByRole('heading', { name: 'Progetti disponibili', exact: true })).toBeVisible();
+  const result = tech.locator('article').filter({ has: tech.getByRole('heading', { name: 'Progetto tecnico aggiornato', exact: true }) })
+    .getByRole('link', { name: 'Apri incarico tecnico', exact: true });
   await expect(result).toHaveCount(1); expect(await tech.content()).not.toContain(row.excluded[1]);
   await result.click(); await expect(tech).toHaveURL(new RegExp(work(row, true) + '$'));
   await expect(tech.getByText('Progetto tecnico aggiornato', { exact: true }).first()).toBeVisible();

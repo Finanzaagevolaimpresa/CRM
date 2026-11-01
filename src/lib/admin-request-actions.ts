@@ -1,5 +1,5 @@
 'use server';
-import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { headers } from 'next/headers';
 import { z } from 'zod';
 import { SerializableConflictError } from './serializable';
@@ -35,8 +35,7 @@ export async function mutateAdminRequest(form: FormData) {
     else if (error instanceof z.ZodError) result = 'INVALID';
     else throw error;
   }
-  // Request pages are dynamic. The client opens the returned record with a
-  // full GET after this response; a simultaneous action revalidation would
-  // race that navigation and may reopen the old submission form.
+  // Request pages are dynamic. Return the durable receipt to the form;
+  // opening the recorded request is a separate, explicit read-only GET.
   return { status: result, target };
 }

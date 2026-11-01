@@ -70,7 +70,12 @@ test('M4 migration registers exactly seven disabled mailboxes and preserves dorm
 
 test('M4 exact admin approval, commercial preparation and changed versions are enforced in storage', { skip: !enabled }, async () => {
   const f = await fixture();
-  const commercialDraft = await saveApprovedMessageDraft(db, f.commercial, { ...f.input, messageId: randomUUID(), attachmentVersionIds: [] }, runtime);
+  const commercialPractice = await db.technicalPractice.create({ data: { clientId: f.client.id, projectId: f.project.id,
+    title: 'Synthetic commercial context M4', practiceType: 'test', targetEntity: 'Synthetic',
+    createdById: f.admin.userId, commercialOwnerId: f.commercial.userId } });
+  const commercialDraft = await saveApprovedMessageDraft(db, f.commercial, { ...f.input, messageId: randomUUID(),
+    context: { kind: 'TECHNICAL', id: commercialPractice.id }, attachmentVersionIds: [] }, runtime);
+  await assert.rejects(readPracticeCommunications(db, f.operator, { kind: 'TECHNICAL', id: commercialPractice.id }), failure('DENIED'));
   assert.equal(commercialDraft.revision, 1);
   const saved = await saveApprovedMessageDraft(db, f.operator, f.input, runtime), binding = { messageId: saved.id, expectedRevision: saved.revision, snapshotHash: saved.snapshotHash };
   await submitApprovedMessage(db, f.operator, binding);
@@ -142,7 +147,7 @@ test('M4 fresh rights, suspension, approver revocation and mailbox disablement p
   await db.user.update({ where: { id: f.operator.userId }, data: { active: false } });
   await assert.rejects(prepareManualMessage(db, f.operator, input, runtime), failure('DENIED'));
   await db.user.update({ where: { id: f.operator.userId }, data: { active: true } });
-  const override = await db.userPermissionOverride.create({ data: { userId: f.operator.userId, permission: 'practice_communications.mark_used', allowed: false } });
+  const override = await db.userPermissionOverride.update({ where: { userId_permission: { userId: f.operator.userId, permission: 'practice_communications.mark_used' } }, data: { allowed: false } });
   await assert.rejects(prepareManualMessage(db, f.operator, input, runtime), failure('DENIED'));
   await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } });
   await db.clientService.update({ where: { id: f.service.id }, data: { status: 'sospeso' } });

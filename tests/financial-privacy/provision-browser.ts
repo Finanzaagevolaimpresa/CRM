@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { syntheticSession } from '../selective-sharing/fixtures';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
+import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import bcrypt from 'bcryptjs';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -30,9 +32,10 @@ async function main() {
     if (role === 'admin') adminId = user.id;
     // Deliberately reproduce legacy explicit allows. The role ceiling must win.
     await db.userPermissionOverride.createMany({ data: [...financialPermissions, 'document.download', 'document.upload', 'document.sensitive.read', 'client.read', 'service.read', 'project.read', 'technical.read'].map(permission => ({ userId: user.id, permission, allowed: permission !== denied })) });
-    const client = await db.client.create({ data: { type: 'societa', displayName: `Synthetic privacy ${key}`, consultantId: user.id, salesOwnerId: user.id } });
+    const technical = ['consulente', 'backoffice'].includes(role);
+    const client = await db.client.create({ data: { type: 'societa', displayName: `Synthetic privacy ${key}`, consultantId: technical ? user.id : null, salesOwnerId: user.id } });
     await db.clientReadGrant.create({ data: { userId: user.id, clientId: client.id, active: true, createdById: adminId, updatedById: adminId } });
-    const project = await db.project.create({ data: { clientId: client.id, title: 'Synthetic technical project', consultantId: user.id } });
+    const project = await db.project.create({ data: { clientId: client.id, title: 'Synthetic technical project', consultantId: technical ? user.id : null } });
     const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalog.id, assignedToId: user.id, status: 'pagato', paymentStatus: 'incassato', internalNotes: `PRIVATE_NOTE_${key}` } });
     const docs = [];
     for (const kind of ['ordinary', 'signed', 'paid', 'labelled', 'archive']) {
@@ -51,10 +54,17 @@ async function main() {
     fixtures.push({ role, key, denied, userId: user.id, clientId: client.id, projectId: project.id, serviceId: service.id, contractId: contract.id, paymentId: payment.id, docs });
   }
   const excluded = fixtures.find(x => x.role === 'consulente')!;
-  const session = await db.internalSession.create({ data: { userId: adminId, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3600_000) } });
+  const adminUser = await db.user.findUniqueOrThrow({ where: { id: adminId } });
+  const authority = { user: adminUser, ...await syntheticSession(db, adminUser) }, session = authority.session;
+  await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION),
+    keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!), status: 'ACTIVE', activatedAt: new Date() } });
+  for (const item of fixtures.filter(f => ['consulente', 'backoffice'].includes(f.role))) {
+    // Positive technical bytes require a separate, recorded review of this exact version.
+    await classifySyntheticTechnicalVersion(db, authority, item.docs.find(d => d.kind === 'ordinary')!.versionId);
+  }
   for (const item of fixtures.filter(f => f.denied)) {
     const preview = await previewPurchasedServiceHandoff(db, item.serviceId);
-    await db.$transaction(tx => handoffPurchasedService(tx, { userId: adminId, sessionId: session.id }, {
+    await db.$transaction(tx => handoffPurchasedService(tx, { userId: adminId, sessionId: session.sessionId }, {
       serviceId: item.serviceId, expectedHash: preview.expectedHash, technicalOwnerId: excluded.userId,
       departmentCode: 'TECNICO', variantCode: 'PRIVACY', dueDate: new Date(Date.now() + 86_400_000).toISOString(),
       activities: ['Verifica tecnica sintetica'], confirmed: true, reason: 'Collaudo sintetico dei dinieghi individuali',
@@ -64,12 +74,12 @@ async function main() {
   for (const role of blockedDelegationRoles) {
     const target: { userId: string } = fixtures.find(item => item.role === role && !item.denied)!;
     const before = await db.userPermissionOverride.findMany({ where: { userId: target.userId }, orderBy: { permission: 'asc' } });
-    const denied: Awaited<ReturnType<typeof updatePermissionOverridesWithAudit>> = await db.$transaction(tx => updatePermissionOverridesWithAudit(tx, { userId: adminId, sessionId: session.id }, target.userId, [{ permission: 'payment.read', allowed: true }]));
+    const denied: Awaited<ReturnType<typeof updatePermissionOverridesWithAudit>> = await db.$transaction(tx => updatePermissionOverridesWithAudit(tx, { userId: adminId, sessionId: session.sessionId }, target.userId, [{ permission: 'payment.read', allowed: true }]));
     assert.equal(denied.ok, false, 'Even admin cannot delegate reserved access to an excluded role');
     if (!denied.ok) assert.match(denied.message, /Contratti, pagamenti/);
     assert.deepEqual(await db.userPermissionOverride.findMany({ where: { userId: target.userId }, orderBy: { permission: 'asc' } }), before);
   }
-  await db.internalSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+  await db.internalSession.update({ where: { id: session.sessionId }, data: { revokedAt: new Date() } });
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, fixtures, overrideDelegationDenied: true, blockedDelegationRoles }));
 }

@@ -71,7 +71,8 @@ for (const profile of ['techA', 'techB', 'mixed'] as const) test(profile + ': te
     const response = await page.goto(url); expect(response?.status()).toBe(200);
     const title = url.startsWith('/documents') ? 'Documenti tecnici consentiti' : url.startsWith('/search') ? 'Ricerca nel perimetro tecnico'
       : url.startsWith('/notifications') ? 'Notifiche · perimetro tecnico' : url.startsWith('/communications') ? 'Comunicazioni · perimetro tecnico' : 'Ufficio Tecnico';
-    if (url === '/dashboard') await expect(page.getByRole('heading', { level: 1 })).toContainText('Il tuo lavoro tecnico');
+    if (url === '/dashboard') { await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dashboard');
+      await expect(page.locator('main')).toContainText('Il tuo lavoro tecnico'); }
     else await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
     const html = (await response!.text()) + (await page.content());
     for (const value of row.excluded) expect(html.includes(value), 'Page disclosed a reserved synthetic value').toBe(false);
@@ -83,6 +84,15 @@ test('Admin and Commerciale retain their actual permitted paths; exact classific
   const row = fixture.rows[2], ac = await browser.newContext(), tc = await browser.newContext(), sc = await browser.newContext();
   const admin = await ac.newPage(), tech = await tc.newPage(), sales = await sc.newPage();
   await login(admin, fixture.adminEmail, true); await login(tech, row.techA.email); await login(sales, row.sales.email);
+  for (const target of [row.techA, row.mixed]) {
+    await admin.goto('/settings/users/' + target.id);
+    await expect(admin.getByRole('heading', { name: 'Limite della funzione tecnica', exact: true })).toBeVisible();
+    for (const code of ['contract.read', 'payment.read', 'dossier.read']) {
+      const control = admin.locator('select[name="permission:' + code + '"]');
+      await expect(control).toBeDisabled();
+      await expect(control.locator('..')).toContainText('Effettivo: negato');
+    }
+  }
   await admin.goto('/contracts/' + row.contractId); await expect(admin.locator('main')).toContainText(row.contractNumber);
   const signed = await ac.request.get('/documents/' + row.documents[2].id + '/download?versionId=' + row.documents[2].versionId);
   expect(signed.status()).toBe(200); expect(await signed.body()).toEqual(Buffer.from(row.documents[2].text));

@@ -2059,11 +2059,11 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
     assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
     assert.deepEqual(await footprint(), before);
   } finally { await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null, revokedByUserId: null } }); }
-  const override = await db.userPermissionOverride.create({ data: { userId: ids.userA, permission: 'document.download', allowed: false } });
+  const override = await db.userPermissionOverride.update({ where: { userId_permission: { userId: ids.userA, permission: 'document.download' } }, data: { allowed: false } });
   try {
     await assert.rejects(exportEngagementWorkPackage(db, actorA, { ...exportInput, expectedVersionId: imported.id, packageId: randomUUID() }, runtime), deniedWork);
     assert.deepEqual(await footprint(), before);
-  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  } finally { await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } }); }
   const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: exportInput.packageId } });
   await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: { ...(exportAudit.after as Record<string, Prisma.InputJsonValue>), materialSnapshotHash: '0'.repeat(64) } } });
   try {

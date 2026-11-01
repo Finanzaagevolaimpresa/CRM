@@ -247,7 +247,7 @@ for (const code of initialServiceCodes) test('M5 full synthetic service: ' + cod
   const docx = buildMarkdownDocx({ title: f.version.title, content: f.version.content, exportedAt: new Date(), logo: readFileSync('public/logo-fai.png') });
   const record = await exportApprovedEngagementDossier(db, f.actors.operator, { dossierId: f.dossier.id, versionId: f.version.id, format: 'docx' }, docx);
   assert.equal(record.record.artifactHash, createHash('sha256').update(docx).digest('hex'));
-  const decoded = JSON.parse(execFileSync('python3', ['-I','-S','-c', 'import sys,io,zipfile,hashlib,json; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({"logo":hashlib.sha256(z.read("word/media/logo-fai.png")).hexdigest(),"disclaimer":"Non eroghiamo finanziamenti." in z.read("word/document.xml").decode()}))'], { input: docx, encoding: 'utf8' }));
+  const decoded = JSON.parse(execFileSync(process.env.PYTHON_BIN ?? 'python3', ['-I','-S','-c', 'import sys,io,zipfile,hashlib,json; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({"logo":hashlib.sha256(z.read("word/media/logo-fai.png")).hexdigest(),"disclaimer":"Non eroghiamo finanziamenti." in z.read("word/document.xml").decode()}))'], { input: docx, encoding: 'utf8' }));
   assert.equal(decoded.logo, createHash('sha256').update(readFileSync('public/logo-fai.png')).digest('hex')); assert.equal(decoded.disclaimer, true);
   const authorization = await authorizeEngagementDossierDelivery(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash,
     recipients: [{ kind: 'CLIENT', name: 'Cliente sintetico M5', address: 'synthetic@invalid.test', synthetic: true }] });

@@ -14,7 +14,7 @@ import { lifecycleReadinessFixture } from '../admin-lifecycle/fixtures';
 import { readAdminOperationalLink, previewAdminOperationalLink, saveAdminOperationalLink } from '../../src/lib/admin-operational-links';
 import { readAdminRoleProfile, saveAdminRoleProfile } from '../../src/lib/admin-role-profiles';
 import { executeAdminUserCommand } from '../../src/lib/admin-user-commands';
-import { adminUserVersion } from '../../src/lib/admin-user-command-contract';
+import { adminUserVersion } from '../../src/lib/admin-user-version';
 
 const db = new PrismaClient();
 async function main() {

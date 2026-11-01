@@ -1,4 +1,4 @@
-import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { NextResponse } from 'next/server';
 import { auditCommercialOfferExport } from '@/lib/actions';

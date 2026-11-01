@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
+import { ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import { syntheticAuthority, syntheticSharingCase } from './fixtures';
 import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -19,7 +20,7 @@ async function main() {
   for (const item of [...fixture.documents, fixture.otherDocument]) {
     const target = path.resolve(storage, item.version.storagePath);
     assert.ok(target.startsWith(path.resolve(storage) + path.sep));
-    await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, item.bytes, { flag: 'wx', mode: 0o600 });
+    await ensureSyntheticTechnicalBytes(db, item.version.storagePath, item.bytes);
   }
   await db.$transaction(async tx => {
     for (const person of [admin, fixture.reader, fixture.otherAdmin]) await revokeAllInternalSessions(tx, person.user.id, 'INTERNAL_GLOBAL', admin.user.id);

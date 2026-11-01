@@ -8,7 +8,7 @@ import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token
 import { readAdminRoleProfile, saveAdminRoleProfile, reconcileAdminRoleProfile } from '../src/lib/admin-role-profiles';
 import { roleProfileModel, roleProfileDigest, type ProfileRole } from '../src/lib/admin-role-profile-contract';
 import { executeAdminUserCommand, reconcileAdminUserCommand } from '../src/lib/admin-user-commands';
-import { adminUserVersion } from '../src/lib/admin-user-command-contract';
+import { adminUserVersion } from '../src/lib/admin-user-version';
 import { roleHasPermission, type Permission } from '../src/lib/permissions';
 import { hasPermission } from '../src/lib/permission-evaluator';
 

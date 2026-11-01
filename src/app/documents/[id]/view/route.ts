@@ -1,4 +1,4 @@
-import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';

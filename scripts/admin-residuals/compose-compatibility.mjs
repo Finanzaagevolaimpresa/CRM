@@ -35,6 +35,10 @@ const legacyPaths = [
   'src/lib/private-document-versions.ts', 'src/lib/technical-document-acquisition-persistence.ts',
   'src/lib/technical-document-acquired-access.ts', 'src/lib/selective-client-documents.ts',
   'src/lib/admin-practice-formalization-store.ts', 'src/lib/admin-operational-link-contract.ts',
+  // Exact interface providers required by the retained privacy/readers overlay.
+  'src/components/admin-reference-select.tsx', 'src/lib/admin-records.ts',
+  'src/lib/admin-private-document-metadata.ts', 'src/lib/technical-document-catalog.ts',
+  'src/lib/technical-work-item-catalog.ts',
   'src/lib/practice-readiness.ts', 'src/lib/ordinary-email-activation.ts', 'src/app/acquired-documents/[id]/route.ts',
   'src/app/clients/[id]/acquired-documents/page.tsx', 'src/app/practice-readiness/page.tsx',
   'scripts/m4/verify-schema.mjs', 'scripts/admin-residuals/schema-binding.json',

@@ -1,5 +1,5 @@
 'use server';
-import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { headers } from 'next/headers';
 import { unstable_rethrow } from 'next/navigation';

@@ -6,8 +6,8 @@ import { technicalActionAllowed } from '../src/lib/technical-surface-policy';
 
 // Execute the real server guard. Only its cookie/session boundary is supplied;
 // the mandatory technical policy is identical to the application policy.
-const source = ts.createSourceFile('technical-surface-guards.tsx',
-  readFileSync('src/lib/technical-surface-guards.tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const source = ts.createSourceFile('technical-server-guards.ts',
+  readFileSync('src/lib/technical-server-guards.ts', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'assertTechnicalServerAction');
 assert(declaration);
 const javascript = ts.transpileModule(declaration.getText(source), {

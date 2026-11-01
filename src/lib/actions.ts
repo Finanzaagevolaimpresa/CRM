@@ -1,5 +1,5 @@
 'use server';
-import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
 import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';

@@ -60,6 +60,9 @@ export async function syntheticCase(db: PrismaClient, code: InitialServiceCode, 
   const checklist = await db.documentChecklistItem.create({ data: { clientId: client.id, projectId: project.id, documentId: document.id, title: 'Materiale iniziale M5', createdById: actors.operator.userId } });
   const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalogRevision.serviceCatalogId,
     contractId: contract.id, assignedToId: actors.operator.userId, status: 'richiesto', operationalStatus: 'nuova' } });
+  // Material belongs to this purchased service, not to every project reader.
+  await db.document.update({ where: { id: document.id }, data: { clientServiceId: service.id } });
+  await db.documentChecklistItem.update({ where: { id: checklist.id }, data: { clientServiceId: service.id } });
   const offerRevision = await proposePracticeOfferRevision(db, actors.operator, { controlledIntakeId: intake.id, commercialOfferId: offer.id,
     serviceRevisionId: catalogRevision.id, clientId: client.id, projectId: project.id, scope: 'Servizio sintetico con risultato autonomo',
     startupConditions: 'Incarico, pagamento e materiale documentati', requiredInitialAmount: total.toFixed(2), expectedOfferUpdatedAt: offer.updatedAt });

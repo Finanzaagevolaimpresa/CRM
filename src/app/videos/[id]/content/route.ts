@@ -1,4 +1,4 @@
-import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { getSession } from '@/lib/auth';

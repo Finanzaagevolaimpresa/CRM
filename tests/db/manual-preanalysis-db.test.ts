@@ -12,6 +12,7 @@ const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({ requested: pr
 const prefix = `pre-r02-${randomUUID()}`;
 const ownerId = `${prefix}-owner`;
 const foreignId = `${prefix}-foreign`;
+const editorId = `${prefix}-editor`;
 const clientId = `${prefix}-client`;
 const otherClientId = `${prefix}-other-client`;
 const projectId = `${prefix}-project`;
@@ -19,7 +20,7 @@ const otherProjectId = `${prefix}-other-project`;
 const companyId = `${prefix}-company`;
 const otherCompanyId = `${prefix}-other-company`;
 
-function actor(userId: string): AuthSession { return { userId, role: userId === ownerId ? 'admin' : 'consulente', active: true, permissionOverrides: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 }; }
+function actor(userId: string): AuthSession { return { userId, role: userId === ownerId ? 'admin' : userId === editorId ? 'direzione' : 'consulente', active: true, permissionOverrides: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 }; }
 async function expectDenied(operation: Promise<unknown>) { await assert.rejects(operation, (error: unknown) => error instanceof ManualPreAnalysisError && error.code === 'DENIED'); }
 
 test.before(async () => {
@@ -27,8 +28,10 @@ test.before(async () => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(prisma);
   await prisma.user.createMany({ data: [
     { id: ownerId, email: `${ownerId}@invalid.test`, name: 'Admin sintetico delle rettifiche', passwordHash: 'synthetic-not-login', role: 'admin' },
+    { id: editorId, email: `${editorId}@invalid.test`, name: 'Redattore direzione sintetico', passwordHash: 'synthetic-not-login', role: 'direzione' },
     { id: foreignId, email: `${foreignId}@invalid.test`, name: 'Estraneo sintetico', passwordHash: 'synthetic-not-login', role: 'consulente' },
   ] });
+  await prisma.userPermissionOverride.createMany({ data: ['dossier.read', 'project.write'].map(permission => ({ userId: editorId, permission, allowed: true })) });
   await prisma.client.createMany({ data: [
     { id: clientId, type: 'societa', displayName: 'Cliente sintetico', consultantId: ownerId },
     { id: otherClientId, type: 'societa', displayName: 'Altro cliente sintetico', consultantId: foreignId },
@@ -80,9 +83,13 @@ test('PostgreSQL: Admin correction, technical denial, context coherence, no-op, 
 
 test('PostgreSQL: permission/context revocation and linked deletion are rechecked in transaction', { skip: !enabled }, async () => {
   const record = await createManualPreAnalysisRecord(prisma, actor(ownerId), { clientId, projectId, internalSummary: 'Revoca' });
-  await prisma.userPermissionOverride.create({ data: { userId: ownerId, permission: 'dossier.read', allowed: false } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
-  await prisma.userPermissionOverride.deleteMany({ where: { userId: ownerId, permission: 'dossier.read' } });
+  assert.equal((await updateManualPreAnalysisRecord(prisma, actor(editorId), { id: record.id, version: record.updatedAt, internalSummary: 'Revoca' })).changed, false);
+  await prisma.userPermissionOverride.update({ where: { userId_permission: { userId: editorId, permission: 'dossier.read' } }, data: { allowed: false } });
+  const auditBeforeRevocation = await prisma.auditLog.count({ where: { entityId: record.id } });
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(editorId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
+  assert.equal(await prisma.auditLog.count({ where: { entityId: record.id } }), auditBeforeRevocation);
+  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: record.id } })).internalSummary, 'Revoca');
+  await prisma.userPermissionOverride.deleteMany({ where: { userId: editorId, permission: 'dossier.read' } });
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: foreignId } });
   assert.equal((await updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Revoca' })).changed, false,
     'The administrative author may still correct a project assigned to a different technician');

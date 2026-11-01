@@ -1,12 +1,12 @@
 import type { PrismaClient } from '@prisma/client';
 import type { AuthSession } from '../../src/lib/auth';
-import { syntheticCase, syntheticUser } from '../m5/fixtures';
+import { syntheticCase, syntheticUser, syntheticDossierOperator } from '../m5/fixtures';
 import { initialServicePlanHash, initialServiceStages } from '../../src/lib/initial-service-contract';
 import { authorizeEngagementDossierDelivery, getEngagementDossierReadAccess, mutateInitialServiceWorkflow,
   recordEngagementDossierDelivery, reviewEngagementDossierVersion } from '../../src/lib/engagement-dossier';
 
 export async function adminDossierFixture(db: PrismaClient, admin: AuthSession) {
-  const actors = { admin, operator: await syntheticUser(db, 'consulente', 'Operatore sintetico archivio'),
+  const actors = { admin, operator: await syntheticDossierOperator(db, 'Operatore sintetico archivio'),
     human1: await syntheticUser(db, 'revisore', 'Revisore sintetico archivio 1'), human2: await syntheticUser(db, 'revisore', 'Revisore sintetico archivio 2') };
   const f = await syntheticCase(db, 'dossier_preanalisi', actors);
   await mutateInitialServiceWorkflow(db, admin, { dossierId: f.dossier.id, intent: 'configure', value: {

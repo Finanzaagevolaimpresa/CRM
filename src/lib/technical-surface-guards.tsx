@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { getSession } from './auth';
 import { isTechnicalAccount } from './technical-confidentiality';
-import { technicalActionAllowed, technicalFileRouteAllowed, technicalPageMode } from './technical-surface-policy';
+import { technicalPageMode } from './technical-surface-policy';
 import { TechnicalSafeNavigation } from '@/components/technical-safe-navigation';
 
 export function withTechnicalPage<P>(route: string, original: (props: P) => ReactNode | Promise<ReactNode> | void) {
@@ -17,12 +17,4 @@ export function withTechnicalPage<P>(route: string, original: (props: P) => Reac
       params?: Promise<Record<string, string>>; searchParams?: Promise<Record<string, string>>;
     } });
   };
-}
-export async function assertTechnicalFileRoute(route: string) {
-  const session = await getSession();
-  if (session && isTechnicalAccount(session) && !technicalFileRouteAllowed(route)) notFound();
-}
-export async function assertTechnicalServerAction(action: string) {
-  const session = await getSession();
-  if (session && !technicalActionAllowed(session, action)) throw new Error('Risorsa non disponibile o non accessibile.');
 }

@@ -1,4 +1,4 @@
-import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { readPersonalAcquiredDocument } from '@/lib/technical-document-acquired-access';

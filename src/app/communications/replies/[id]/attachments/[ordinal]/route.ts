@@ -1,4 +1,4 @@
-import { assertTechnicalFileRoute } from '@/lib/technical-surface-guards';
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { unstable_rethrow } from 'next/navigation';
 import { requireAnyPermission } from '@/lib/auth';

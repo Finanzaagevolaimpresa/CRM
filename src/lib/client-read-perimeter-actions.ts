@@ -1,5 +1,5 @@
 'use server';
-import { assertTechnicalServerAction } from '@/lib/technical-surface-guards';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';

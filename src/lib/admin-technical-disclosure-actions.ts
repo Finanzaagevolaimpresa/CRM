@@ -1,5 +1,5 @@
 'use server';
-import { assertTechnicalServerAction } from './technical-surface-guards';
+import { assertTechnicalServerAction } from './technical-server-guards';
 import { cookies, headers } from 'next/headers';
 import { getSession } from './auth';
 import { prisma } from './prisma';

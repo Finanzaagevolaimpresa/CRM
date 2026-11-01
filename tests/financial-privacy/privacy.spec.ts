@@ -46,6 +46,39 @@ async function login(page: Page, role: string) {
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
+// Relay only a synthetic native action's public transport fields. Authentication
+// belongs to the target browser context; no cookie or token is read or copied.
+async function routeNativeActionAs(source: Page, target: Page) {
+  const observed: { status: number; body: string }[] = [];
+  await source.route('**/*', async route => {
+    const request = route.request();
+    if (request.method() !== 'POST' || !request.headers()['next-action']) return route.continue();
+    const headers: Record<string, string> = { origin: new URL(request.url()).origin };
+    for (const key of ['next-action', 'content-type', 'accept', 'next-router-state-tree']) {
+      const value = await request.headerValue(key); if (value) headers[key] = value;
+    }
+    const response = await target.request.post(request.url(), { headers, data: request.postDataBuffer()!, maxRedirects: 0 });
+    observed.push({ status: response.status(), body: await response.text() });
+    await route.fulfill({ response });
+  });
+  return observed;
+}
+async function classifyVersion(admin: Page, documentId: string, versionId: string, expected: Buffer) {
+  const bytes = await admin.request.get(`/documents/${documentId}/view?versionId=${versionId}`);
+  expect(bytes.status()).toBe(200); expect(await bytes.body()).toEqual(expected);
+  await admin.goto('/settings/security');
+  await admin.getByLabel('Password corrente', { exact: true }).fill(password);
+  await admin.getByRole('button', { name: 'Conferma per 30 minuti', exact: true }).click();
+  await expect(admin).toHaveURL(/status=active/);
+  await admin.goto('/admin/document-disclosure/' + versionId);
+  await admin.locator('[data-interactive-ready="true"]').last().waitFor({ state: 'attached' });
+  await admin.getByRole('combobox', { name: 'Classificazione', exact: true }).selectOption('TECHNICAL_CONTENT');
+  await admin.getByRole('checkbox', { name: /^Ho esaminato questa versione completa/ }).check();
+  await admin.getByLabel('Motivazione', { exact: true }).fill('Verifica della sola versione sintetica e dei suoi metadati');
+  await admin.getByLabel('Confermo questa classificazione, senza aggiungere destinatari o versioni.', { exact: true }).check();
+  await admin.getByRole('button', { name: 'Registra classificazione', exact: true }).click();
+  await expect(admin.getByRole('link', { name: 'Riapri e verifica la classificazione', exact: true })).toBeVisible();
+}
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.FINANCIAL_PRIVACY_BROWSER_CONFIRMED).toBe('1'); expect(fixture.synthetic).toBe(true); expect(fixture.overrideDelegationDenied).toBe(true); expect(fixture.blockedDelegationRoles).toContain('direzione'); });
 test.afterAll(async () => { await db.$disconnect(); });
 for (const [name, width, height, role] of [['desktop', 1280, 900, 'admin'], ['mobile', 390, 844, 'amministrazione']] as const) {
@@ -147,6 +180,31 @@ for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844
 for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real lists, details, HTML, report and versioned downloads obey the ceiling`, async ({ page }) => {
   await login(page, f.role);
   const financial = ['admin', 'amministrazione'].includes(f.role);
+  if (['consulente', 'backoffice'].includes(f.role)) {
+    const forbidden = [f.contractId, f.paymentId, 'PRIVATE_NOTE_' + f.role, 'CONTRACT_SECRET_' + f.role,
+      'PAYMENT_SECRET_' + f.role, ...f.docs.filter(d => d.kind !== 'ordinary').map(d => d.title)];
+    for (const route of ['/progress?client=' + f.clientId, '/clients/' + f.clientId,
+      '/contracts/' + f.contractId, '/contracts', '/payments', '/audit-log', '/clients/' + f.clientId + '/operational-report']) {
+      const response = await page.request.get(route); expect(response.status(), route).toBe(404);
+      const body = await response.text(); for (const marker of forbidden) expect(body).not.toContain(marker);
+    }
+    for (const route of ['/projects/' + f.projectId, '/documents', '/search?q=' + encodeURIComponent(f.key)]) {
+      const response = await page.goto(route); expect(response?.status()).toBe(200);
+      const body = await response!.text(); for (const marker of forbidden) expect(body).not.toContain(marker);
+    }
+    const ordinary = f.docs.find(d => d.kind === 'ordinary')!;
+    await page.goto('/projects/' + f.projectId);
+    await expect(page.locator('a[href="/documents/' + ordinary.id + '/view?versionId=' + ordinary.versionId + '"]')).toBeVisible();
+    for (const doc of f.docs) for (const suffix of ['', '?versionId=' + doc.versionId]) {
+      const download = await page.request.get('/documents/' + doc.id + '/download' + suffix);
+      const view = await page.request.get('/documents/' + doc.id + '/view' + suffix);
+      const expected = doc.kind === 'ordinary' ? 200 : 403;
+      expect(download.status()).toBe(expected); expect(view.status()).toBe(expected);
+      if (expected === 200) expect(await view.body()).toEqual(await download.body());
+      else { expect(await view.text()).toBe('Documento non disponibile'); expect(await download.text()).toBe('Documento non disponibile'); }
+    }
+    return;
+  }
   const progress = await page.goto(`/progress?client=${f.clientId}`); expect(progress?.status()).toBe(200);
   const progressHtml = await progress!.text();
   expect(progressHtml.includes(`data-progress-contract="${f.contractId}"`)).toBe(financial);
@@ -283,16 +341,25 @@ test('admin selects three files once, including ZIP and a PDF larger than 1 MB; 
   writeFileSync(join(root, 'upload-browser-proof.json'), JSON.stringify({ synthetic: true, multipleFiles: 3, zipRetainedWithoutExtraction: true, largeFile: true, versionsAndAudits: true }));
 });
 
-test('an excluded role cannot upload an archive even with document.upload and its own assigned context', async ({ page }) => {
-  await login(page, 'consulente'); await page.goto('/documents');
+test('an excluded role cannot invoke a legacy archive upload action with an assigned context and forced allow', async ({ page, browser }) => {
+  const context = await browser.newContext(), technician = await context.newPage();
   const f = fixture.fixtures.find(x => x.role === 'consulente')!;
-  const form = page.locator('form').filter({ has: page.locator('input[type="file"]') }).first();
-  await form.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
-  await form.locator('select[name="clientId"]').selectOption(f.clientId);
-  await form.locator('input[type="file"]').setInputFiles({ name: 'denied-archive.zip', mimeType: 'application/zip', buffer: Buffer.from('504b0506000000000000000000000000000000000000', 'hex') });
-  await form.getByRole('button', { name: 'Carica in storage privato' }).click();
-  await expect(page.getByRole('list', { name: 'Esito caricamenti' })).toContainText('Risorsa non disponibile');
-  expect(await db.document.count({ where: { clientId: f.clientId, fileName: 'denied-archive.zip' } })).toBe(0);
+  try {
+    await login(technician, 'consulente'); await technician.goto('/documents');
+    await expect(technician.locator('input[type="file"]')).toHaveCount(0);
+    await login(page, 'admin'); await page.goto('/documents');
+    const form = page.locator('form').filter({ has: page.locator('input[type="file"]') }).first();
+    await form.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await form.locator('select[name="clientId"]').selectOption(f.clientId);
+    await form.locator('input[type="file"]').setInputFiles({ name: 'denied-archive.zip', mimeType: 'application/zip', buffer: Buffer.from('504b0506000000000000000000000000000000000000', 'hex') });
+    const before = await db.auditLog.count({ where: { actorId: f.userId } });
+    const observed = await routeNativeActionAs(page, technician);
+    await form.getByRole('button', { name: 'Carica in storage privato' }).click();
+    await expect.poll(() => observed.length).toBe(1);
+    expect(observed[0].status).toBe(500); expect(observed[0].body).toContain('Risorsa non disponibile o non accessibile.');
+    expect(await db.document.count({ where: { clientId: f.clientId, fileName: 'denied-archive.zip' } })).toBe(0);
+    expect(await db.auditLog.count({ where: { actorId: f.userId } })).toBe(before);
+  } finally { await context.close(); }
 });
 
 test('practice upload retains exact context and ordinary technician opens the file without a selective grant; revocation wins', async ({ browser }) => {
@@ -326,8 +393,11 @@ test('practice upload retains exact context and ordinary technician opens the fi
     const doc = docs[0]; expect(doc.projectId).toBe(tech.projectId); expect(doc.clientServiceId).toBe(tech.serviceId);
     expect(await db.documentVersion.count({ where: { documentId: doc.id } })).toBe(1);
     expect(await db.auditLog.count({ where: { entityId: doc.id, event: 'document_upload' } })).toBe(1);
+    const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: doc.id } });
+    expect((await t.request.get(`/documents/${doc.id}/view?versionId=${version.id}`)).status()).toBe(404);
+    await classifyVersion(a, doc.id, version.id, file.buffer);
     await t.goto(`/technical-office/practices/${practice.id}`);
-    const view = t.locator(`a[href="/documents/${doc.id}/view"]`); await expect(view).toBeVisible();
+    const view = t.locator(`a[href="/documents/${doc.id}/view?versionId=${version.id}"]`); await expect(view).toBeVisible();
     const opened = tc.waitForEvent('page'); await view.click(); const viewer = await opened;
     await expect(viewer.locator('body')).toContainText(file.buffer.toString());
     const download = await t.request.get(`/documents/${doc.id}/download`);
@@ -347,7 +417,7 @@ test('practice upload retains exact context and ordinary technician opens the fi
     expect(await db.auditLog.count({ where: { actorId: tech.userId, entityId: doc.id, event: { in: ['document_view', 'document_download'] } } })).toBe(before);
     await viewer.close();
     writeFileSync(join(root, 'document-context-ordinary-proof.json'), JSON.stringify({ synthetic: true, exactContext: true, persistedOnce: true,
-      versionAndAuditOnce: true, nativeTechnicianPreview: true, exactDownloadBytes: true, otherTechnicianDenied: true, openSessionRevocation: true, newSelectiveGrants: 0 }));
+      versionAndAuditOnce: true, unclassifiedDenied: true, exactVersionExplicitlyClassified: true, nativeTechnicianPreview: true, exactDownloadBytes: true, otherTechnicianDenied: true, openSessionRevocation: true, newSelectiveGrants: 0 }));
   } finally {
     await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: true } });
     await ac.close(); await tc.close(); await other.close();
@@ -452,12 +522,17 @@ test('native document versions preserve old bytes, expose exact history and reco
     const expiry = new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short' }).format(validUntil);
     await expect(row).toContainText(expiry + ' · Europe/Rome');
     expect((await db.document.findUniqueOrThrow({ where: { id: doc.id } })).validUntil?.toISOString()).toBe(validUntil.toISOString());
-    await t.goto(path);
-    const popup = tc.waitForEvent('page'); await t.getByRole('link', { name: 'Visualizza versione 1', exact: true }).click();
-    const view = await popup; await expect(view.locator('body')).toContainText(original);
+    expect((await t.goto(path))?.status()).toBe(404);
+    expect(await t.content()).not.toContain(doc.title);
     const latest = await db.documentVersion.findFirstOrThrow({ where: { documentId: doc.id, version: 2 } });
-    expect((await t.request.get(`/documents/${doc.id}/download?versionId=${first.id}`)).status()).toBe(200);
-    expect((await (await t.request.get(`/documents/${doc.id}/download?versionId=${latest.id}`)).body()).toString()).toBe(replacement);
+    for (const versionId of [first.id, latest.id]) expect((await t.request.get('/documents/' + doc.id + '/view?versionId=' + versionId)).status()).toBe(404);
+    await classifyVersion(a, doc.id, first.id, Buffer.from(original));
+    const view = await tc.newPage();
+    expect((await view.goto('/documents/' + doc.id + '/view?versionId=' + first.id))?.status()).toBe(200);
+    await expect(view.locator('body')).toContainText(original);
+    expect(await (await t.request.get('/documents/' + doc.id + '/download?versionId=' + first.id)).body()).toEqual(Buffer.from(original));
+    expect((await t.request.get('/documents/' + doc.id + '/download?versionId=' + latest.id)).status()).toBe(404);
+    expect(await (await a.request.get('/documents/' + doc.id + '/download?versionId=' + latest.id)).body()).toEqual(Buffer.from(replacement));
     expect((await o.goto(path))?.status()).toBe(404);
     expect(await o.content()).not.toContain(doc.title);
     await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: false } });
@@ -498,9 +573,12 @@ test('commercial native version upload remains on the owned client and rejects a
 });
 
 for (const role of ['admin', 'consulente']) for (const action of ['create', 'edit', 'status'] as const) {
-  test(`P2-01 ${role}: real ${action} action on a page opened before suspension preserves rows and audit`, async ({ page }) => {
+  test(`P2-01 ${role}: real ${action} action preserves rows and audit after hold or technical denial`, async ({ page, browser }) => {
     const f = fixture.fixtures.find(item => item.role === role && !item.denied)!;
-    await login(page, role);
+    const technicalContext = role === 'consulente' ? await browser.newContext() : null;
+    const technician = technicalContext ? await technicalContext.newPage() : null;
+    if (technician) await login(technician, role);
+    await login(page, 'admin');
     const practice = await db.technicalPractice.create({ data: { clientId: f.clientId, title: `Synthetic held ${role} ${action}`, practiceType: 'synthetic', targetEntity: 'synthetic', technicalOwnerId: f.userId, createdById: f.userId } });
     await page.goto(action === 'create' ? '/technical-office/practices?new=1' : `/technical-office/practices/${practice.id}`);
     const buttonName = action === 'create' ? 'Crea pratica' : action === 'edit' ? 'Salva dati' : 'Salva stato';
@@ -517,6 +595,13 @@ for (const role of ['admin', 'consulente']) for (const action of ['create', 'edi
       // Exercise the actual server action with an explicitly supplied status,
       // including the creation/edit forms that do not normally render it.
       await form.evaluate(node => { const field = document.createElement('input'); field.type = 'hidden'; field.name = 'status'; field.value = 'presentata'; node.appendChild(field); });
+    }
+    // The ordinary Admin form supplies the actual native payload. For a technician,
+    // the request executes once under that technician's own session, never Admin.
+    if (technician) {
+      await technician.goto(`/technical-office/practices/${practice.id}`);
+      await expect(technician.getByRole('button', { name: buttonName, exact: true })).toHaveCount(0);
+      await routeNativeActionAs(page, technician);
     }
     // The browser already holds the form; only the authoritative DB changes.
     await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
@@ -554,10 +639,16 @@ for (const role of ['admin', 'consulente']) for (const action of ['create', 'edi
       const failureLine = response.body.split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
       expect(failureLine).toBeTruthy();
       const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
-      expect(failure.name).toBe('UserFacingActionError');
-      expect(failure.message).toContain('sospesa. Rivolgiti al responsabile per la verifica interna.');
-      expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalPracticeOperational')).toBe(true);
-    } finally { await db.client.update({ where: { id: f.clientId }, data: { status: 'attivo' } }); }
+      if (technician) {
+        expect(failure.name).toBe('Error');
+        expect(failure.message).toBe('Risorsa non disponibile o non accessibile.');
+        expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalServerAction')).toBe(true);
+      } else {
+        expect(failure.name).toBe('UserFacingActionError');
+        expect(failure.message).toContain('sospesa. Rivolgiti al responsabile per la verifica interna.');
+        expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalPracticeOperational')).toBe(true);
+      }
+    } finally { await db.client.update({ where: { id: f.clientId }, data: { status: 'attivo' } }); await technicalContext?.close(); }
   });
 }
 

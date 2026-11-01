@@ -272,6 +272,22 @@ test('document search retains stale selected context until explicit removal and 
   expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
   await screenshot(admin, 'document-catalogue-stale');
   await admin.getByRole('button', { name: 'Rimuovi questa versione', exact: true }).click();
+  await expect(admin.getByLabel(documentLabel({ ...chosen, title }), { exact: true })).toHaveCount(0);
+  // Changed metadata invalidates the previous classification. Re-examine the
+  // exact synthetic bytes and record a separate Admin decision before reuse.
+  const classification = await ac.newPage();
+  const versionId = chosen.versions[0].fileId;
+  const bytes = await ac.request.get('/documents/' + chosen.id + '/view?versionId=' + versionId);
+  expect(bytes.status()).toBe(200); expect(await bytes.body()).toEqual(Buffer.from(chosen.versions[0].text));
+  await classification.goto('/admin/document-disclosure/' + versionId);
+  await classification.locator('[data-interactive-ready="true"]').last().waitFor({ state: 'attached' });
+  await classification.getByRole('combobox', { name: 'Classificazione', exact: true }).selectOption('TECHNICAL_CONTENT');
+  await classification.getByRole('checkbox', { name: /^Ho esaminato questa versione completa/ }).check();
+  await classification.getByLabel('Motivazione', { exact: true }).fill('Nuova verifica dei metadati e dei byte della sola fixture sintetica');
+  await classification.getByLabel('Confermo questa classificazione, senza aggiungere destinatari o versioni.', { exact: true }).check();
+  await classification.getByRole('button', { name: 'Registra classificazione', exact: true }).click();
+  await expect(classification.getByRole('link', { name: 'Riapri e verifica la classificazione', exact: true })).toBeVisible();
+  await classification.close(); await searchDocuments(admin, chosen.fileName);
   await admin.getByLabel(documentLabel({ ...chosen, title }), { exact: true }).check();
   await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();

@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { adminUserVersion, type AdminUserOperation, type AdminUserVersionInput } from '@/lib/admin-user-command-contract';
+import { type AdminUserOperation, type AdminUserVersionInput } from '@/lib/admin-user-command-contract';
+import { adminUserVersion } from '@/lib/admin-user-version';
 import { AdminUserForm } from './admin-user-form';
 
 const field = 'block w-full rounded-xl border p-3';

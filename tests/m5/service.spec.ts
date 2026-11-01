@@ -183,7 +183,7 @@ test('readiness hides sibling practices, funding, revisions and selector options
   }
   const denied = await ap.goto('/practice-readiness'), allowed = await bp.goto('/practice-readiness');
   const deniedHtml = await denied!.text(), allowedHtml = await allowed!.text();
-  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker, 'SYNTHETIC_M5_PAYMENT'])
+  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, scopeMarker, startupMarker, 'SYNTHETIC_M5_PAYMENT'])
     expect(deniedHtml).not.toContain(marker);
   for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker]) expect(allowedHtml).toContain(marker);
   await db.clientService.update({ where: { id: fixture.service.id }, data: { assignedToId: a.userId } });

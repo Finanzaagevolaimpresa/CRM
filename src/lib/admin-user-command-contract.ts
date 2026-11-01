@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { canonicalSha256 } from './canonical-json';
 
 export const adminUserOperation = z.enum(['CREATE', 'ROLE', 'ACTIVATE', 'DEACTIVATE', 'OVERRIDES', 'RESET_OVERRIDES',
   'PROFILE', 'PASSWORD_RESET', 'REMOVE', 'RESTORE', 'REVOKE_SESSIONS', 'REVOKE_SESSION', 'APPLY_ROLE_PROFILE']);
@@ -11,8 +10,3 @@ export type AdminUserCommandState = { ok: boolean; message: string; stepUpRequir
   closed?: boolean; userId?: string; commandId?: string };
 export type AdminUserVersionInput = { id: string; name: string; email: string; role: string; active: boolean;
   deletedAt: Date | null; updatedAt: Date; permissionOverrides: { permission: string; allowed: boolean }[] };
-export function adminUserVersion(user: AdminUserVersionInput | null) {
-  return canonicalSha256(user ? { id: user.id, name: user.name, email: user.email, role: user.role, active: user.active,
-    deletedAt: user.deletedAt?.toISOString() ?? null, updatedAt: user.updatedAt.toISOString(),
-    overrides: user.permissionOverrides.map(({ permission, allowed }) => ({ permission, allowed })).sort((a, b) => a.permission.localeCompare(b.permission)) } : null);
-}

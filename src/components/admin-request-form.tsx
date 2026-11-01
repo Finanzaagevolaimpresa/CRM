@@ -20,6 +20,7 @@ export function AdminRequestForm({ children, className, recoveryScope }: { child
   const prior = useSyncExternalStore(subscribeReady, () => pendingCommand(recoveryScope), serverCommand);
   const sent = useRef(false), [command, setCommand] = useState(''), [pending, setPending] = useState(false), [unknown, setUnknown] = useState(false);
   const [savedHref, setSavedHref] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<'UNAVAILABLE' | 'INVALID' | null>(null);
   const unresolved = prior && !command;
   const recovery = command || prior;
   return <form action={async form => {
@@ -28,7 +29,9 @@ export function AdminRequestForm({ children, className, recoveryScope }: { child
       setPending(false);
       if (result.status === 'RECORDED') {
         forget(recoveryScope, String(form.get('commandId') ?? '')); setSavedHref(result.target); setUnknown(false);
-      } else setUnknown(true);
+      } else { setRefusal(result.status); setUnknown(false); }
+      // A server refusal is observed. Keep the same command available for
+      // read-only reconciliation; it must never become a blind resubmission.
       // Keep the durable receipt on this page. Opening it is an explicit GET;
       // no action completion or background refresh can replay the command.
     } catch {
@@ -42,7 +45,10 @@ export function AdminRequestForm({ children, className, recoveryScope }: { child
   }}><fieldset disabled={!ready || !!unresolved || !!savedHref} className="contents">{children}</fieldset>
     {savedHref && <><p role="status">Operazione registrata nello storico. Nessuna email inviata.</p><a className="block font-bold underline" href={savedHref}>Apri richiesta registrata</a></>}
     {pending && <p role="status">Registrazione in corso. Conserva questa pagina fino all’esito; non ripetere la richiesta.</p>}
-    {(unknown || unresolved) && <p role="status">Risposta non osservata. Verifica lo stesso comando prima di preparare un’altra richiesta.</p>}
+    {refusal && <p role="status">{refusal === 'UNAVAILABLE'
+      ? 'Il perimetro non è più valido oppure l’operazione non è disponibile. Verifica lo stesso comando senza reinviare.'
+      : 'I dati non sono validi. Conserva il riferimento e verifica lo stesso comando prima di preparare una nuova richiesta.'}</p>}
+    {(unknown || (unresolved && !refusal)) && <p role="status">Risposta non osservata. Verifica lo stesso comando prima di preparare un’altra richiesta.</p>}
     {recovery && !savedHref && <a className="block font-bold underline" href={'/admin-requests?recover=' + encodeURIComponent(recovery)}>Verifica esito dello stesso comando</a>}
   </form>;
 }
