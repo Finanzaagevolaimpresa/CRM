@@ -55,7 +55,9 @@ test('unassigned technical practice follows its service in list, detail, search,
     for (const url of ['/technical-office/practices', '/technical-office/practices/' + practice.id, '/search?q=' + encodeURIComponent(tag)]) {
       const response = await page.goto(url); expect((await response!.text()).includes(practice.title), url).toBe(allowed);
     }
-    expect((await page.request.get('/technical-office/practices/' + practice.id + '/operational-report')).status()).toBe(allowed ? 200 : 403);
+    const report = await page.request.get('/technical-office/practices/' + practice.id + '/operational-report');
+    expect(report.status()).toBe(404); // Complete reports contain unclassified notes.
+    expect(await report.text()).not.toContain(practice.title);
   };
   await verify(a, false); await verify(b, true);
   await db.clientService.update({ where: { id: service.id }, data: { assignedToId: users.get('consulente') } });
@@ -67,28 +69,32 @@ for (const role of roles) test(`${role}: shared-client list, search, direct URL 
   const context = await browser.newContext({ baseURL: origin, reducedMotion: 'reduce' });
   const page = await context.newPage(); await login(page, role);
   const supervisor = ['admin', 'direzione', 'amministrazione'].includes(role);
+  const technical = ['consulente', 'backoffice'].includes(role);
   const own = role === 'consulente' || supervisor;
   await page.goto('/tasks');
-  await expect(page.getByText(ownTitle, { exact: true })).toHaveCount(own ? 1 : 0);
+  await expect(page.getByText(ownTitle, { exact: true })).toHaveCount(!technical && own ? 1 : 0);
   await expect(page.getByText(foreignTitle, { exact: true })).toHaveCount(supervisor ? 1 : 0);
   await page.goto('/projects/' + foreignProject);
   await expect(page.getByRole('heading', { name: 'Progetto — ' + tag + '-foreign-project', exact: true })).toHaveCount(supervisor ? 1 : 0);
   await page.goto('/projects/' + ownProject);
-  await expect(page.getByRole('heading', { name: 'Progetto — ' + tag + '-own-project', exact: true })).toHaveCount(own ? 1 : 0);
+  const ownHeading = technical ? page.getByText(tag + '-own-project', { exact: true })
+    : page.getByRole('heading', { name: 'Progetto — ' + tag + '-own-project', exact: true });
+  await expect(ownHeading).toHaveCount(own ? 1 : 0);
   await page.goto('/search?q=' + encodeURIComponent(tag));
   await expect(page.getByText(foreignTitle, { exact: true })).toHaveCount(supervisor ? 1 : 0);
   const report = await page.request.get('/clients/' + clientId + '/operational-report');
-  expect(report.status()).toBe(200);
-  const text = await report.text(); expect(text.includes(foreignTitle)).toBe(supervisor); expect(text.includes(ownTitle)).toBe(own);
+  expect(report.status()).toBe(technical ? 404 : 200);
+  const text = await report.text(); expect(text.includes(foreignTitle)).toBe(supervisor); expect(text.includes(ownTitle)).toBe(!technical && own);
   await page.goto('/dashboard');
   const counters = page.locator('[data-counter-final]'); await expect(counters.first()).toBeVisible();
   await expectCountersMatchServer(page);
   await context.close();
 });
 
-test('an already-open task form cannot write after reassignment; motion preference change settles on the actual total', async ({ browser }) => {
+test('an already-open commercial task form cannot write after reassignment; motion preference change settles on the actual total', async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin, reducedMotion: 'no-preference' });
-  const page = await context.newPage(); await login(page, 'consulente');
+  await db.task.update({ where: { id: taskId }, data: { assignedToId: users.get('commerciale') } });
+  const page = await context.newPage(); await login(page, 'commerciale');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expectCountersMatchServer(page);
   await page.goto('/tasks'); const form = page.locator('form').filter({ has: page.locator(`input[name="id"][value="${taskId}"]`) });

@@ -996,7 +996,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   await foreignPage
     .locator('[data-interactive-ready="true"]')
     .waitFor({ state: "attached" });
-  await expect(foreignPage.getByText("Nessuna pratica")).toBeVisible();
+  await expect(foreignPage.getByRole("heading", { name: "404", exact: true })).toBeVisible();
   for (const item of cases) {
     await expect(
       foreignPage.getByText(`Cliente ${item.label}`, { exact: false }),
@@ -1009,7 +1009,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   }
   for (const dossierId of dossierIds) {
     await foreignPage.goto(`${app}/client-dossiers/${dossierId}`);
-    await expect(foreignPage.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
+    await expect(foreignPage.getByRole("heading", { name: "404", exact: true })).toBeVisible();
     const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     expect((await foreignPage.request.get(`${app}/client-dossiers/${dossierId}/export?versionId=${dossier.approvedVersionId}`)).status()).toBe(404);
   }
@@ -1246,8 +1246,9 @@ test('M2 Work package returns as a new draft before independent review and simul
   const foreign = await foreignContext.newPage();
   await login(foreign, 'readiness-foreign@invalid.test');
   const denied = await foreign.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
-  expect(denied.status()).toBe(403);
-  expect(await denied.json()).toEqual({ code: 'DENIED' });
+  expect(denied.status()).toBe(404);
+  const deniedBody = await denied.text();
+  for (const marker of [dossier.currentVersionId!, artifactHash, receipt.sourceVersionId]) expect(deniedBody).not.toContain(marker);
   const crossOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'https://foreign.invalid' }, maxRedirects: 0 });
   expect(crossOrigin.status()).toBe(403);
   const opaqueOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'null', 'sec-fetch-site': 'same-origin' }, maxRedirects: 0 });

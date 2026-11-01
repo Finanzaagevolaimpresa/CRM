@@ -80,6 +80,7 @@ test.afterAll(() => db.$disconnect());
 for (const role of roles) test(`${role}: explicit admin grant and revocation affect the same open session without granting ownership`, async ({ browser }) => {
   const readerContext = await browser.newContext({ baseURL: origin }), reader = await readerContext.newPage();
   const adminContext = await browser.newContext({ baseURL: origin }), admin = await adminContext.newPage();
+  const technical = ['consulente', 'backoffice'].includes(role);
   const userId = users.get(role)!, path = `/settings/users/${userId}/perimeter`;
   await login(reader, role); await login(admin, 'admin');
   async function scope(allowed: boolean) {
@@ -87,18 +88,18 @@ for (const role of roles) test(`${role}: explicit admin grant and revocation aff
     for (const [url, label] of [['/clients/' + clientId, 'Fascicolo Cliente Interno — ' + tag + '-client'], ['/projects/' + projectId, 'Progetto — ' + tag + '-project']]) {
       await reader.goto(url);
       const heading = reader.getByRole('heading', { name: label, exact: true });
-      if (supervisor || (allowed && url.startsWith('/clients/'))) await expect(heading).toBeVisible();
+      if (supervisor || (!technical && allowed && url.startsWith('/clients/'))) await expect(heading).toBeVisible();
       else await expect(heading).toHaveCount(0);
     }
     await reader.goto('/search?q=' + encodeURIComponent(tag));
     const clientLink = reader.locator(`a[href="/clients/${clientId}"]`);
-    if (allowed || supervisor) await expect(clientLink.first()).toBeVisible(); else await expect(clientLink).toHaveCount(0);
+    if ((!technical && allowed) || supervisor) await expect(clientLink.first()).toBeVisible(); else await expect(clientLink).toHaveCount(0);
     if (supervisor) await expect(reader.locator(`a[href="/clients/${foreignId}"]`).first()).toBeVisible();
     else await expect(reader.locator(`a[href="/clients/${foreignId}"]`)).toHaveCount(0);
     const response = await reader.request.get('/documents/' + documentId + '/download');
     expect(response.status()).toBe(supervisor ? 200 : 403);
     if (supervisor) expect(await response.body()).toEqual(bytes);
-    expect((await reader.request.get('/clients/' + clientId + '/operational-report')).status()).toBe(allowed || supervisor ? 200 : 403);
+    expect((await reader.request.get('/clients/' + clientId + '/operational-report')).status()).toBe(technical ? 404 : allowed || supervisor ? 200 : 403);
   }
   await scope(false);
   await admin.goto(path + '?q=' + encodeURIComponent(tag + '-client'));

@@ -17,6 +17,8 @@ for (const role of ['consulente','backoffice'] as const) {
     assert.equal(technicalFieldAllowed('Task','description'),false);
     assert.equal(technicalFieldAllowed('ChecklistItem','notes'),false);
     assert.equal(technicalActionAllowed(actor,'payment-actions:createPayment'),false);
+    assert.equal(technicalActionAllowed(actor,'user-account-actions:revokeAllAccountSessions'),true);
+    assert.equal(technicalActionAllowed(actor,'user-account-actions:adminResetPassword'),false);
     assert.equal(technicalActionAllowed(actor,'technical-work-actions:saveTechnicalWork'),true);
   });
 }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { notFound } from 'next/navigation';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import type { AuthSession } from '../src/lib/auth';
@@ -15,7 +16,7 @@ const javascript = ts.transpileModule(declaration.getText(source), {
 }).outputText;
 export function technicalActionBoundary(session: AuthSession) {
   const exports: { assertTechnicalServerAction?: (action: string) => Promise<void> } = {};
-  new Function('exports', 'getSession', 'technicalActionAllowed', javascript)(exports, async () => session, technicalActionAllowed);
+  new Function('exports', 'getSession', 'technicalActionAllowed', 'notFound', javascript)(exports, async () => session, technicalActionAllowed, notFound);
   assert(exports.assertTechnicalServerAction);
   return exports.assertTechnicalServerAction;
 }

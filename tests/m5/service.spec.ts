@@ -185,10 +185,13 @@ test('readiness hides sibling practices, funding, revisions and selector options
   const deniedHtml = await denied!.text(), allowedHtml = await allowed!.text();
   for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, scopeMarker, startupMarker, 'SYNTHETIC_M5_PAYMENT'])
     expect(deniedHtml).not.toContain(marker);
-  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, scopeMarker, startupMarker]) expect(allowedHtml).toContain(marker);
+  for (const marker of [practice.id, practice.controlledIntakeId, revision.commercialOfferId]) expect(allowedHtml).toContain(marker);
+  // Service assignment admits this existing practice, not a separate project
+  // proposal after client responsibility changed. Its creator has no bypass.
+  for (const marker of [proposal.id, scopeMarker, startupMarker, fixture.project.id, 'SYNTHETIC_M5_PAYMENT']) expect(allowedHtml).not.toContain(marker);
   await db.clientService.update({ where: { id: fixture.service.id }, data: { assignedToId: a.userId } });
-  // The separate proposal still belongs to B and deliberately mentions the practice ID in its synthetic text.
-  // Check the actual practice row, not that unrelated text marker.
+  // Reassignment withdraws the actual practice row from B. The unrelated
+  // proposal remains inaccessible; its synthetic text is not an assignment.
   expect(await (await bp.goto('/practice-readiness'))!.text()).not.toContain('id="practice-' + practice.id + '"');
   await expect(bp.locator('[id="practice-' + practice.id + '"]')).toHaveCount(0);
   expect(await (await ap.goto('/practice-readiness'))!.text()).toContain('id="practice-' + practice.id + '"');

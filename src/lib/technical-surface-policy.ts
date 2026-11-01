@@ -26,6 +26,8 @@ export function technicalFileRouteAllowed(route: string) { return fileRoutes.has
 const allowedActions = new Set([
   'login-actions:loginAction', 'login-actions:logoutAction',
   'user-account-actions:saveAccountProfile', 'user-account-actions:saveOwnPassword',
+  // The account service restricts this command to self, or an admitted Admin.
+  'user-account-actions:revokeAllAccountSessions',
   'technical-work-actions:prepareTechnicalWork', 'technical-work-actions:saveTechnicalWork', 'technical-work-actions:checkTechnicalWork',
   'technical-work-item-actions:prepareTechnicalWorkItem', 'technical-work-item-actions:saveTechnicalWorkItem', 'technical-work-item-actions:checkTechnicalWorkItem',
   'record-update-actions:markRecordUpdateReadAction',

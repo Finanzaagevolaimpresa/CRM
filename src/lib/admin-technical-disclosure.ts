@@ -48,7 +48,8 @@ async function source(tx: Tx, current: Authority, versionId: string, write = fal
   const document = saved ? acquiredVersionDocument(saved, versionId) : original;
   if (!document || document.containsSensitiveData && !recordUpdatePermission(current.actor, 'document.sensitive.read')) return deny();
   const profile = await readDisclosure(tx, versionId, write);
-  const prohibited = restrictedDocumentMetadata(document) || await hasRestrictedDocumentBinding(tx, document.id);
+  const prohibited = restrictedDocumentMetadata(original) || restrictedDocumentMetadata(document)
+    || await hasRestrictedDocumentBinding(tx, document.id);
   return { document, version, profile, sourceSha256: disclosureSource(document, version), prohibited };
 }
 async function journal(tx: Tx, current: Authority, input: { commandId: string; id: string; reason: string }, requestHash: string,

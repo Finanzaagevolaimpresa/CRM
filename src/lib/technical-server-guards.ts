@@ -9,5 +9,5 @@ export async function assertTechnicalFileRoute(route: string) {
 }
 export async function assertTechnicalServerAction(action: string) {
   const session = await getSession();
-  if (session && !technicalActionAllowed(session, action)) throw new Error('Risorsa non disponibile o non accessibile.');
+  if (session && !technicalActionAllowed(session, action)) notFound();
 }

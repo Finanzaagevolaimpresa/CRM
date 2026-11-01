@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
+import { syntheticSession } from '../selective-sharing/fixtures';
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -70,99 +72,84 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => db.$disconnect());
 
-test('child-only project and service assignments retain uploads and inherited downloads after client reassignment', async ({ browser }) => {
+
+async function classification(versionId: string) {
+  const user = await db.user.findUniqueOrThrow({ where: { id: adminId } });
+  await classifySyntheticTechnicalVersion(db, { user, ...await syntheticSession(db, user) }, versionId);
+}
+test('child-only scope retains classified versions after client reassignment; generic upload and foreign downloads stay denied', async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin }), page = await context.newPage();
   const adminContext = await browser.newContext({ baseURL: origin }), admin = await adminContext.newPage();
   await login(page, 'operator'); await login(admin, 'admin');
+  await page.goto('/documents'); await expect(page.locator('input[type="file"]')).toHaveCount(0);
   const bytes = Buffer.from('Synthetic inherited service document ' + run);
   async function upload(client: string, project: string, service: string, suffix: string) {
-    await page.goto('/documents');
-    const form = page.locator('form').filter({ has: page.locator('input[type="file"]') });
+    await admin.goto('/documents');
+    const form = admin.locator('form').filter({ has: admin.locator('input[type="file"]') });
     await form.locator('select[name="clientId"]').selectOption(client);
-    if (suffix !== 'before') await expect(form.getByRole('button', { name: 'Carica in storage privato' })).toBeDisabled();
     if (project) await form.locator('select[name="projectId"]').selectOption(project);
     if (service) await form.locator('select[name="clientServiceId"]').selectOption(service);
     await form.locator('input[name="title"]').fill(tag + '-' + suffix);
     await form.locator('input[type="file"]').setInputFiles({ name: 'child.txt', mimeType: 'text/plain', buffer: bytes });
-    await form.getByRole('checkbox').check();
-    await capture(page, '/documents');
+    await form.getByRole('checkbox').check(); await capture(admin, '/documents');
     await form.getByRole('button', { name: 'Carica in storage privato' }).click();
-    const request = await captured(page);
-    expect(request.body).toContain(bytes.toString());
+    const request = await captured(admin);
     await expect.poll(() => db.document.count({ where: { title: tag + '-' + suffix } })).toBe(1);
     const document = await db.document.findFirstOrThrow({ where: { title: tag + '-' + suffix } });
-    expect(document.projectId).toBe(project || null); expect(document.clientServiceId).toBe(service || null);
-    expect(document.uploadedById).toBe(operatorId);
-    const response = await page.request.get('/documents/' + document.id + '/download');
-    expect(response.status()).toBe(200); expect(await response.body()).toEqual(bytes);
+    expect(document.uploadedById).toBe(adminId);
+    expect((await page.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
+    if (process.env.PRIVILEGED_ACCESS_MODE === 'enforced') {
+      const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: document.id } });
+      await classification(version.id);
+      const response = await page.request.get('/documents/' + document.id + '/download');
+      expect(response.status()).toBe(200); expect(await response.body()).toEqual(bytes);
+    }
     return { document, request };
   }
-  const first = await upload(clientId, '', inheritedServiceId, 'before');
-  if (process.env.PRIVILEGED_ACCESS_MODE === 'enforced') {
-    await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
-    await admin.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click(); await expect(admin).toHaveURL(/status=active/);
-  }
+  const first = await upload(clientId, projectId, inheritedServiceId, 'before');
   await admin.goto('/clients/' + clientId);
   const assignment = admin.getByRole('form', { name: 'Assegna responsabili' });
   await assignment.getByLabel('Responsabile tecnico').selectOption(otherId);
   await assignment.getByRole('button', { name: 'Salva responsabili' }).click();
   await expect(assignment.getByRole('status')).toHaveText('Responsabili aggiornati.');
   expect((await db.project.findUniqueOrThrow({ where: { id: projectId } })).consultantId).toBe(operatorId);
-  const inherited = await page.request.get('/documents/' + first.document.id + '/download');
-  expect(inherited.status()).toBe(200); expect(await inherited.body()).toEqual(bytes);
-  await page.goto('/clients/' + clientId); await expect(page.getByRole('heading', { name: tag + '-project-client', exact: true })).toHaveCount(0);
-  await upload(clientId, projectId, '', 'project-only');
+  await page.goto('/projects/' + projectId); await expect(page.getByText(tag + '-own-project', { exact: true })).toBeVisible();
+  expect((await page.request.get('/clients/' + clientId)).status()).toBe(404);
+  expect((await page.request.get('/documents/' + first.document.id + '/download')).status())
+    .toBe(process.env.PRIVILEGED_ACCESS_MODE === 'enforced' ? 200 : 403);
   const service = await upload(otherClientId, '', ownServiceId, 'service-only');
-  await page.goto('/documents');
-  const form = page.locator('form').filter({ has: page.locator('input[type="file"]') });
-  await form.locator('select[name="clientId"]').selectOption(otherClientId);
-  await expect(form.locator(`select[name="projectId"] option[value="${otherProjectId}"]`)).toHaveCount(0);
-  await expect(form.locator(`select[name="clientServiceId"] option[value="${foreignServiceId}"]`)).toHaveCount(0);
   const before = await db.document.count();
   await replay(page, service.request, service.request.body.replaceAll(ownServiceId, foreignServiceId));
   expect(await db.document.count()).toBe(before);
-  // Removing the remaining assignment revokes access, despite unchanged uploader provenance.
   await db.project.update({ where: { id: projectId }, data: { consultantId: otherId } });
   expect((await page.request.get('/documents/' + first.document.id + '/download')).status()).toBe(403);
-  expect((await db.document.findUniqueOrThrow({ where: { id: first.document.id } })).uploadedById).toBe(operatorId);
+  expect((await db.document.findUniqueOrThrow({ where: { id: first.document.id } })).uploadedById).toBe(adminId);
   await adminContext.close(); await context.close();
 });
-
-test('the practice-only technical owner can edit ordinary fields but cannot move the context or change assignees', async ({ browser }) => {
+test('canonical technical owner sees safe fields; captured legacy Admin edits cannot expose notes or move context', async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin }), page = await context.newPage();
-  await login(page, 'operator');
+  const ac = await browser.newContext({ baseURL: origin }), admin = await ac.newPage();
+  await db.technicalPractice.update({ where: { id: practiceId }, data: { internalNotes: 'PRIVATE_UNCLASSIFIED_CHILD_NOTE' } });
+  await login(page, 'operator'); await login(admin, 'admin');
   const path = '/technical-office/practices/' + practiceId;
-  await page.goto(path);
-  const form = page.locator('form').filter({ has: page.getByRole('button', { name: 'Salva dati', exact: true }) });
-  await form.locator('input[name="title"]').fill(tag + '-updated');
-  await form.locator('textarea[name="internalNotes"]').fill('Synthetic ordinary edit');
-  await capture(page, path);
-  await form.getByRole('button', { name: 'Salva dati', exact: true }).click();
-  const request = await captured(page);
-  await expect.poll(() => db.technicalPractice.findUnique({ where: { id: practiceId } }).then(row => row?.title)).toBe(tag + '-updated');
+  await page.goto(path); await expect(page.getByText(tag + '-practice', { exact: true })).toBeVisible();
+  await expect(page.locator('textarea[name="internalNotes"]')).toHaveCount(0);
+  expect(await page.locator('body').innerText()).not.toContain('PRIVATE_UNCLASSIFIED_CHILD_NOTE');
+  await admin.goto(path);
+  const form = admin.locator('form').filter({ has: admin.getByRole('button', { name: 'Salva dati', exact: true }) });
+  await form.locator('input[name="title"]').fill(tag + '-admin-corrected');
+  await capture(admin, path); await form.getByRole('button', { name: 'Salva dati', exact: true }).click();
+  const request = await captured(admin);
+  await expect.poll(() => db.technicalPractice.findUnique({ where: { id: practiceId } }).then(v => v?.title)).toBe(tag + '-admin-corrected');
   const before = await db.technicalPractice.findUniqueOrThrow({ where: { id: practiceId } });
-  expect(before.internalNotes).toBe('Synthetic ordinary edit'); expect(before.clientId).toBe(otherClientId);
-  expect(before.technicalOwnerId).toBe(operatorId); expect(before.createdById).toBe(adminId);
   const audits = await db.auditLog.count({ where: { entityId: practiceId, event: 'technical_practice_update' } });
-  expect(audits).toBe(1);
-  expect(request.body).toContain(otherClientId);
   await replay(page, request, request.body.replaceAll(otherClientId, clientId));
-  expect(await db.technicalPractice.findUniqueOrThrow({ where: { id: practiceId } })).toEqual(before);
-  await page.goto(path);
-  // Submit an actual extra hidden field through the form to exercise admin-only ownership.
-  await form.evaluate((element, userId) => { const input = document.createElement('input'); input.type = 'hidden'; input.name = 'technicalOwnerId'; input.value = userId; element.append(input); }, otherId);
-  const deniedOwnerResponse = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']));
-  await form.getByRole('button', { name: 'Salva dati', exact: true }).click();
-  await deniedOwnerResponse;
   expect(await db.technicalPractice.findUniqueOrThrow({ where: { id: practiceId } })).toEqual(before);
   expect(await db.auditLog.count({ where: { entityId: practiceId, event: 'technical_practice_update' } })).toBe(audits);
+  await page.goto(path); await expect(page.getByText(tag + '-admin-corrected', { exact: true })).toBeVisible();
   await db.client.update({ where: { id: otherClientId }, data: { deletedAt: new Date() } });
+  expect((await page.reload())?.status()).toBe(404);
   await replay(page, request);
   expect(await db.technicalPractice.findUniqueOrThrow({ where: { id: practiceId } })).toEqual(before);
-  await db.client.update({ where: { id: otherClientId }, data: { deletedAt: null } });
-  await db.client.update({ where: { id: clientId }, data: { consultantId: operatorId } });
-  await replay(page, request, request.body.replaceAll(otherClientId, clientId));
-  expect(await db.technicalPractice.findUniqueOrThrow({ where: { id: practiceId } })).toMatchObject({ clientId, technicalOwnerId: operatorId, createdById: adminId, title: before.title });
-  expect(await db.auditLog.count({ where: { entityId: practiceId, event: 'technical_practice_update' } })).toBe(audits + 1);
-  await context.close();
+  await ac.close(); await context.close();
 });

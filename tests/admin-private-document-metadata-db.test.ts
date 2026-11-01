@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {classifySyntheticTechnicalVersion} from './technical-confidentiality-fixtures';
 import {randomUUID} from 'node:crypto';
 import test,{before,after} from 'node:test';
 import {PrismaClient} from '@prisma/client';
@@ -75,26 +76,36 @@ test('expired administrative validity blocks bytes and selection while Admin can
   const view=await readAdminPrivateDocumentMetadata(db,admin.session,id);assert.equal(view.current.revision,1);
   await save(await command(id,{expiresAt:new Date(Date.now()+3600000).toISOString()}));
   assert.deepEqual((await readPersonalAcquiredDocument(db,admin.session,id)).bytes,f.bytes);
+  await assert.rejects(selected(f));
+  await classifySyntheticTechnicalVersion(db,admin,f.receipt.versionId);
   assert.equal((await selected(f)).snapshots[0].title,'Titolo corretto sintetico');
 });
 test('correction invalidates an old technical selection through restoration; a new explicit selection admits current metadata',options,async()=>{
   const f=await lifecyclePrivateDocumentFixture(db,admin),id=f.receipt.documentId,versionId=f.receipt.versionId;
+  await assert.rejects(assignTechnical(db,admin,f.target,f.techA,{documents:[{fileId:versionId,allowDownload:true}]}));
+  await classifySyntheticTechnicalVersion(db,admin,versionId);
   await assignTechnical(db,admin,f.target,f.techA,{documents:[{fileId:versionId,allowDownload:true}]});
   await readTechnicalWorkDocument(db,f.techA.session,f.target,versionId,true,readPrivateDocumentBounded);
   const original=(await readAdminPrivateDocumentMetadata(db,admin.session,id)).original.values;
   await save(await command(id));await assert.rejects(readTechnicalWorkDocument(db,f.techA.session,f.target,versionId,true,readPrivateDocumentBounded));
   await save(await command(id,original));await assert.rejects(readTechnicalWorkDocument(db,f.techA.session,f.target,versionId,true,readPrivateDocumentBounded));
+  // Restoring the exact reviewed metadata does not revive the stale grant.
+  // A new explicit selection can reuse the unchanged, content-bound review.
   await assignTechnical(db,admin,f.target,f.techA,{documents:[{fileId:versionId,allowDownload:true}]});
   await readTechnicalWorkDocument(db,f.techA.session,f.target,versionId,true,readPrivateDocumentBounded);
   assert.equal((await readAdminPrivateDocumentMetadata(db,admin.session,id)).current.revision,2);
 });
 test('new financial classification closes nonfinancial recipients and original financial ceilings survive later relabelling',options,async()=>{
   const technical=await lifecyclePrivateDocumentFixture(db,admin);
+  await assert.rejects(selected(technical));
+  await classifySyntheticTechnicalVersion(db,admin,technical.receipt.versionId);
   assert.equal((await selected(technical)).snapshots.length,1);
   await save(await command(technical.receipt.documentId,{classification:'PAYMENT'}));await assert.rejects(selected(technical));
+  await assert.rejects(classifySyntheticTechnicalVersion(db,admin,technical.receipt.versionId));
   const financial=await lifecyclePrivateDocumentFixture(db,admin,'CONTRACT');
   await assert.rejects(selected(financial));
   await save(await command(financial.receipt.documentId,{classification:'TECHNICAL_DOCUMENT'}));await assert.rejects(selected(financial));
+  await assert.rejects(classifySyntheticTechnicalVersion(db,admin,financial.receipt.versionId));
   assert.deepEqual((await readPersonalAcquiredDocument(db,admin.session,financial.receipt.documentId)).bytes,financial.bytes);
 });
 test('current sensitive permission denial prevents a correction that would require protected metadata access',options,async()=>{
@@ -178,6 +189,8 @@ test('valid metadata history beyond one UI page remains anchored and readable in
   assert.equal(second.history.length,1);assert.equal(second.hasMore,false);assert.deepEqual(second.current,first.current);
   assert.equal(first.current.values.title,'Cronologia sintetica revisione 51');
   assert.deepEqual((await readPersonalAcquiredDocument(db,admin.session,id)).bytes,f.bytes);
+  await assert.rejects(selected(f));
+  await classifySyntheticTechnicalVersion(db,admin,f.receipt.versionId);
   assert.equal((await selected(f)).snapshots[0].title,first.current.values.title);
   const current=await db.document.findUniqueOrThrow({where:{id}});
   assert.deepEqual({...current,selectiveEpoch:source.selectiveEpoch},source);assert.equal(current.selectiveEpoch,source.selectiveEpoch+51);

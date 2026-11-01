@@ -30,6 +30,11 @@ async function main() {
       title: 'Dossier cliente sintetico riservato', content: 'NOTA_DOSSIER_RISERVATA', createdById: admin.user.id } });
     const dossier = await db.dossier.create({ data: { clientId: f.client.id, projectId: f.project.id,
       title: 'Dossier progetto sintetico riservato', type: 'pre_analisi', markdownContent: 'NOTA_DOSSIER_RISERVATA' } });
+    const financialTaskTitle = 'PAGAMENTO_SCADENZA_RISERVATA_' + index;
+    for (const person of [f.techA, f.techB, mixed]) await db.task.create({ data: {
+      clientId: f.client.id, assignedToId: person.user.id, createdById: admin.user.id,
+      title: financialTaskTitle, description: 'RIFERIMENTO_BONIFICO_RISERVATO', type: 'pagamento', dueAt: new Date(),
+    } });
     const target = technicalTarget(f);
     await assignTechnical(db, admin, target, f.techA, { documents: [{ fileId: f.documents[0].version.id, allowDownload: true }] });
     if (index !== 1) await assignTechnical(db, admin, target, f.techB, { documents: [{ fileId: f.documents[0].version.id, allowDownload: true }] });
@@ -40,7 +45,7 @@ async function main() {
       third: { id: third.user.id, email: third.user.email }, mixed: { id: mixed.user.id, email: mixed.user.email },
       sales: { id: f.salesA.user.id, email: f.salesA.user.email },
       documents: f.documents.map(x => ({ id: x.doc.id, versionId: x.version.id, title: x.doc.title, fileName: x.doc.fileName, text: x.bytes.toString() })),
-      excluded: [f.practice.internalNotes!, f.project.description!, f.project.scenarioA!, f.contract.serviceName,
+      excluded: [financialTaskTitle, 'RIFERIMENTO_BONIFICO_RISERVATO', f.practice.internalNotes!, f.project.description!, f.project.scenarioA!, f.contract.serviceName,
         f.contract.serviceDescription!, f.payment.notes!, f.contract.contractNumber, 'NOTA_SECONDA_FUNZIONE_RISERVATA', 'NOTA_DOSSIER_RISERVATA'] });
   }
   // Apply exactly the ordinary registry activation sequence; browser sessions

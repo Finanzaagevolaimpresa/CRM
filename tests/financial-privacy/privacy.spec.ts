@@ -186,7 +186,16 @@ for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real l
     for (const route of ['/progress?client=' + f.clientId, '/clients/' + f.clientId,
       '/contracts/' + f.contractId, '/contracts', '/payments', '/audit-log', '/clients/' + f.clientId + '/operational-report']) {
       const response = await page.request.get(route); expect(response.status(), route).toBe(404);
-      const body = await response.text(); for (const marker of forbidden) expect(body).not.toContain(marker);
+      const body = await response.text();
+      // Next includes the already-requested route in its router payload, even
+      // for a 404. It must not disclose any other identifier or source content.
+      const requestedContract = route === '/contracts/' + f.contractId;
+      for (const marker of forbidden.filter(marker => !requestedContract || marker !== f.contractId)) expect(body).not.toContain(marker);
+      if (requestedContract) {
+        const unknown = await page.request.get('/contracts/unknown-synthetic-contract');
+        expect(unknown.status()).toBe(404);
+        for (const marker of forbidden) expect(await unknown.text()).not.toContain(marker);
+      }
     }
     for (const route of ['/projects/' + f.projectId, '/documents', '/search?q=' + encodeURIComponent(f.key)]) {
       const response = await page.goto(route); expect(response?.status()).toBe(200);
