@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies, headers } from 'next/headers';
 import { ZodError } from 'zod';
 import { getSession } from './auth';
@@ -33,6 +34,7 @@ function failure(error: unknown): VersionResult {
   return { ok: false, uncertain: true, message: 'Esito da verificare prima di caricare nuovamente il file.' };
 }
 export async function saveAdminPrivateVersionAction(form: FormData): Promise<VersionResult> {
+  await assertTechnicalServerAction("admin-private-document-version-actions:saveAdminPrivateVersionAction");
   const session = await actor(); if (!session) return { ok: false, message: 'Sessione Admin o origine non ammessa.' };
   const readiness = await privilegedAccessReadiness(session);
   if (!readiness.active) return { ok: false, stepUp: readiness.mode === 'enforced' && readiness.keyReady, message: 'Riconferma l’identità qui sotto. Il file e la bozza restano disponibili.' };
@@ -48,6 +50,7 @@ export async function saveAdminPrivateVersionAction(form: FormData): Promise<Ver
   } catch (error) { return failure(error); }
 }
 export async function reconcileAdminPrivateVersionAction(raw: unknown): Promise<VersionResult> {
+  await assertTechnicalServerAction("admin-private-document-version-actions:reconcileAdminPrivateVersionAction");
   const session = await actor(); if (!session) return { ok: false, uncertain: true, message: 'Accedi come Admin e verifica lo stesso tentativo.' };
   try {
     const result = await reconcileAdminPrivateVersion(prisma, session, raw);

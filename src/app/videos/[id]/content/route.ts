@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { getSession } from '@/lib/auth';
@@ -10,6 +11,7 @@ import { RecordUpdateError } from '@/lib/record-update-contract';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 async function response(request: Request, context: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute('/videos/[id]/content');
   return privateVideoResponse(request, async download => {
     const session = await getSession(), { id } = await context.params;
     if (!session || !z.string().uuid().safeParse(id).success) return null;

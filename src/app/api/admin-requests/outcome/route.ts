@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireSession } from '@/lib/auth';
@@ -5,6 +6,7 @@ import { prisma } from '@/lib/prisma';
 import { readAdminRequestOutcome, isRequestUnavailable } from '@/lib/admin-request-service';
 export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
+  await assertTechnicalFileRoute("/api/admin-requests/outcome");
   const session = await requireSession();
   try {
     const outcome = await readAdminRequestOutcome(prisma, session, request.nextUrl.searchParams.get('commandId') ?? '');

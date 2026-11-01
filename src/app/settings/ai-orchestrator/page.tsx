@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { randomUUID } from 'node:crypto';
@@ -42,7 +43,7 @@ function IntegrityFailure() {
   );
 }
 
-export default async function Page({ searchParams }: { searchParams?: PageSearchParams }) {
+  async function Page({ searchParams }: { searchParams?: PageSearchParams }) {
   const session = await requirePermission('ai.orchestrator.read');
   const query = (await searchParams) ?? {};
   const snapshot = await getAiOrchestratorAdminControlSnapshot(prisma, { actorUserId: session.userId });
@@ -135,3 +136,5 @@ export default async function Page({ searchParams }: { searchParams?: PageSearch
     />
   );
 }
+
+export default withTechnicalPage("/settings/ai-orchestrator", Page);

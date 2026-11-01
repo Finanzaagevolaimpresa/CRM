@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
@@ -9,7 +10,7 @@ import { prisma } from '@/lib/prisma';
 import { leadSharingManagement, mayManageLeadSharing, readLeadSharingReceipt } from '@/lib/selective-lead-access';
 import { mayManageLeadEditing } from '@/lib/selective-lead-edit-management';
 
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ commandId?: string }>;
 }) {
   const session = await requirePermission('lead.read'), { id } = await params;
@@ -29,3 +30,5 @@ export default async function Page({ params, searchParams }: {
       grants={data.grants.map(grant => ({ ...grant, commandId: randomUUID() }))} initialCommandId={randomUUID()} /></Card>
   </div>;
 }
+
+export default withTechnicalPage("/leads/[id]/sharing", Page);

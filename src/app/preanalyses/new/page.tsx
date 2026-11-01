@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -10,7 +11,7 @@ import { createManualPreAnalysis } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
 import { getClientContextReadAccess } from '@/lib/read-access';
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ clientId?: string; projectId?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ clientId?: string; projectId?: string }> }) {
   const session = await requirePermission('dossier.read');
   const { clientId, projectId } = await searchParams;
   if (!clientId || !projectId) return <PageHeader title="Contesto mancante" description="Apri la creazione dal fascicolo cliente o dalla scheda di un progetto." />;
@@ -25,3 +26,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
     {editable ? <Card title="Contenuto della bozza"><PreAnalysisForm action={createManualPreAnalysis} creating hidden={{ clientId, projectId }} /></Card> : <Card title="Creazione non disponibile"><p className="text-sm text-slate-600">Puoi consultare questo contesto, ma il tuo profilo non è autorizzato a creare o modificare pre-analisi per il progetto.</p></Card>}
   </div>;
 }
+
+export default withTechnicalPage("/preanalyses/new", Page);

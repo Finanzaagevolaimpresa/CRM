@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies, headers } from 'next/headers';
 import { ZodError } from 'zod';
 import { getSession } from './auth';
@@ -30,6 +31,7 @@ function failure(error: unknown): RoleProfileResult {
   return { ok: false, uncertain: true, message: 'Esito da verificare prima di un’altra operazione.' };
 }
 export async function saveAdminRoleProfileAction(raw: unknown): Promise<RoleProfileResult> {
+  await assertTechnicalServerAction("admin-role-profile-actions:saveAdminRoleProfileAction");
   const session = await actor(); if (!session) return { ok: false, message: 'Sessione Admin o origine non ammessa.' };
   const readiness = await privilegedAccessReadiness(session);
   if (!readiness.active) return { ok: false, stepUp: readiness.mode === 'enforced' && readiness.keyReady, message: 'Riconferma l’identità qui sotto. Le scelte restano disponibili.' };
@@ -43,6 +45,7 @@ export async function saveAdminRoleProfileAction(raw: unknown): Promise<RoleProf
   } catch (error) { return failure(error); }
 }
 export async function reconcileAdminRoleProfileAction(raw: unknown): Promise<RoleProfileResult> {
+  await assertTechnicalServerAction("admin-role-profile-actions:reconcileAdminRoleProfileAction");
   const session = await actor();
   if (!session) return { ok: false, uncertain: true, message: 'Accedi come Admin e verifica lo stesso tentativo.' };
   try {

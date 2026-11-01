@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
@@ -25,7 +26,7 @@ function describePermissions(perms: readonly string[]) {
 function hasDossierWrite(perms: readonly string[]) { return perms.includes('*') || perms.includes('dossier.write'); }
 function hasDossierRead(perms: readonly string[]) { return perms.includes('*') || perms.includes('dossier.read'); }
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('settings.manage');
 
   const rows = Object.entries(rolePermissions).map(([role, perms]) => [
@@ -57,3 +58,5 @@ export default async function Page() {
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/roles", Page);

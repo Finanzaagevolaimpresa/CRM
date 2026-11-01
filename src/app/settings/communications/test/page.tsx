@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { Card, PageHeader } from '@/components/ui';
@@ -14,7 +15,7 @@ const outcomes: Record<string, string> = {
   NOT_SENT: 'Il trasporto non ha accettato il messaggio. Questo tentativo è concluso e non sarà ripetuto automaticamente.',
   UNCERTAIN: 'Il tentativo è in corso o il suo esito non è verificabile. Controlla il provider e la casella destinataria prima di autorizzare un nuovo test. Il CRM non ripete questo tentativo.',
 };
-export default async function Page({ searchParams }: { searchParams: Promise<{ result?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ result?: string }> }) {
   const session = await requirePermission('settings.manage');
   if (session.role !== 'admin') notFound();
   const query = await searchParams;
@@ -37,3 +38,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ r
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/settings/communications/test", Page);

@@ -6,7 +6,7 @@ import { lockTechnicalAssignmentContext } from './technical-assignment-context';
 import { technicalFieldCatalogue, technicalFieldPreview, technicalTargetReference, type TechnicalTargetReference } from './technical-assignment-display';
 import { readRetainedTechnicalAssignmentJournal } from './technical-assignment-journal';
 import { admitsTechnicalRolePermission } from './technical-assignment-permissions';
-import { loadTechnicalAssignmentJournal, lockTechnicalAssignmentRecord } from './technical-assignment-storage';
+import { loadTechnicalAssignmentJournal, lockTechnicalAssignmentRecord, lockTechnicalAssignmentOverview, loadTechnicalAssignmentOverviewJournals } from './technical-assignment-storage';
 import { technicalAssignmentTargetFields } from './technical-assignment-target';
 import { TechnicalAssignmentError, technicalAssignmentClock, withTechnicalAssignmentManagementRead } from './technical-assignment-transaction';
 import { hasSelectiveClientContext } from './selective-client-policy';
@@ -51,16 +51,19 @@ async function readManagementSnapshot(db: PrismaClient, claimed: AuthSession,
       SELECT "recipientId" FROM "TechnicalAssignment" WHERE kind=${target.kind}
       AND ${Prisma.raw(column)}=${target.targetId} ORDER BY "recipientId" LIMIT 201`);
     const assignments = [];
-    for (const ref of refs.slice(0, 200)) {
-      const record = await lockTechnicalAssignmentRecord(tx, { ...target, recipientId: ref.recipientId }, 'read');
-      if (!record) throw new TechnicalAssignmentError('UNAVAILABLE');
-      const journal = await loadTechnicalAssignmentJournal(tx, record);
-      if (!readRetainedTechnicalAssignmentJournal(journal, state.key, await technicalAssignmentClock(tx))) {
+    const overviewRecords = await lockTechnicalAssignmentOverview(tx, target, refs.slice(0, 200).map(ref => ref.recipientId));
+    const journals = await loadTechnicalAssignmentOverviewJournals(tx, overviewRecords);
+    const peopleById = new Map((await tx.user.findMany({ where: { id: { in: overviewRecords.map(record => record.recipientId) } },
+      select: { id: true, name: true, email: true } })).map(person => [person.id, person]));
+    const overviewNow = await technicalAssignmentClock(tx);
+    for (const record of overviewRecords) {
+      const journal = journals.get(record.id);
+      if (!journal || !readRetainedTechnicalAssignmentJournal(journal, state.key, overviewNow)) {
         throw new TechnicalAssignmentError('UNAVAILABLE');
       }
-      const person = await tx.user.findUnique({ where: { id: ref.recipientId }, select: { name: true, email: true } });
+      const person = peopleById.get(record.recipientId);
       if (!person) throw new TechnicalAssignmentError('UNAVAILABLE');
-      assignments.push({ id: record.id, recipientId: ref.recipientId, recipientName: person.name, recipientEmail: person.email,
+      assignments.push({ id: record.id, recipientId: record.recipientId, recipientName: person.name, recipientEmail: person.email,
         revision: record.revision, selection: record.payload.selection, revokedAt: record.revokedAt });
     }
     const person = state.recipient;
@@ -84,6 +87,16 @@ async function readManagementSnapshot(db: PrismaClient, claimed: AuthSession,
     }
     const documentCatalogue = pageTechnicalDocuments(admittedDocuments, documentQuery);
     const selected = recipientId ? await lockTechnicalAssignmentRecord(tx, { ...target, recipientId }, 'read') : null;
+    // The current recipient is independent of the bounded overview. Validate
+    // its retained journal even when it falls outside the first 200 entries or
+    // when catalogues are unavailable. An unreadable decision must never look
+    // like an empty selection ready to replace an existing revision.
+    if (selected && !readRetainedTechnicalAssignmentJournal(
+      await loadTechnicalAssignmentJournal(tx, selected), state.key, await technicalAssignmentClock(tx))) {
+      throw new TechnicalAssignmentError('UNAVAILABLE');
+    }
+    const selectedAssignment = selected ? { id: selected.id, recipientId: selected.recipientId,
+      revision: selected.revision, selection: selected.payload.selection, revokedAt: selected.revokedAt } : null;
     let workItems = { options: [] as Awaited<ReturnType<typeof listTechnicalWorkItemOptions>>['options'], query: itemQuery, hasNext: false };
     let workItemCatalogueAvailable = includeCatalogues;
     if (includeCatalogues && eligible) {
@@ -103,7 +116,7 @@ async function readManagementSnapshot(db: PrismaClient, claimed: AuthSession,
       fieldCatalogue: technicalFieldCatalogue(target.kind),
       people: people.slice(0, 200).filter(row => admitsTechnicalRolePermission(row, target.kind))
         .map(row => ({ id: row.id, name: row.name, email: row.email })), peopleLimited: people.length > 200,
-      assignments, assignmentsLimited: refs.length > 200, documentOptions: documentCatalogue.options,
+      assignments, selectedAssignment, assignmentsLimited: refs.length > 200, documentOptions: documentCatalogue.options,
       documentsLimited: !documentCatalogueAvailable, documentCatalogue, documentCatalogueAvailable,
       cataloguesUnavailable: !includeCatalogues,
       workItemOptions: workItems.options, workItemCatalogue: workItems, workItemCatalogueAvailable,
@@ -128,5 +141,10 @@ export function readTechnicalAssignmentManagement(db: PrismaClient, claimed: Aut
 export async function readTechnicalAssignmentManagementForPage(db: PrismaClient, claimed: AuthSession,
   target: TechnicalTargetReference, recipientId: string | null = null) {
   try { return await readManagementSnapshot(db, claimed, target, recipientId); }
-  catch { return readManagementSnapshot(db, claimed, target, recipientId, technicalWorkItemCatalogueQuery.parse({}), technicalDocumentCatalogueQuery.parse({}), false); }
+  catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+      && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : 'UNAVAILABLE';
+    console.error('technical_management_catalogue_unavailable', code);
+    return readManagementSnapshot(db, claimed, target, recipientId, technicalWorkItemCatalogueQuery.parse({}), technicalDocumentCatalogueQuery.parse({}), false);
+  }
 }

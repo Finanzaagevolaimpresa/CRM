@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -30,6 +31,7 @@ function refresh() {
   for (const path of ['/technical-office/practices', '/shared-practices', '/dashboard', '/search', '/notifications', '/communications']) revalidatePath(path);
 }
 export async function preparePracticeSharing(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
+  await assertTechnicalServerAction("selective-practice-actions:preparePracticeSharing");
   const session = await requirePermission('technical.read');
   try {
     const preview = await previewPracticeSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')));
@@ -37,6 +39,7 @@ export async function preparePracticeSharing(_previous: PracticeSharingState, fo
   } catch (error) { return failure(error); }
 }
 export async function confirmPracticeSharingAction(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
+  await assertTechnicalServerAction("selective-practice-actions:confirmPracticeSharingAction");
   const session = await requirePermission('technical.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PRACTICE_ACCESS_CONFIRM', { inline: true });
@@ -48,6 +51,7 @@ export async function confirmPracticeSharingAction(_previous: PracticeSharingSta
   } catch (error) { return failure(error); }
 }
 export async function revokePracticeSharingAction(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
+  await assertTechnicalServerAction("selective-practice-actions:revokePracticeSharingAction");
   const session = await requirePermission('technical.write');
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PRACTICE_ACCESS_REVOKE', { inline: true });
@@ -59,6 +63,7 @@ export async function revokePracticeSharingAction(_previous: PracticeSharingStat
   } catch (error) { return failure(error); }
 }
 export async function checkPracticeSharingReceipt(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
+  await assertTechnicalServerAction("selective-practice-actions:checkPracticeSharingReceipt");
   const session = await requirePermission('technical.read');
   try {
     const receipt = await readPracticeSharingReceipt(prisma, session, String(form.get('commandId') ?? ''), String(form.get('practiceId') ?? ''));

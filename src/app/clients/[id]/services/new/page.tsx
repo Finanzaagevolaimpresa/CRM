@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth';
@@ -10,7 +11,7 @@ import { RecordUpdateError } from '@/lib/record-update-contract';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 import { SerializableConflictError } from '@/lib/serializable';
 
-export default async function RegisterServicePage({ params, searchParams }: {
+  async function RegisterServicePage({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ catalogQ?: string; contractQ?: string; serviceId?: string }>;
 }) {
   const session = await requireSession(), { id } = await params, query = await searchParams;
@@ -49,3 +50,5 @@ export default async function RegisterServicePage({ params, searchParams }: {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/clients/[id]/services/new", RegisterServicePage);

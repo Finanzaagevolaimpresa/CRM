@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
@@ -20,7 +21,7 @@ import {
 import { hasPermission, requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-export default async function AiAuthorizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  async function AiAuthorizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession();
   const { id } = await params;
   const loadRequest = () => prisma.aiExecutionRequest.findUnique({
@@ -173,3 +174,5 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/ai-authorizations/[id]", AiAuthorizationDetailPage);

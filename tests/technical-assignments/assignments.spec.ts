@@ -6,6 +6,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticSession } from '../selective-sharing/fixtures';
 import { assignTechnical, revokeTechnical } from './fixtures';
+import { seedAssignmentOverviewBoundary } from './pagination-fixture';
 import { createTechnicalAssignmentPreview } from '../../src/lib/technical-assignment-preview';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_EVIDENCE!, password = process.env.TECHNICAL_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminId: string; adminEmail: string;
@@ -58,8 +59,8 @@ async function prepareAssignment(page: Page, row: Row, person: Row['techA'], pro
   await page.getByRole('combobox', { name: 'Responsabilità', exact: true }).selectOption('co_responsabile');
   await page.getByLabel('Modificare i campi scelti', { exact: true }).check();
   await page.getByLabel('Aggiornare lo stato', { exact: true }).check();
-  for (const name of ['Titolo', 'Stato', project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente']) await page.getByLabel(name, { exact: true }).check();
-  const field = page.getByLabel(project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente', { exact: true }).locator('..').locator('..');
+  for (const name of ['Titolo', 'Stato', project ? 'Titolo' : 'Portale']) await page.getByLabel(name, { exact: true }).check();
+  const field = page.getByLabel(project ? 'Titolo' : 'Portale', { exact: true }).locator('..').locator('..');
   await field.getByLabel('Consenti la modifica', { exact: true }).check();
   if (dates) {
     const dateField = page.getByLabel('Prossimo aggiornamento', { exact: true });
@@ -76,7 +77,7 @@ async function prepareAssignment(page: Page, row: Row, person: Row['techA'], pro
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
-  for (const name of ['Modificare i campi scelti', 'Aggiornare lo stato', 'Titolo', 'Stato', project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente']) {
+  for (const name of ['Modificare i campi scelti', 'Aggiornare lo stato', 'Titolo', 'Stato', project ? 'Titolo' : 'Portale']) {
     await expect(page.getByLabel(name, { exact: true })).toBeChecked();
   }
   await expect(page.getByLabel(new RegExp(row.documents[0].title + ' ·'))).toBeChecked();
@@ -92,7 +93,7 @@ async function assign(page: Page, row: Row, person: Row['techA'], project = fals
 async function prepareWork(page: Page, row: Row, value: string, project = false) {
   await page.goto(work(row, project));
   for (const text of row.excluded) expect(await page.content()).not.toContain(text);
-  const label = project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente';
+  const label = project ? 'Titolo' : 'Portale';
   await page.getByLabel('Modifica ' + label.toLocaleLowerCase('it-IT'), { exact: true }).check();
   await page.getByRole('textbox', { name: label, exact: true }).fill(value);
   await page.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
@@ -121,10 +122,10 @@ async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true, caret: 'initial' });
 }
 async function ordinaryPageDenied(page: Page, url: string, heading: string, row: Row) {
-  // The legacy client dossier renders an explicit denial with HTTP 200.
-  // Assert both that denial and the absence of record data, including streamed HTML.
-  const response = await page.goto(url); expect(response?.status()).toBe(200);
-  await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  // The mandatory technical ceiling refuses this route before loading the dossier.
+  // Keep both strict HTTP denial and the absence of record data, including streamed HTML.
+  const response = await page.goto(url); expect(response?.status(), heading).toBe(404);
+  await expect(page.getByRole('heading', { name: '404', exact: true })).toBeVisible();
   const html = (await response!.text()) + (await page.content());
   for (const text of [...row.excluded, 'Cliente tecnico A sintetico', 'Progetto tecnico multiplo sintetico',
     'PROGETTO_ESTRANEO_NON_ASSEGNATO', ...row.documents.flatMap(doc => [doc.title, doc.text])]) expect(html).not.toContain(text);
@@ -268,7 +269,7 @@ test('project operation has its own exact grant and native status changes do not
     if (/hydrat|server rendered HTML/i.test(message.text())) renderingErrors.push(message.text());
   });
   await login(admin, f.adminEmail, true); await login(tech, row.techB.email);
-  await assign(admin, row, row.techB, true); await prepareWork(tech, row, 'Descrizione progetto aggiornata', true);
+  await assign(admin, row, row.techB, true); await prepareWork(tech, row, 'Progetto tecnico aggiornato', true);
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row, true)).toBe(1);
   await tech.goto(work(row, true)); await tech.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('update_status');
   await tech.getByRole('combobox', { name: 'Nuovo stato', exact: true }).selectOption('in_analisi');
@@ -276,19 +277,21 @@ test('project operation has its own exact grant and native status changes do not
   await tech.getByLabel('Confermo soltanto le modifiche riepilogate.').check();
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row, true)).toBe(2);
   expect((await db.project.findUniqueOrThrow({ where: { id: row.projectId } })).status).toBe('in_analisi');
+  const persisted = await db.project.findUniqueOrThrow({ where: { id: row.projectId } });
+  expect(persisted.title).toBe('Progetto tecnico aggiornato'); expect(persisted.description).toBe('Descrizione tecnica selezionabile');
   expect((await tc.request.get(work(row))).status()).toBe(404);
-  await tech.goto('/search?q=' + encodeURIComponent('Progetto tecnico multiplo'));
-  await expect(tech.getByRole('heading', { name: 'Progetti con incarico personale (1)', exact: true })).toBeVisible();
-  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
-  const result = tech.locator(`a[href="${work(row, true)}"]`).filter({ hasText: 'Apri' });
+  await tech.goto('/search?q=' + encodeURIComponent('Progetto tecnico aggiornato'));
+  await expect(tech.getByRole('heading', { name: 'Progetti disponibili', exact: true })).toBeVisible();
+  const result = tech.locator('article').filter({ has: tech.getByRole('heading', { name: 'Progetto tecnico aggiornato', exact: true }) })
+    .getByRole('link', { name: 'Apri incarico tecnico', exact: true });
   await expect(result).toHaveCount(1); expect(await tech.content()).not.toContain(row.excluded[1]);
   await result.click(); await expect(tech).toHaveURL(new RegExp(work(row, true) + '$'));
-  await expect(tech.getByText('Descrizione progetto aggiornata', { exact: true }).first()).toBeVisible();
-  const term = 'PROGETTO tecnico multiplo';
+  await expect(tech.getByText('Progetto tecnico aggiornato', { exact: true }).first()).toBeVisible();
+  const term = 'PROGETTO tecnico aggiornato';
   await tech.goto('/technical-work?kind=Project&page=2&q=inesistente');
   await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('  ' + term + '  ');
   await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
-  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico aggiornato', exact: true })).toBeVisible();
   expect(new URL(tech.url()).searchParams.has('page')).toBe(false);
   await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue(term);
   await screenshot(tech, 'assigned-work-search');
@@ -300,7 +303,7 @@ test('project operation has its own exact grant and native status changes do not
   await tech.goto('/technical-work?kind=Project&page=2&q=' + encodeURIComponent(term));
   await tech.getByRole('link', { name: 'Precedenti', exact: true }).click();
   await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'Project' && url.searchParams.get('q') === term && !url.searchParams.has('page'));
-  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico aggiornato', exact: true })).toBeVisible();
   await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('PROGETTO_ESTRANEO_NON_ASSEGNATO');
   await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
   await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
@@ -311,7 +314,7 @@ test('project operation has its own exact grant and native status changes do not
   await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
   for (const q of ['x'.repeat(201), 'uno&q=due']) {
     const invalid = await tc.request.get('/technical-work?kind=Project&q=' + (q.includes('&') ? q : encodeURIComponent(q)));
-    expect(invalid.status()).toBe(404); expect(await invalid.text()).not.toContain('Progetto tecnico multiplo sintetico');
+    expect(invalid.status()).toBe(404); expect(await invalid.text()).not.toContain('Progetto tecnico aggiornato');
   }
   expect(renderingErrors).toEqual([]);
   await ac.close(); await tc.close();
@@ -398,7 +401,7 @@ test('expired native preview preserves the choices and requires a new explicit p
   await screenshot(admin, 'assignment-expired-preview');
   await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toBeEnabled();
   await expect(admin.getByRole('textbox', { name: 'Motivo dell’incarico', exact: true })).toHaveValue('Incarico sintetico qualificazione browser');
-  await expect(admin.getByLabel('Descrizione tecnica', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
   await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
   await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
@@ -453,7 +456,7 @@ test('expired Admin confirmation preserves the full draft, renews inline and com
   await expect(admin.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro', exact: true })).toBeVisible();
   expect(new URL(admin.url()).pathname).toBe(originalUrl.pathname);
   await expect(admin.getByRole('textbox', { name: 'Motivo dell’incarico', exact: true })).toHaveValue('Incarico sintetico qualificazione browser');
-  await expect(admin.getByLabel('Descrizione tecnica', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
   await expect(admin.getByLabel(new RegExp(row.documents[0].title + ' ·'))).toBeChecked();
   expect(await assignments(row)).toBe(0);
   expect(await db.auditLog.count({ where: { id: `technical-attempt:${priorCommand}` } })).toBe(1);
@@ -476,4 +479,53 @@ test('expired Admin confirmation preserves the full draft, renews inline and com
   await admin.reload(); expect(await assignments(row)).toBe(1);
   await screenshot(admin, 'admin-inline-confirmation-reopened');
   await ac.close();
+});
+
+test('Admin reopens the exact retained grant beyond 200 entries and replaces only chosen fields while preserving selected versions', async ({ browser }) => {
+  test.setTimeout(240000);
+  const row = f.rows[9], ac = await browser.newContext(), tc = await browser.newContext();
+  const admin = await ac.newPage(), tech = await tc.newPage();
+  await login(admin, f.adminEmail, true); await assign(admin, row, row.techA);
+  await admin.goto(management(row) + '?recipient=' + row.techA.id);
+  const opened = JSON.parse(await admin.locator('input[name="command"]').first().inputValue());
+  const saved = opened.selection;
+  await expect(admin.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
+  await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel('Portale', { exact: true })).toBeChecked();
+  await expect(admin.getByRole('heading', { name: 'Versioni documentali registrate · 2', exact: true })).toBeVisible();
+  await expect(admin.getByText(/Download non concesso/, { exact: false })).toHaveCount(1);
+  await expect(admin.getByText(/Download concesso/, { exact: false })).toHaveCount(1);
+  expect(saved.documents).toHaveLength(2);
+  expect(saved.documents.map((d: { allowDownload: boolean }) => d.allowDownload)).toEqual([false, true]);
+  const snapshot = await seedAssignmentOverviewBoundary(db, f.adminId,
+    { kind: 'TechnicalPractice', targetId: row.practiceId }, row.techA.id);
+  expect(snapshot.selectedAssignment!.selection).toEqual(saved);
+  const n = await assignments(row); expect(n).toBe(201);
+  await admin.reload();
+  await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toHaveValue(row.techA.id);
+  await expect(admin.getByRole('region', { name: 'Incarico corrente fuori elenco', exact: true })
+    .getByRole('heading', { name: 'Versioni documentali registrate · 2', exact: true })).toBeVisible();
+  expect(JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).selection).toEqual(saved);
+  expect(await assignments(row)).toBe(n);
+  await admin.getByLabel('Priorità', { exact: true }).check();
+  await admin.getByLabel('Responsabile tecnico · nome', { exact: true }).check();
+  await admin.getByLabel('Motivo dell’incarico', { exact: true }).fill('Sostituzione sintetica dei soli campi di lettura');
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
+  await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+  expect(JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).expectedRevision).toBe(opened.expectedRevision);
+  await expect(admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
+  await admin.goto(management(row) + '?recipient=' + row.techA.id);
+  const after = JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).selection;
+  expect(after.documents).toEqual(saved.documents); expect(after.expiresAt).toBe(saved.expiresAt);
+  expect(after.editableFields).toEqual(saved.editableFields); expect(after.actions).toEqual(saved.actions);
+  expect(after.readableFields).toEqual([...saved.readableFields, 'priority', 'technicalOwnerName']);
+  expect(await assignments(row)).toBe(n);
+  await login(tech, row.techA.email); await tech.goto(work(row));
+  await expect(tech.getByText('Priorità', { exact: true }).first()).toBeVisible();
+  await expect(tech.getByText('Responsabile tecnico · nome', { exact: true }).first()).toBeVisible();
+  for (const text of row.excluded) expect(await tech.content()).not.toContain(text);
+  await screenshot(admin, 'retained-grant-admin'); await ac.close(); await tc.close();
 });

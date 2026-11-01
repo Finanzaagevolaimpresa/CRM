@@ -5,7 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), root = process.env.RECORD_PROFILES_EVIDENCE!, password = process.env.RECORD_PROFILES_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8'));
-async function login(page: Page, role: 'admin' | 'owner' | 'outsider') {
+async function login(page: Page, role: 'admin' | 'owner' | 'outsider' | 'editor') {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(`profiles-${role}@example.test`);
   await page.getByLabel('Password', { exact: true }).fill(password);
@@ -57,11 +57,17 @@ test('anagrafica journey persists lead, client, company and referent; outsider a
   await editing.getByRole('button', { name: 'Salva referente', exact: true }).click(); await expect(admin).toHaveURL(/#referenti$/);
   await expect(admin.getByText('Amministratore', { exact: true })).toBeVisible();
   await login(outsider, 'outsider'); const denied = await outsider.goto(`/companies/${company.id}/edit`); expect(denied?.status()).toBe(404);
-  await login(owner, 'owner'); await owner.goto(`/companies/${company.id}/edit`);
-  await owner.locator('input[name="name"]').fill('Must not save');
-  await db.userPermissionOverride.create({ data: { userId: f.ownerId, permission: 'company.write', allowed: false } });
-  await owner.getByRole('button', { name: 'Salva anagrafica', exact: true }).click();
-  await expect(owner.getByRole('alert').filter({ hasText: 'Salvataggio non autorizzato' })).toBeVisible();
+  await login(owner, 'owner'); const technicalDenied = await owner.goto(`/companies/${company.id}/edit`);
+  expect(technicalDenied?.status()).toBe(404);
+  const ec = await browser.newContext(options), editor = await ec.newPage();
+  await login(editor, 'editor');
+  await editor.goto(`/companies/${company.id}/edit`);
+  await editor.locator('input[name="name"]').fill('Must not save');
+  const author = await db.user.findUniqueOrThrow({ where: { email: 'profiles-editor@example.test' } });
+  await db.userPermissionOverride.update({ where: { userId_permission: { userId: author.id, permission: 'company.write' } }, data: { allowed: false } });
+  await editor.getByRole('button', { name: 'Salva anagrafica', exact: true }).click();
+  await expect(editor.getByRole('alert').filter({ hasText: 'Salvataggio non autorizzato' })).toBeVisible();
+  await ec.close();
   expect((await db.company.findUniqueOrThrow({ where: { id: company.id } })).name).toBe('Profiles Browser Company');
   writeFileSync(join(root, 'browser-proof.json'), JSON.stringify({ synthetic: true, lead: true, client: true, company: true, nullClearing: true,
     zeroPreserved: true, personCreateAndEdit: true, outsiderDenied: true, revokedOpenFormDenied: true }));

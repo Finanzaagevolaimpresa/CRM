@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -6,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { listAdminComplaintMessages } from '@/lib/approved-communications';
 import { approvedMessageLabels, type ApprovedMessageState } from '@/lib/approved-communication-contract';
 export const dynamic = 'force-dynamic';
-export default async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const session = await requirePermission('legal.read'); if (session.role !== 'admin') notFound();
   const query = await searchParams, data = await listAdminComplaintMessages(prisma, session, Number(query.page ?? 1));
   return <div className="crm-space-y-6"><PageHeader title="Reclami e contestazioni" description="Comunicazioni classificate Reclamo, riservate all’Admin e conservate nel contesto originario." />
@@ -19,3 +20,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ p
     <nav className="flex gap-4">{data.page > 1 && <Link className="underline" href={'?page=' + (data.page - 1)}>Precedenti</Link>}{data.hasMore && <Link className="underline" href={'?page=' + (data.page + 1)}>Successivi</Link>}</nav>
   </div>;
 }
+
+export default withTechnicalPage("/legal-compliance/disputes", Page);

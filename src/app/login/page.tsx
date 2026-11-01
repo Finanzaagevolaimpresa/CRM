@@ -1,6 +1,7 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { demoAdminLoginAction, loginAction } from '@/lib/login-actions';
 
-export default async function Login({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  async function Login({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
   const isDevelopment = process.env.APP_ENV === 'development';
   const message = error === 'invalid'
@@ -56,3 +57,5 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
     </div>
   );
 }
+
+export default withTechnicalPage("/login", Login);

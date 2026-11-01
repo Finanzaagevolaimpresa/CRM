@@ -37,11 +37,12 @@ export function TechnicalDocumentChoices({ data, choices, onChange, catalogueAct
           const next = { ...choices };
           if (event.target.checked) next[doc.fileId] = { option: doc, download: false }; else delete next[doc.fileId];
           onChange(next);
-        }} />{doc.title} · {doc.fileName} · versione {doc.version}</label>
+        }} />{doc.retainedReference ? <>Documento registrato {doc.documentId} · versione {doc.version} · file {doc.fileId}</> : <>{doc.title} · {doc.fileName} · versione {doc.version}</>}</label>
+      {doc.retainedReference && <p>Riferimento conservato dalla decisione precedente; metadati non presenti nel catalogo corrente. L’anteprima verifica di nuovo questa versione, senza sostituirla o eliminarla automaticamente.</p>}
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={!choice}
         checked={choice?.download === true} onChange={event => { if (choice) onChange({ ...choices,
           [doc.fileId]: { ...choice, download: event.target.checked } }); }} />
-        {canPreviewSelectedDocument(doc) ? 'Consenti anche il download' : 'Consenti il download (necessario per aprire il file)'}</label>
+        {doc.retainedReference ? 'Consenti il download' : canPreviewSelectedDocument(doc) ? 'Consenti anche il download' : 'Consenti il download (necessario per aprire il file)'}</label>
       {choice && <button type="button" className="rounded-lg border px-3 py-2 underline" onClick={() => {
         const next = { ...choices }; delete next[doc.fileId]; onChange(next);
       }}>Rimuovi questa versione</button>}

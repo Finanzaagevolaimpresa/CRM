@@ -36,13 +36,13 @@ test('N02 middleware is syntactic only', () => {
   assert.match(source, /isCanonicalRegistrySessionCookie/); assert.doesNotMatch(source, /prisma|InternalSession/);
   const auth = readFileSync('src/lib/auth.ts', 'utf8'); assert.match(auth, /resolveInternalSession/);
   const instrumentation = readFileSync('src/instrumentation.ts', 'utf8');
-  assert.match(instrumentation, /NEXT_RUNTIME !== ["']nodejs["']/);
+  assert.match(instrumentation, /NEXT_RUNTIME === ["']nodejs["']/);
   assert.match(instrumentation, /internalSessionMode\(\) === ["']registry["']/);
   assert.match(instrumentation, /assertRegistryStartupReady\(prisma\)/);
   assert.match(instrumentation, /assertLegacyStartupReady\(prisma\)/);
 });
 test('N02 migration and privacy are exact', () => {
-  assert.equal(readdirSync('prisma/migrations').length, 74);
+  assert.equal(readdirSync('prisma/migrations').length, 75);
   const sql = readFileSync('prisma/migrations/20260815120000_internal_session_registry_revocation_v1/migration.sql', 'utf8');
   assert.match(sql, /octet_length\("tokenDigest"\) = 32/); assert.match(sql, /ON DELETE CASCADE/); assert.match(sql, /ON DELETE SET NULL/);
   assert.doesNotMatch(sql, /^\s*(?:DROP|DELETE|UPDATE|INSERT)\b/im);

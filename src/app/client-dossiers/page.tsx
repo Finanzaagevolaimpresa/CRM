@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { OpenLink } from '@/components/actions';
@@ -7,7 +8,7 @@ import { canViewClient, canViewClientContext } from '@/lib/access-control';
 import { prisma } from '@/lib/prisma';
 import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('dossier.read');
   const [dossiers, clients, projects, services] = await Promise.all([
     prisma.clientDossier.findMany({ orderBy: { updatedAt: 'desc' } }),
@@ -33,3 +34,5 @@ export default async function Page() {
 
   return <div className="crm-space-y-6"><PageHeader title="Dossier AI / Bozze" description="Elenco interno delle bozze dossier e pre-analisi salvate nel CRM. Nessuna bozza viene inviata automaticamente al cliente."/><Card title="Bozze dossier">{visibleDossiers.length === 0 ? <EmptyState title="Nessuna bozza disponibile">Le bozze create da output AI o lavorazioni interne appariranno in questa coda protetta.</EmptyState> : <Table headers={['Titolo', 'Cliente', 'Tipo', 'Stato', 'Tracciabilità', 'Azione']} rows={visibleDossiers.map((dossier) => [<span className="font-semibold text-fai-navy" key="t">{dossier.title}</span>, clientsById.get(dossier.clientId)?.displayName ?? '—', dossier.type.replaceAll('_', ' '), <StatusBadge status={dossier.status} key="s" />, <MetaCell key="m" createdAt={dossier.createdAt} updatedAt={dossier.updatedAt} />, <OpenLink href={`/client-dossiers/${dossier.id}`} key="a">Apri</OpenLink>])} />}</Card></div>;
 }
+
+export default withTechnicalPage("/client-dossiers", Page);

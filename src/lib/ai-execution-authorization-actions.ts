@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -31,6 +32,7 @@ function revalidateRequestContext(request: {
 }
 
 export async function approveAiExecutionRequestAndRefresh(form: FormData) {
+  await assertTechnicalServerAction("ai-execution-authorization-actions:approveAiExecutionRequestAndRefresh");
   const session = await requirePermission('ai.execution.approve');
   await requirePrivilegedMutation(session, 'AI_EXECUTION_APPROVE');
   const request = await approveAiExecutionRequest(session, requestId(form));
@@ -38,6 +40,7 @@ export async function approveAiExecutionRequestAndRefresh(form: FormData) {
 }
 
 export async function rejectAiExecutionRequestAndRefresh(form: FormData) {
+  await assertTechnicalServerAction("ai-execution-authorization-actions:rejectAiExecutionRequestAndRefresh");
   const session = await requirePermission('ai.execution.reject');
   await requirePrivilegedMutation(session, 'AI_EXECUTION_REJECT');
   const request = await rejectAiExecutionRequest(session, requestId(form));
@@ -45,6 +48,7 @@ export async function rejectAiExecutionRequestAndRefresh(form: FormData) {
 }
 
 export async function requestAiExecutionInformationAndRefresh(form: FormData) {
+  await assertTechnicalServerAction("ai-execution-authorization-actions:requestAiExecutionInformationAndRefresh");
   const session = await requirePermission('ai.execution.reject');
   await requirePrivilegedMutation(session, 'AI_EXECUTION_INFORMATION_REQUEST');
   const request = await requestAiExecutionInformation(session, requestId(form));
@@ -52,6 +56,7 @@ export async function requestAiExecutionInformationAndRefresh(form: FormData) {
 }
 
 export async function revokeAiExecutionRequestAndRefresh(form: FormData) {
+  await assertTechnicalServerAction("ai-execution-authorization-actions:revokeAiExecutionRequestAndRefresh");
   const session = await requirePermission('ai.execution.revoke');
   await requirePrivilegedMutation(session, 'AI_EXECUTION_REVOKE');
   const request = await revokeAiExecutionRequest(session, requestId(form));
@@ -59,6 +64,7 @@ export async function revokeAiExecutionRequestAndRefresh(form: FormData) {
 }
 
 export async function cancelAiExecutionRequestAndRedirect(form: FormData) {
+  await assertTechnicalServerAction("ai-execution-authorization-actions:cancelAiExecutionRequestAndRedirect");
   const session = await requireSession();
   const request = await cancelAiExecutionRequest(session, requestId(form));
   revalidateRequestContext(request);

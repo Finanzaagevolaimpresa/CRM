@@ -13,6 +13,9 @@ import { recordCommercialOrigin } from '../../src/lib/commercial-origin';
 import { readPrivateVideoFile } from '../../src/lib/video-storage';
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
 import { readTechnicalUploadPrivateFile } from '../../src/lib/technical-upload-storage';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
+import { syntheticSession } from '../selective-sharing/fixtures';
+import { readTechnicalRecoveryFootprint } from './technical-footprint';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -37,9 +40,14 @@ async function main() {
     const entry = await db.$transaction(tx => handoffPurchasedService(tx, f.admin, f.input, true), { isolationLevel: 'Serializable' });
     const accepted = await db.$transaction(tx => acceptResponsibility(tx, f.tech, { kind: 'TechnicalPractice',
       id: entry.receipt.technicalPracticeId, decisionId: entry.receipt.decisionId, role: 'tecnico' }), { isolationLevel: 'Serializable' });
+    const classificationAdmin = await db.user.findUniqueOrThrow({ where: { id: f.admin.id } });
+    const classification = await classifySyntheticTechnicalVersion(db, { user: classificationAdmin,
+      ...await syntheticSession(db, classificationAdmin) }, f.documents[2].version.id);
+    assert.ok(classification);
     writeFileSync(process.argv[3], JSON.stringify({ synthetic: true, clientId: f.client.id, serviceId: f.service.id,
       practiceId: entry.receipt.technicalPracticeId, handoffId: entry.id, acceptanceId: accepted.id, originId: origin.id,
       tech: { id: f.tech.id, email: f.tech.email }, otherEmail: f.other.email, otherId: f.other.id, adminEmail: f.admin.email,
+      materialVersionId: f.documents[2].version.id, materialClassificationCommandId: classification.commandId,
       materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
   } else if (mode === 'epochs') {
     // Compare every epoch immediately across each stop/start, before browser
@@ -110,15 +118,10 @@ async function main() {
       assert.equal(sha256, version.checksum);
       selectedPracticeFiles.push({ versionId: version.id, sha256, sizeBytes: bytes.length });
     }
-    const technicalAssignments = await db.$queryRaw<Array<{ id: string; recipientId: string; practiceId: string | null; projectId: string | null; revokedAt: Date | null }>>`SELECT * FROM "TechnicalAssignment" ORDER BY id`;
-    const technicalClients = await db.technicalPractice.findMany({ where: { id: { in: technicalAssignments.flatMap(row => row.practiceId ? [row.practiceId] : []) } }, select: { clientId: true } });
-    const technicalDocuments = await db.document.findMany({ where: { clientId: { in: technicalClients.map(row => row.clientId) } }, orderBy: { id: 'asc' } });
-    const technicalFiles = [];
-    for (const doc of technicalDocuments) {
-      const bytes = await readPrivateDocumentBounded(doc.storagePath, 1024 * 1024);
-      const sha256 = createHash('sha256').update(bytes).digest('hex');
-      assert.equal(sha256, doc.checksum); technicalFiles.push({ id: doc.id, sizeBytes: bytes.length, sha256 });
-    }
+    const technicalFixture = JSON.parse(readFileSync(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, 'utf8')) as {
+      synthetic: boolean; clientId: string; supportEmail: string; mixedEmail: string;
+    };
+    const technicalFootprint = await readTechnicalRecoveryFootprint(db, technicalFixture);
     const uploadSubmissions = await db.technicalUploadSubmission.findMany({ orderBy: { id: 'asc' } });
     const uploadReviews = await db.technicalUploadReview.findMany({ orderBy: { commandId: 'asc' } });
     const uploadFiles = [];
@@ -147,17 +150,7 @@ async function main() {
       adminRequestEvents: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestEvent" ORDER BY id`,
       adminRequestDrafts: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestDraft" ORDER BY "requestId"`,
       adminRequestAudit: await db.auditLog.findMany({ where: { event: 'admin_request_changed' }, orderBy: { id: 'asc' } }),
-      technicalAssignments, technicalDocuments, technicalFiles,
-      technicalAuthority: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentAuthority" ORDER BY id`,
-      technicalDecisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentDecision" ORDER BY id`,
-      technicalRevisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentRevision" ORDER BY id`,
-      technicalWorkCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkCommand" ORDER BY id`,
-      technicalItemGenerations: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkItemGeneration" ORDER BY kind,"itemId"`,
-      technicalItemCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkItemCommand" ORDER BY id`,
-      technicalChecklist: await db.documentChecklistItem.findMany({ orderBy: { id: 'asc' } }),
-      technicalAudit: await db.auditLog.findMany({ where: { event: { in: ['technical_assignment_changed','technical_work_recorded','technical_work_item_recorded'] } }, orderBy: { id: 'asc' } }),
-      technicalUsers: await db.user.findMany({ where: { id: { in: technicalAssignments.map(row => row.recipientId) } }, orderBy: { id: 'asc' },
-        select: { id: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
+      ...technicalFootprint,
       selectivePracticeAuthority: await db.selectivePracticeAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectivePracticeGrants: await db.selectivePracticeGrant.findMany({ orderBy: { id: 'asc' } }),
       selectivePracticeRevisions: (await db.selectivePracticeRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
@@ -233,6 +226,7 @@ async function main() {
       ordinaryDecision: await db.ordinaryEmailDecision.findMany({ orderBy: { id: 'asc' } }),
       ordinaryAttempt: await db.ordinaryEmailAttempt.findMany({ orderBy: { id: 'asc' } }),
       ordinaryClaim: await db.ordinaryEmailClaim.findMany({ orderBy: { id: 'asc' } }),
+      ordinaryReconciliation: await db.ordinaryEmailReconciliation.findMany({ orderBy: { id: 'asc' } }),
       ordinaryOutcome: await db.ordinaryEmailOutcome.findMany({ orderBy: { id: 'asc' } }),
       ordinaryInboundStream: await db.ordinaryEmailInboundStream.findMany({ orderBy: { id: 'asc' } }),
       ordinaryInboundBatch: await db.ordinaryEmailInboundBatch.findMany({ orderBy: { id: 'asc' } }),
@@ -276,7 +270,7 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 74);
+    assert.equal(data.ledger.length, 75);
     assert.equal(data.adminRecordRevisions.length, 4); assert.equal(data.adminRecordAudit.length, 4);
     assert.equal(data.adminResidualRevisions.length, 4); assert.equal(data.adminResidualAudit.length, 4);
     assert.equal(data.adminResidualProfile[0].permissionOverrides.find(row => row.permission === 'lead.read')?.allowed, false);
@@ -292,7 +286,7 @@ async function main() {
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261030190000_admin_residual_provenance_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261101090000_ordinary_email_reconciliation_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);
@@ -300,12 +294,6 @@ async function main() {
     assert.equal(data.acquiredDocuments.length, 1); assert.equal(data.documentAcquisitions.length, 1); assert.equal(data.acquisitionAudit.length, 1);
     assert.equal(data.adminRequests.length, 4); assert.equal(data.adminRequestEvents.length, 7);
     assert.equal(data.adminRequestDrafts.length, 2); assert.equal(data.adminRequestAudit.length, 7);
-    assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 5);
-    assert.equal(data.technicalAssignments.filter(row => row.revokedAt).length, 2);
-    assert.equal(data.technicalDecisions.length, 7); assert.equal(data.technicalRevisions.length, 7);
-    assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 9);
-    assert.equal(data.technicalItemCommands.length, 1); assert(data.technicalItemGenerations.length > 0);
-    assert.equal(data.technicalFiles.length, 7); assert.equal(data.technicalUsers.length, 4);
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectivePracticeRevisions.length, 4); assert.equal(data.selectivePracticeCommands.length, 4);
@@ -348,10 +336,12 @@ async function main() {
     assert.equal(data.ordinaryAuthority.length, 1);
     assert.equal(data.ordinaryAuthority[0].enabled, true);
     assert.equal(data.ordinaryChannel[0].enabled, false);
-    assert.deepEqual(data.ordinaryAttempt.map(row=>row.state).sort(), ['ACCEPTED','CLAIMED','RESERVED','UNCERTAIN']);
+    assert.deepEqual(data.ordinaryAttempt.map(row=>row.state).sort(), ['ACCEPTED','ACCEPTED','CLAIMED','RESERVED']);
     assert.equal(data.ordinaryDecision.length, 4);
     assert.equal(data.ordinaryClaim.length, 3);
     assert.equal(data.ordinaryOutcome.length, 2);
+    assert.equal(data.ordinaryReconciliation.length,1);assert.equal(data.ordinaryReconciliation[0].outcome,'ACCEPTED');
+    assert.equal(data.ordinaryOutcome.find(o=>o.id===data.ordinaryReconciliation[0].previousOutcomeId)?.outcome,'UNCERTAIN');
     assert.equal(data.ordinaryInboundStream.length, 1);
     assert.equal(data.ordinaryInboundStream[0].cursor, '103');
     assert.equal(data.ordinaryInboundStream[0].cursorVersion, 2);

@@ -67,7 +67,10 @@ for (const viewport of [{ name: 'desktop', width: 1365, height: 900 }, { name: '
 test('registry revocation, sales reassignment and both technical accounts cannot reuse the sales endpoint', async ({ browser }) => {
   for (const key of ['tech_a', 'tech_b']) {
     const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3048' }); await admit(context, key);
-    expect((await context.request.get('/api/commercial-progress')).status()).toBe(403); await context.close();
+    const denied = await context.request.get('/api/commercial-progress');
+    expect(denied.status()).toBe(404);
+    const body = await denied.text(); expect(body).not.toContain(fixtures.a.name); expect(body).not.toContain(fixtures.b.name);
+    await context.close();
   }
   const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3048' }), registry = await admit(context, 'sales_a');
   expect((await (await context.request.get('/api/commercial-progress')).json()).items).toHaveLength(1);

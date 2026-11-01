@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { requirePermission } from '@/lib/auth';
@@ -6,6 +7,7 @@ import { isAllowedMutationOrigin } from '@/lib/application-security-policy';
 import { EngagementDossierError, exportEngagementWorkPackage } from '@/lib/engagement-dossier';
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/client-dossiers/[id]/work-export");
   if (!isAllowedMutationOrigin({ origin: request.headers.get('origin'), secFetchSite: request.headers.get('sec-fetch-site'), configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) return new NextResponse('Non autorizzato', { status: 403 });
   const session = await requirePermission('dossier.read');
   const { id } = await params;

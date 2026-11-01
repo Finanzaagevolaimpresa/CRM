@@ -1,3 +1,4 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
 import { Prisma, type PrismaClient, type VideoEntry, type VideoAsset } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -28,13 +29,14 @@ async function transaction<T>(db: PrismaClient, run: (tx: Tx) => Promise<T>) {
 const userSelection = { id: true, name: true, email: true, role: true, active: true, deletedAt: true, recordUpdateEpoch: true,
   permissionOverrides: { select: { permission: true, allowed: true } } } as const;
 type CurrentPerson = Prisma.UserGetPayload<{ select: typeof userSelection }>;
-function person(row: CurrentPerson): VideoPerson {
+function person(row: CurrentPerson & { technicalRestricted?: boolean }): VideoPerson {
   return { id: row.id, name: row.name, email: row.email, role: row.role, active: row.active, deleted: Boolean(row.deletedAt),
     epoch: row.recordUpdateEpoch, canRead: recordUpdatePermission(row, 'video.read'),
     canManage: row.role === 'admin' && recordUpdatePermission(row, 'video.manage') };
 }
 async function directory(tx: Tx) {
-  return (await tx.user.findMany({ select: userSelection, orderBy: { id: 'asc' } })).map(person);
+  const rows = await tx.user.findMany({ select: userSelection, orderBy: { id: 'asc' } });
+  return Promise.all(rows.map(async row => person({ ...row, technicalRestricted: await currentTechnicalRestriction(tx, row.id, row) })));
 }
 async function actor(tx: Tx, claimed: AuthSession, manage = false, proof?: Proof) {
   let auth;

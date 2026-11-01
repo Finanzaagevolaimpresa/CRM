@@ -23,6 +23,7 @@ import { technicalFieldPreview } from './technical-assignment-display';
 import { technicalAssignmentTargetFields } from './technical-assignment-target';
 import { technicalImplementedActions } from './technical-assignment-contract';
 import { assertTechnicalWorkItemChoices } from './technical-work-item-source';
+import { technicalFieldAllowed } from './technical-confidentiality';
 import { withTechnicalAssignmentAttemptSettlement } from './technical-assignment-transaction';
 import { readTechnicalAttemptClosure, persistTechnicalAttemptClosure } from './technical-assignment-attempt';
 import { TechnicalAssignmentAttemptClosedError } from './technical-assignment-errors';
@@ -61,8 +62,11 @@ async function currentAdmission(tx: Tx, state: TechnicalAssignmentTransaction, l
     const scope = await loadTechnicalAssignmentIndependentScope(tx, reference.recipientId);
     if (hasSelectiveClientContext(scope, locked.context) || hasSelectiveContext(scope, locked.context)
       || (reference.kind === 'TechnicalPractice' && isSelectivePractice(scope, reference.targetId))) deny();
+    if ([...input.selection.readableFields, ...input.selection.editableFields].some(field => !technicalFieldAllowed(reference.kind, field))
+      || input.selection.workItems?.some(item => [...item.readableFields, ...item.editableFields].some(field => !technicalFieldAllowed(item.kind, field)))) deny();
     await assertTechnicalWorkItemChoices(tx, state, locked.context, input.selection);
     const documents = await assertTechnicalAssignmentDocuments(tx, state, locked.context, input.selection.documents);
+    if (documents.metadata.length !== input.selection.documents.length) deny();
     validUntil = Math.min(validUntil, documents.validUntil);
   } else if ('selection' in input || !locked.previous || locked.previous.revokedAt !== null
     || input.assignmentId !== locked.previous.id) stale();

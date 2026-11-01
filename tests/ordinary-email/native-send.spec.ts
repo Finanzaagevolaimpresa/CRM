@@ -9,6 +9,7 @@ import { saveApprovedMessageDraft } from '../../src/lib/approved-communications'
 import { emptyCommunicationRecipientSelection } from '../../src/lib/communication-recipient-policy';
 import { previewInternalCommunication, confirmInternalCommunication } from '../../src/lib/internal-communications';
 import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
+import { privilegedStepUpCookieName } from '../../src/lib/privileged-access';
 import { storeCommunicationFile } from '../../src/lib/communication-files';
 
 const db = new PrismaClient(), origin = 'http://127.0.0.1:3036', evidence = process.env.ORDINARY_EMAIL_BROWSER_EVIDENCE!;
@@ -156,6 +157,76 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
   expect(await panel(uncertain.id).count()).toBe(0);
   expect(await attempts(uncertain.id)).toBe(1);
 
+  // A missing observation is meaningful only after the exact claim expires.
+  // Poll the authoritative DB clock; no sleep assumption, state rewrite or send.
+  const [uncertainClaim] = await db.$queryRaw<Array<{ id: string }>>`SELECT a."id"
+    FROM "OrdinaryEmailAttempt" a JOIN "OrdinaryEmailClaim" c ON c."attemptId"=a."id"
+    WHERE a."messageId"=${uncertain.id}::uuid`;
+  expect(uncertainClaim?.id).toBeTruthy();
+  await expect.poll(async () => {
+    const [claim] = await db.$queryRaw<Array<{ expired: boolean }>>`SELECT "expiresAt"<=clock_timestamp() AS expired
+      FROM "OrdinaryEmailClaim" WHERE "attemptId"=${uncertainClaim.id}::uuid`;
+    return claim?.expired;
+  }, { timeout: 20_000, intervals: [100, 250, 500] }).toBe(true);
+  const waitingRecovery = page.locator('[data-recovery-attempt="'+uncertainClaim.id+'"]');
+  await waitingRecovery.getByRole('button', { name: 'Verifica prova ed esito dello stesso tentativo' }).click();
+  await expect(waitingRecovery).toContainText('Nessuna prova autorevole disponibile');
+  expect(await state(uncertain.id)).toBe('UNCERTAIN');
+  const beforeRecoveryTransport = await metrics();
+
+  // The SMTP peer accepts, but the DB audit fault prevents the normal receipt
+  // transaction. The independent journal is the only authoritative source.
+  await writeFile(path.join(process.env.ORDINARY_EMAIL_TLS_CONTROL!, 'mode'), 'accept');
+  const lost = await fresh('Ricevuta persa dopo risposta SMTP sintetica');
+  await db.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION native_recovery_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW."entityId"='${lost.id}' AND NEW."event"='ordinary_email_outcome'
+      THEN RAISE EXCEPTION 'SYNTHETIC_RECEIPT_FAULT'; END IF; RETURN NEW; END; $$`);
+  await db.$executeRawUnsafe('CREATE TRIGGER native_recovery_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION native_recovery_fault()');
+  await open(lost.id); await send(lost.id);
+  await expect.poll(() => attempts(lost.id)).toBe(1);
+  await page.reload();
+  const [lostAttempt] = await db.$queryRaw<Array<{id:string;expiresAt:Date}>>`SELECT a."id",c."expiresAt" FROM "OrdinaryEmailAttempt" a JOIN "OrdinaryEmailClaim" c ON c."attemptId"=a."id" WHERE a."messageId"=${lost.id}::uuid`;
+  await new Promise(resolve => setTimeout(resolve, Math.max(0,lostAttempt.expiresAt.getTime()-Date.now()+100)));
+  const recovery = page.locator('[data-recovery-attempt="'+lostAttempt.id+'"]');
+  await recovery.getByRole('button', { name: 'Verifica prova ed esito dello stesso tentativo' }).click();
+  await expect(recovery).toContainText('Esito osservato: Accettata dal server SMTP');
+  const reason='Recupero sintetico dopo risposta SMTP, senza secondo invio';
+  await recovery.getByRole('textbox', { name: 'Motivo della riconciliazione' }).fill(reason);
+  await context.clearCookies({name:privilegedStepUpCookieName});
+  await recovery.getByLabel('Confermo la riconciliazione di questo tentativo con la sola prova riepilogata.').check();
+  await recovery.getByRole('button', {name:'Registra riconciliazione senza inviare'}).click();
+  await expect(recovery).toContainText('Riconferma l’identità');
+  await expect(recovery.getByRole('textbox', {name:'Motivo della riconciliazione'})).toHaveValue(reason);
+  await recovery.getByLabel('Password corrente').fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
+  await recovery.getByRole('button', {name:'Conferma identità e conserva le scelte'}).click();
+  await expect(recovery.getByRole('button',{name:'Riconferma identità se la finestra è scaduta'})).toBeVisible();
+  await recovery.getByRole('button', {name:'Verifica prova ed esito dello stesso tentativo'}).click();
+  await expect(recovery.getByRole('button', {name:'Registra riconciliazione senza inviare'})).toBeEnabled();
+  await expect(recovery.getByRole('textbox', {name:'Motivo della riconciliazione'})).toHaveValue(reason);
+  await recovery.getByLabel('Confermo la riconciliazione di questo tentativo con la sola prova riepilogata.').check();
+  let recoveryPosts=0;
+  await page.route('**/communications?**',async route=>{
+    if(route.request().method()==='POST' && route.request().postData()?.includes(reason)){
+      recoveryPosts++;await route.fetch();await route.abort('failed');
+    }else await route.fallback();
+  });
+  await recovery.getByRole('button', {name:'Registra riconciliazione senza inviare'}).click();
+  await expect.poll(()=>db.ordinaryEmailReconciliation.count({where:{attemptId:lostAttempt.id}})).toBe(1);
+  await expect(recovery).toContainText('Risposta non osservata');
+  await expect(recovery.getByRole('button', {name:'Registra riconciliazione senza inviare'})).toBeDisabled();
+  await page.unroute('**/communications?**');
+  await recovery.getByRole('button', {name:'Verifica prova ed esito dello stesso tentativo'}).click();
+  await expect(recovery).toContainText('Riconciliazione registrata: Accettata dal server SMTP');
+  await page.reload();await expect(recovery).toBeVisible();
+  await recovery.getByRole('button', {name:'Verifica prova ed esito dello stesso tentativo'}).click();
+  await expect(recovery).toContainText('Riconciliazione registrata');
+  expect(recoveryPosts).toBe(1);expect(await attempts(lost.id)).toBe(1);
+  expect(await db.auditLog.count({where:{entityId:lost.id,event:'ordinary_email_reconciled'}})).toBe(1);
+  expect((await metrics()).connections).toBe(beforeRecoveryTransport.connections+1);
+  expect((await metrics()).contents.length).toBe(beforeRecoveryTransport.contents.length+1);
+  await db.$executeRawUnsafe('DROP TRIGGER native_recovery_fault ON "AuditLog"');
+  await db.$executeRawUnsafe('DROP FUNCTION native_recovery_fault()');
+
   // The same qualified adapter and native personal action serve all new contexts.
   // The server remains the isolated synthetic TLS peer; no new transport exists.
   await writeFile(path.join(process.env.ORDINARY_EMAIL_TLS_CONTROL!, 'mode'), 'accept');
@@ -186,14 +257,16 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
   await send(keyDenied.id); await expect(page).toHaveURL(/\/settings\/security\?status=unavailable$/);
   expect(await attempts(keyDenied.id)).toBe(0);
   const last = await metrics();
-  expect(last.connections).toBe(baseline.connections + 6); expect(last.authenticated).toBe(6); expect(last.contents).toHaveLength(5);
+  expect(last.connections).toBe(baseline.connections + 7); expect(last.authenticated).toBe(7); expect(last.contents).toHaveLength(6);
   expect(externalRequests).toBe(0);
   const proof = { synthetic: true, nativeLoginAndStepUp: true, nativeSendAction: true, nativeTls: true,
     internalNetwork: network.internalNetwork, noIpv4DefaultRoute: network.ipv4DefaultRoute === false,
     wrongServernameDenied: tlsProof.wrongServernameDenied, untrustedIssuerDenied: tlsProof.untrustedIssuerDenied,
     otherAdminDenied, concurrentEditDenied: true, changedQualificationDenied: true, currentSessionRevocationDenied: true,
     retiredKeyDenied: true, doubleClickPosts: posts, committedResponseLost: true, replayDenied: true,
-    exactMimeHash: true, exactEnvelope: true, bccHeaderAbsent: true, accepted: 4, notSent: 1, uncertain: 1,
+    exactMimeHash: true, exactEnvelope: true, bccHeaderAbsent: true, accepted: 5, notSent: 1, uncertain: 1,
+    authoritativeRecovery: true, noProofRemainsUncertain: true, recoveryPosts, recoveryDraftSurvivesStepUp: true,
+    recoveryLostResponseReadback: true, recoveryDoesNotResend: true,
     leadClientInternalNativeTls: true, privateContextAttachment: true,
     authenticatedSyntheticConnections: last.authenticated, externalBrowserRequests: externalRequests, automaticRetries: 0, screenshotsInspected: false };
   await writeFile(path.join(evidence, 'native-send-proof.json'), JSON.stringify(proof, null, 2));

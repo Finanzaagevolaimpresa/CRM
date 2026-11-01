@@ -331,7 +331,11 @@ test('two commercial owners and two technicians retain separate filtered request
     await submitAdminRequest(db, people[i].session, { ...input, commandId: randomUUID(), kind: 'DOCUMENT', title: `${term} document ${i}` });
   }
   for (let i = 0; i < people.length; i++) {
-    const own = await readAdminRequestQueue(db, people[i].session, 1, term, 'INTEGRATION');
+    const own = await readAdminRequestQueue(db, people[i].session, 1, i < 2 ? term : 'Richiesta all’Admin', 'INTEGRATION');
+    if (i >= 2) {
+      assert.equal((await readAdminRequestQueue(db, people[i].session, 1, term, 'INTEGRATION')).items.length, 0);
+      assert(own.items.every(row => row.title === 'Richiesta all’Admin'));
+    }
     assert.deepEqual(own.items.map(row => row.id), [requests[i]]); assert.equal(own.hasNext, false);
     await assert.rejects(readAdminRequest(db, people[i].session, requests[(i + 1) % people.length]));
   }

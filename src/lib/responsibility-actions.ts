@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
@@ -23,6 +24,7 @@ function refresh(kind: 'Lead' | 'TechnicalPractice', id: string) {
   revalidatePath(kind === 'Lead' ? `/leads/${id}` : `/technical-office/practices/${id}`);
 }
 export async function saveResponsibilityAction(_previous: Result, form: FormData): Promise<Result> {
+  await assertTechnicalServerAction("responsibility-actions:saveResponsibilityAction");
   const data = assignmentSchema.safeParse(Object.fromEntries(form.entries()));
   if (!data.success) return { ok: false, message: 'Compila i dati richiesti e la motivazione.' };
   const actor = await requirePermission(data.data.kind === 'Lead' ? 'lead.write' : 'technical.assign');
@@ -36,6 +38,7 @@ export async function saveResponsibilityAction(_previous: Result, form: FormData
   return { ok: true, message: 'Decisione registrata. La presa in carico spetta al referente individuale.' };
 }
 export async function acceptResponsibilityAction(_previous: Result, form: FormData): Promise<Result> {
+  await assertTechnicalServerAction("responsibility-actions:acceptResponsibilityAction");
   const data = acceptanceSchema.safeParse(Object.fromEntries(form.entries()));
   if (!data.success) return { ok: false, message: 'Presa in carico non valida. Riapri la scheda.' };
   const actor = await requirePermission('assignment.accept');

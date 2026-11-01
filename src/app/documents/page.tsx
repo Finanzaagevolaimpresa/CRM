@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { DocumentFileLinks } from '@/components/document-file-links';
 export const dynamic = 'force-dynamic';
 import { canAccessFinancialDocumentMetadata } from '@/lib/financial-access';
@@ -13,7 +14,7 @@ import { isMissingChecklistDocument } from '@/lib/document-checklist';
 
 const serviceAreas = ['anagrafica','bancabilita','finanziamento_aziendale','bandi_finanza_agevolata','progetto_investimento','contratti','pagamenti','dossier','output_ai','altro'];
 
-export default async function Page({ searchParams }: { searchParams?: Promise<{ uploadError?: string }> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<{ uploadError?: string }> }) {
   const params = await searchParams;
   const session = await requirePermission('document.download');
   const [documentItems, clientRows, companyRows, projectRows, serviceRows, catalogRows, userRows, checklistRows] = await Promise.all([
@@ -88,3 +89,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     <Card title="Elenco operativo">{visible.length === 0 ? <EmptyState title="Nessun elemento presente" /> : <Table headers={['Documento', 'Cliente/Azienda/Progetto', 'Sezione', 'Categoria', 'Stato file', 'Tracciabilità', 'Scadenza', 'Visualizza / scarica']} rows={visible.map((x) => { const ok = availability.get(x.id); return [<span className='font-semibold text-fai-navy' key='n'>{x.title}<br/><span className="text-xs font-normal text-slate-500">{x.fileName}{!ok ? ' · metadata demo / file non caricato' : ''}</span></span>, <span key="cp">{x.clientId ? clients.get(x.clientId) ?? '—' : '—'}<br/>{x.companyId ? companies.get(x.companyId) : ''}{x.companyId && x.projectId ? ' · ' : ''}{x.projectId ? projects.get(x.projectId) : ''}</span>, x.serviceArea, <span key='c'>{x.documentCategory} {isSensitiveDocument(x) ? <span className='ml-2 rounded-full bg-fai-orange/10 px-2 py-0.5 text-xs font-bold text-fai-orange'>sensibile</span> : null}<br/><StatusBadge status={x.status} /></span>, ok ? 'disponibile' : 'metadata demo / non caricato', <MetaCell key='m' timeZone="Europe/Rome" createdAt={x.createdAt} updatedAt={x.updatedAt} owner={users.get(x.uploadedById)} />, formatDateTime(x.validUntil, "Europe/Rome"), ok ? <DocumentFileLinks key="d" id={x.id} /> : <DisabledAction key='d' reason='File fisico assente nello storage privato'>File non caricato</DisabledAction>]; })} />}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/documents", Page);

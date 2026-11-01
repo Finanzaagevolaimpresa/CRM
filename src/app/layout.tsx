@@ -20,7 +20,7 @@ export default async function RootLayout({
       <body>
         <InteractiveReadyMarker />
         <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
-          <Nav effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={session?.role} />
+          <Nav effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={session?.role} technicalRestricted={session?.technicalRestricted} />
           <div className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
             <AppHeader><div className="sticky top-0 z-20 hidden border-b border-slate-200/80 bg-white/95 px-6 py-3 backdrop-blur-xl md:block">
               <div className="flex flex-wrap items-center justify-between gap-3">

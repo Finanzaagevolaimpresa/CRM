@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z, ZodError } from 'zod';
@@ -20,11 +21,13 @@ function errorMessage(error: unknown) {
   return 'Esito non confermato. Usa «Verifica esito» prima di preparare un altro salvataggio.';
 }
 export async function previewRecordUpdateAction(raw: unknown) {
+  await assertTechnicalServerAction("record-update-actions:previewRecordUpdateAction");
   const session = await requireSession();
   try { return { ok: true as const, preview: await previewRecordUpdate(prisma, session, raw) }; }
   catch (error) { return { ok: false as const, message: errorMessage(error) }; }
 }
 export async function confirmRecordUpdateAction(raw: unknown, digest: string) {
+  await assertTechnicalServerAction("record-update-actions:confirmRecordUpdateAction");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true });
@@ -47,6 +50,7 @@ export async function confirmRecordUpdateAction(raw: unknown, digest: string) {
   }
 }
 export async function verifyRecordUpdateResultAction(commandId: string) {
+  await assertTechnicalServerAction("record-update-actions:verifyRecordUpdateResultAction");
   const session = await requireSession();
   try {
     z.string().uuid().parse(commandId);
@@ -54,6 +58,7 @@ export async function verifyRecordUpdateResultAction(commandId: string) {
   } catch { return { ok: false as const, message: 'Verifica non disponibile. Il salvataggio non va ripetuto finché l’esito non è chiarito.' }; }
 }
 export async function markRecordUpdateReadAction(form: FormData) {
+  await assertTechnicalServerAction("record-update-actions:markRecordUpdateReadAction");
   const session = await requireSession();
   const id = z.string().uuid().parse(form.get('id'));
   await readSelectedRecordNotice(prisma, session, await loadActivePrivilegedStepUpKey(prisma), id, true);

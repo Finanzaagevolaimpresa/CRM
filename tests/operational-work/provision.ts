@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { ensureSyntheticTechnicalBytes, classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +11,6 @@ import { previewTechnicalAssignment, confirmTechnicalAssignment } from '../../sr
 import { leadProof } from '../selective-leads/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
-import { localPathFromStoragePath } from '../../src/lib/storage';
 const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.OPERATIONAL_BROWSER_CONFIRMED, '1');
@@ -41,13 +42,14 @@ async function main() {
   await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true);
   const bytes = Buffer.from('DOCUMENTO_ORDINARIO_R04'), doc = await db.document.create({ data: {
     clientId: client.id, projectId: project.id, title: 'Documento ordinario R04', fileName: 'ordinario.txt',
-    storagePath: 'operational-r04/ordinary.txt', checksum: null, sizeBytes: bytes.length,
+    storagePath: 'operational-r04/ordinary.txt', checksum: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length,
     type: 'text/plain', mimeType: 'text/plain', documentCategory: 'altro', uploadedById: admin.user.id,
   } });
   for (const item of [...f.documents.map(row => ({ doc: row.doc, bytes: row.bytes })), { doc, bytes }]) {
-    const dest = localPathFromStoragePath(item.doc.storagePath);
-    await mkdir(path.dirname(dest), { recursive: true }); await writeFile(dest, item.bytes, { flag: 'wx', mode: 0o600 });
+    await ensureSyntheticTechnicalBytes(db, item.doc.storagePath, item.bytes);
   }
+  const version = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, storagePath: doc.storagePath, checksum: doc.checksum } });
+  await classifySyntheticTechnicalVersion(db, admin, version.id);
   const person = (p: typeof f.techA) => ({ id: p.user.id, email: p.user.email });
   const fixture = { synthetic: true, admin: person(admin), techA: person(f.techA), techB: person(f.techB),
     salesA: person(f.salesA), salesB: person(f.salesB), ordinary: { clientId: client.id, projectId: project.id,

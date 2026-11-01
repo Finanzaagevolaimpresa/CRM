@@ -119,7 +119,12 @@ test('lost response and double click recover one durable request without replayi
   });
   await page.getByRole('button', { name: 'Invia richiesta interna all’Admin', exact: true }).dblclick({ noWaitAfter: true });
   await completed; expect(forwarded).toBe(1); await expect.poll(() => count(id)).toBe(1);
-  await page.unrouteAll({ behavior: 'wait' }); await page.goto('/admin-requests?recover=' + id);
+  await expect(page.getByRole('status')).toContainText('Risposta non osservata.');
+  await page.unrouteAll({ behavior: 'wait' });
+  await page.reload();
+  await expect(page.getByRole('link', { name: 'Verifica esito dello stesso comando', exact: true })).toHaveAttribute('href', '/admin-requests?recover=' + id);
+  await expect(page.getByRole('button', { name: 'Invia richiesta interna all’Admin', exact: true })).toBeDisabled();
+  await page.goto('/admin-requests?recover=' + id);
   await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Apri richiesta registrata', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Apri richiesta registrata', exact: true }).click(); expect(await count(id)).toBe(1);
@@ -158,21 +163,24 @@ test('filtered integrations reuse the private queue for two sales and two techni
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
     await page.goto('/admin-requests?kind=INTEGRATION&q=' + encodeURIComponent(term));
-    await expect(page.getByRole('heading', { name: titles[i], exact: true })).toBeVisible();
+    if (i >= 2) {
+      await expect(page.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(0);
+      await page.goto('/admin-requests?kind=INTEGRATION&q=' + encodeURIComponent('Richiesta all’Admin'));
+    }
+    await expect(page.getByRole('heading', { name: i >= 2 ? 'Richiesta all’Admin' : titles[i], exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(1);
     for (let j = 0; j < titles.length; j++) if (j !== i) expect(await page.content()).not.toContain(titles[j]);
     expect(await page.content()).not.toContain(`${term} documento`);
     await page.locator('form[action="/admin-requests"] select[name="kind"]').selectOption('DOCUMENT');
     await page.getByRole('button', { name: 'Cerca', exact: true }).click();
-    await expect(page.getByRole('heading', { name: `${term} documento ${i}`, exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: i >= 2 ? 'Richiesta all’Admin' : `${term} documento ${i}`, exact: true })).toBeVisible();
     expect((await contexts[i].request.get('/admin-requests/' + requestIds[(i + 1) % pages.length])).status()).toBe(404);
     expect((await contexts[i].request.get('/admin-requests?kind=INTEGRATION&kind=DOCUMENT')).status()).toBe(404);
   }
   const technical = pages[2];
-  await technical.goto('/technical-office/integrations?q=' + encodeURIComponent(term));
-  await expect(technical.getByRole('link', { name: 'Integrazioni', exact: true })).toBeVisible();
+  await technical.goto('/technical-office/integrations?q=' + encodeURIComponent('Richiesta all’Admin'));
   await expect(technical.getByRole('heading', { name: 'Integrazioni tecniche', exact: true })).toBeVisible();
-  await expect(technical.getByRole('heading', { name: titles[2], exact: true })).toBeVisible();
+  await expect(technical.getByRole('heading', { name: 'Richiesta all’Admin', exact: true })).toBeVisible();
   expect((await contexts[2].request.get('/technical-office/integrations?kind=DOCUMENT')).status()).toBe(404);
   for (const value of r.excluded) expect(await technical.content()).not.toContain(value);
   for (const [width, height, name] of [[1440, 1000, 'integrations-desktop.png'], [390, 844, 'integrations-mobile.png']] as const) {
@@ -181,7 +189,7 @@ test('filtered integrations reuse the private queue for two sales and two techni
     expect(await technical.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   }
   await technical.getByRole('link', { name: 'Apri richiesta', exact: true }).click();
-  await expect(technical.getByRole('heading', { name: titles[2], exact: true })).toBeVisible();
+  await expect(technical.getByRole('heading', { name: 'Richiesta all’Admin', exact: true })).toBeVisible();
   const admin = await browser.newContext(), review = await admin.newPage(); await login(review, f.adminEmail);
   await review.goto('/admin-requests?kind=INTEGRATION&q=' + encodeURIComponent(term));
   await expect(review.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(4);

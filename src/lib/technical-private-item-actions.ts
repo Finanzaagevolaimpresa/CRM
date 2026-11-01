@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies, headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { requireSession } from './auth';
@@ -28,6 +29,7 @@ async function proof() {
     stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' };
 }
 export async function preparePrivateTechnicalItem(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
+  await assertTechnicalServerAction("technical-private-item-actions:preparePrivateTechnicalItem");
   const session = await requireSession();
   try { await origin();
     await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true });
@@ -39,6 +41,7 @@ export async function preparePrivateTechnicalItem(_state: TechnicalPrivateItemSt
   }
 }
 export async function savePrivateTechnicalItem(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
+  await assertTechnicalServerAction("technical-private-item-actions:savePrivateTechnicalItem");
   const session = await requireSession();
   try { await origin();
     await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true });
@@ -52,6 +55,7 @@ export async function savePrivateTechnicalItem(_state: TechnicalPrivateItemState
   }
 }
 export async function checkPrivateTechnicalItem(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
+  await assertTechnicalServerAction("technical-private-item-actions:checkPrivateTechnicalItem");
   const session = await requireSession();
   try { await origin();
     const outcome = await readPrivateTechnicalItemOutcome(prisma, session, technicalTargetReference.parse(json(form, 'target')),
@@ -63,6 +67,7 @@ export async function checkPrivateTechnicalItem(_state: TechnicalPrivateItemStat
   } catch { return { ok: false, uncertain: true, message: 'Esito non disponibile con la sessione e il contesto correnti. Non ripetere la creazione.' }; }
 }
 export async function closePrivateTechnicalItemAction(_state: TechnicalPrivateItemState, form: FormData): Promise<TechnicalPrivateItemState> {
+  await assertTechnicalServerAction("technical-private-item-actions:closePrivateTechnicalItemAction");
   const session = await requireSession();
   try { await origin(); await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true });
     const outcome = await closePrivateTechnicalItemAttempt(prisma, session, await proof(), json(form, 'target'), String(form.get('commandId') ?? ''), form.get('confirmed') === 'on');

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, EmptyState, PageHeader, Table, formatDateTime } from '@/components/ui';
@@ -31,7 +32,7 @@ function summarizePayload(value: unknown) {
   return text.length > 180 ? `${text.slice(0, 180)}…` : text;
 }
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('audit.read');
 
   const [candidates, users] = await Promise.all([
@@ -105,3 +106,5 @@ export default async function Page() {
     </div>
   );
 }
+
+export default withTechnicalPage("/audit-log", Page);

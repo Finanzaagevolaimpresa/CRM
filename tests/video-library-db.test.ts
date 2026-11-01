@@ -48,7 +48,7 @@ async function confirm(f: Awaited<ReturnType<typeof fixture>>, proposed?: VideoC
 
 test('schema71 prefix, restrictive relations and no implicit publication', options, async () => {
   const [r] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(r.count, 74);
+  assert.equal(r.count, 75);
   assert.equal(await db.videoEntry.count(), 0);
   const f = await fixture();
   assert.equal((await readVideoSetup(db, admin.session, f.id)).state, 'DRAFT');
@@ -83,7 +83,7 @@ test('preview is read-only; published metadata, search, bytes and separate downl
   assert.equal(await db.videoCommand.count(), commands); assert.equal(await db.auditLog.count(), audit);
   await confirmVideo(db, admin.session, input, p.digest, proof());
   assert.ok((await listVideos(db, f.viewer.session, 'private')).some(x => x.id === f.id));
-  assert.ok(!(await listVideos(db, f.other.session, 'private')).some(x => x.id === f.id));
+  await assert.rejects(listVideos(db, f.other.session, 'private'), /DENIED/);
   assert.equal((await readVideoBytes(db, f.viewer.session, f.id)).bytes.length, 256);
   await assert.rejects(readVideoBytes(db, f.viewer.session, f.id, { download: true }));
   await assert.rejects(readVideoBytes(db, f.other.session, f.id));

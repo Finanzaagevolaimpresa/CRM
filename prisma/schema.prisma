@@ -371,6 +371,7 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  ordinaryEmailReconciliations OrdinaryEmailReconciliation[]
   administrativeRevisions AdminRecordRevision[]
   historicalLeadContacts CommercialLeadHistoricalContact[] @relation("HistoricalContactActor")
   historicalLeadConversions CommercialLeadHistoricalConversion[] @relation("HistoricalConversionActor")
@@ -464,6 +465,7 @@ model User {
 }
 
 model InternalSession {
+  ordinaryEmailReconciliations OrdinaryEmailReconciliation[]
   administrativeRevisions AdminRecordRevision[]
   historicalLeadContacts CommercialLeadHistoricalContact[]
   historicalLeadConversions CommercialLeadHistoricalConversion[]
@@ -3521,6 +3523,7 @@ model OrdinaryEmailDecision {
   attempt OrdinaryEmailAttempt?
 }
 model OrdinaryEmailAttempt {
+  reconciliation OrdinaryEmailReconciliation?
   id String @id @db.Uuid
   requestId String @unique @db.Uuid
   decisionId String @unique @db.Uuid
@@ -3533,6 +3536,7 @@ model OrdinaryEmailAttempt {
   outcome OrdinaryEmailOutcome?
 }
 model OrdinaryEmailClaim {
+  reconciliation OrdinaryEmailReconciliation?
   id String @id @db.Uuid
   attemptId String @unique @db.Uuid
   expiresAt DateTime @db.Timestamptz(3)
@@ -3541,6 +3545,7 @@ model OrdinaryEmailClaim {
   outcome OrdinaryEmailOutcome?
 }
 model OrdinaryEmailOutcome {
+  reconciliation OrdinaryEmailReconciliation?
   id String @id @db.Uuid
   attemptId String @unique @db.Uuid
   claimId String @unique @db.Uuid
@@ -4161,4 +4166,27 @@ model AdminOperationalState {
   lastCommand AdminRecordRevision? @relation("AdminOperationalStateCommand", fields: [lastCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
   @@id([model, recordId])
   @@index([model, state, updatedAt, recordId], map: "AdminOperationalState_list_idx")
+}
+
+
+model OrdinaryEmailReconciliation {
+  id String @id @db.Uuid
+  attemptId String @unique @db.Uuid
+  claimId String @unique @db.Uuid
+  previousOutcomeId String? @unique @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  keyVersion Int
+  reason String @db.VarChar(500)
+  outcome String
+  phase String
+  replyCode Int?
+  observation Json
+  sourceHash String @db.Char(64)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  attempt OrdinaryEmailAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  claim OrdinaryEmailClaim @relation(fields: [claimId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  previousOutcome OrdinaryEmailOutcome? @relation(fields: [previousOutcomeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 }

@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { redirect } from 'next/navigation';
 import { requirePermission } from './auth';
@@ -9,6 +10,7 @@ import { sendApprovedDirectEmailTest } from './direct-email-test-service';
 import { sendDirectTestSmtp } from './direct-email-test-smtp';
 
 export async function sendDirectEmailTestAction(form: FormData) {
+  await assertTechnicalServerAction("direct-email-test-actions:sendDirectEmailTestAction");
   const session = await requirePermission('settings.manage');
   if (session.role !== 'admin' || !readDirectTestConfig()) redirect('/settings/communications/test?result=UNAVAILABLE');
   await requireEnforcedPrivilegedMutation(session, 'DIRECT_EMAIL_TEST_SEND');

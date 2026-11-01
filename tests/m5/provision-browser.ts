@@ -8,7 +8,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphe
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
 import { initialServiceCodes } from '../../src/lib/initial-service-contract';
-import { syntheticUser, syntheticCase } from './fixtures';
+import { syntheticUser, syntheticCase, syntheticDossierOperator } from './fixtures';
 const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.M5_BROWSER_CONFIRMED, '1');
@@ -19,7 +19,7 @@ async function main() {
   const password = process.env.M5_BROWSER_PASSWORD!, root = process.env.M5_EVIDENCE!;
   assert.ok(password?.length >= 24 && root && process.env.LOCAL_DOCUMENT_STORAGE_ROOT && (process.env.PRIVILEGED_STEP_UP_SECRET?.length ?? 0) >= 32);
   const passwordHash = await bcrypt.hash(password, 10);
-  const actors: Record<'admin' | 'operator' | 'human1' | 'human2', AuthSession> & { sales?: AuthSession; collaborator?: AuthSession } = { admin: await syntheticUser(db, 'admin', 'Admin M5', passwordHash), operator: await syntheticUser(db, 'consulente', 'Responsabile M5', passwordHash),
+  const actors: Record<'admin' | 'operator' | 'human1' | 'human2', AuthSession> & { sales?: AuthSession; collaborator?: AuthSession } = { admin: await syntheticUser(db, 'admin', 'Admin M5', passwordHash), operator: await syntheticDossierOperator(db, 'Redattore commerciale M5', passwordHash),
     human1: await syntheticUser(db, 'revisore', 'Revisore M5', passwordHash), human2: await syntheticUser(db, 'revisore', 'Revisore due M5', passwordHash) };
   if (process.env.R23_MANUAL_EVIDENCE) {
     actors.sales = await syntheticUser(db, 'commerciale', 'Commerciale dimostrativo M5', passwordHash);

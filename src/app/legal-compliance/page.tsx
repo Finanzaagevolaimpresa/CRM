@@ -1,8 +1,9 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { Card, PageHeader } from '@/components/ui';
 import { requirePermission, hasPermission } from '@/lib/auth';
 export const dynamic = 'force-dynamic';
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('legal.read');
   const paths = [
     { permission: 'contract.read' as const, title: 'Contratti e firme', href: '/legal-compliance/contracts', text: 'Consulta e correggi i contratti nei loro fascicoli, conservando firme, allegati e pagamenti.' },
@@ -14,3 +15,5 @@ export default async function Page() {
     <div className="grid gap-5 md:grid-cols-2">{paths.map(item => <Card key={item.href} title={item.title}><p>{item.text}</p><Link className="mt-4 inline-block font-semibold underline" href={item.href}>Apri {item.title.toLowerCase()}</Link></Card>)}</div>
   </div>;
 }
+
+export default withTechnicalPage("/legal-compliance", Page);

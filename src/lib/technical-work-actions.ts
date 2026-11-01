@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -31,6 +32,7 @@ async function origin() {
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new TechnicalAssignmentError('DENIED');
 }
 export async function prepareTechnicalWork(_state: TechnicalWorkState, form: FormData): Promise<TechnicalWorkState> {
+  await assertTechnicalServerAction("technical-work-actions:prepareTechnicalWork");
   const session = await requireSession();
   try {
     await origin();
@@ -39,6 +41,7 @@ export async function prepareTechnicalWork(_state: TechnicalWorkState, form: For
   } catch (error) { return failure(error); }
 }
 export async function saveTechnicalWork(_state: TechnicalWorkState, form: FormData): Promise<TechnicalWorkState> {
+  await assertTechnicalServerAction("technical-work-actions:saveTechnicalWork");
   const session = await requireSession();
   try {
     await origin();
@@ -51,6 +54,7 @@ export async function saveTechnicalWork(_state: TechnicalWorkState, form: FormDa
   } catch (error) { return failure(error); }
 }
 export async function checkTechnicalWork(_state: TechnicalWorkState, form: FormData): Promise<TechnicalWorkState> {
+  await assertTechnicalServerAction("technical-work-actions:checkTechnicalWork");
   const session = await requireSession();
   try {
     await origin();

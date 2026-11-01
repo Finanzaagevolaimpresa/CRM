@@ -785,10 +785,14 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     // A client consultation grant does not expose another operator's work.
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await expect(reviewerPage.getByPlaceholder("Motivazione della decisione")).toHaveCount(0);
-    // This non-M5 fixture has no per-dossier review plan: explicitly assign its
-    // work and materials to the reviewer. The producer retains direction access.
+    // Assign only the purchased service and its exact materials to the reviewer.
+    // Technical project responsibility would deny confidential dossier notes.
     const bound = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
-    await db.project.update({ where: { id: bound.projectId! }, data: { consultantId: 'readiness-browser-reader' } });
+    const reviewMaterials = await db.practiceMaterialEvidence.findMany({ where: { practiceId: bound.practiceReadinessId!, status: 'VALIDATED' } });
+    for (const material of reviewMaterials) {
+      if (material.documentId) await db.document.update({ where: { id: material.documentId }, data: { clientServiceId: bound.clientServiceId } });
+      await db.documentChecklistItem.update({ where: { id: material.checklistItemId }, data: { clientServiceId: bound.clientServiceId } });
+    }
     await db.clientService.update({ where: { id: bound.clientServiceId! }, data: { assignedToId: 'readiness-browser-reader' } });
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await reviewerPage.getByPlaceholder("Motivazione della decisione").fill(index === 0 ? "Correggere la prima versione" : "Versione verificata");
@@ -992,7 +996,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   await foreignPage
     .locator('[data-interactive-ready="true"]')
     .waitFor({ state: "attached" });
-  await expect(foreignPage.getByText("Nessuna pratica")).toBeVisible();
+  await expect(foreignPage.getByRole("heading", { name: "404", exact: true })).toBeVisible();
   for (const item of cases) {
     await expect(
       foreignPage.getByText(`Cliente ${item.label}`, { exact: false }),
@@ -1005,7 +1009,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   }
   for (const dossierId of dossierIds) {
     await foreignPage.goto(`${app}/client-dossiers/${dossierId}`);
-    await expect(foreignPage.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
+    await expect(foreignPage.getByRole("heading", { name: "404", exact: true })).toBeVisible();
     const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     expect((await foreignPage.request.get(`${app}/client-dossiers/${dossierId}/export?versionId=${dossier.approvedVersionId}`)).status()).toBe(404);
   }
@@ -1082,7 +1086,7 @@ test("versioned dossier listings follow current detail access", async ({ page, b
   const technicalPractice = await db.technicalPractice.create({ data: {
     clientId: dossier.clientId, projectId: dossier.projectId, clientServiceId: dossier.clientServiceId,
     title: "Pratica per verifica report dossier", practiceType: "Verifica sintetica", targetEntity: "Banco sintetico",
-    technicalOwnerId: "readiness-browser-owner", createdById: "readiness-browser-owner",
+    commercialOwnerId: "readiness-browser-owner", createdById: "readiness-browser-owner",
   } });
   const searchUrl = `${app}/search?q=${encodeURIComponent(query)}`;
   const reportPaths = [
@@ -1242,8 +1246,9 @@ test('M2 Work package returns as a new draft before independent review and simul
   const foreign = await foreignContext.newPage();
   await login(foreign, 'readiness-foreign@invalid.test');
   const denied = await foreign.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
-  expect(denied.status()).toBe(403);
-  expect(await denied.json()).toEqual({ code: 'DENIED' });
+  expect(denied.status()).toBe(404);
+  const deniedBody = await denied.text();
+  for (const marker of [dossier.currentVersionId!, artifactHash, receipt.sourceVersionId]) expect(deniedBody).not.toContain(marker);
   const crossOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'https://foreign.invalid' }, maxRedirects: 0 });
   expect(crossOrigin.status()).toBe(403);
   const opaqueOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'null', 'sec-fetch-site': 'same-origin' }, maxRedirects: 0 });

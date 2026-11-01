@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { SecondaryLink } from '@/components/actions';
 import { LeadAcquisitionList } from '@/components/lead-acquisition-list';
@@ -9,7 +10,7 @@ import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
   const actor = await requireAuth(['admin']);
   const params = (await searchParams) ?? {};
   const data = await Promise.all([
@@ -33,3 +34,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     <PaginationNav pathname="/leads/acquisition" params={{ queue: params.queue }} {...page} />
   </div>;
 }
+
+export default withTechnicalPage("/leads/acquisition", Page);

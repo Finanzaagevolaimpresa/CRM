@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
@@ -23,6 +24,7 @@ function failure(error: unknown) {
   return 'Operazione non confermata. Verifica l’esito prima di ripetere una modifica.';
 }
 export async function uploadVideoAction(form: FormData) {
+  await assertTechnicalServerAction("video-actions:uploadVideoAction");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'VIDEO_LIBRARY_MANAGE', { inline: true });
@@ -38,6 +40,7 @@ export async function uploadVideoAction(form: FormData) {
   }
 }
 export async function verifyVideoUploadAction(id: string) {
+  await assertTechnicalServerAction("video-actions:verifyVideoUploadAction");
   const session = await requireSession();
   try {
     const result = await readVideoReceipt(prisma, session, id);
@@ -46,16 +49,19 @@ export async function verifyVideoUploadAction(id: string) {
   } catch (error) { return { ok: false as const, message: failure(error) }; }
 }
 export async function previewVideoAction(command: unknown) {
+  await assertTechnicalServerAction("video-actions:previewVideoAction");
   const session = await requireSession();
   try { return { ok: true as const, value: await previewVideo(prisma, session, command) }; }
   catch (error) { return { ok: false as const, message: failure(error) }; }
 }
 export async function searchVideoFilesAction(query: string, offset: number) {
+  await assertTechnicalServerAction("video-actions:searchVideoFilesAction");
   const session = await requireSession();
   try { return { ok: true as const, value: await searchVideoFiles(prisma, session, query, offset) }; }
   catch (error) { unstable_rethrow(error); return { ok: false as const, message: failure(error) }; }
 }
 export async function confirmVideoAction(command: unknown, digest: string) {
+  await assertTechnicalServerAction("video-actions:confirmVideoAction");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'VIDEO_LIBRARY_MANAGE', { inline: true });
@@ -75,6 +81,7 @@ export async function confirmVideoAction(command: unknown, digest: string) {
   }
 }
 export async function verifyVideoAction(command: unknown, digest: string) {
+  await assertTechnicalServerAction("video-actions:verifyVideoAction");
   const session = await requireSession();
   try { return { ok: true as const, value: await settleVideoAttempt(prisma, session, command, digest) }; }
   catch (error) { return { ok: false as const, message: failure(error) }; }

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { SecondaryLink } from '@/components/actions';
@@ -6,7 +7,7 @@ import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { readPracticeSharing } from '@/lib/selective-practice-access';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('technical.read'), { id } = await params;
   const projection = await readPracticeSharing(prisma, session, id).catch(() => null);
   return <div className="min-w-0 space-y-6"><PageHeader title="Pratica condivisa" description="Consultazione dei campi e delle versioni selezionati dall’utente personalmente autorizzato." />
@@ -25,3 +26,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </article>)}</div></Card>}
   </div>;
 }
+
+export default withTechnicalPage("/shared-practices/[id]", Page);

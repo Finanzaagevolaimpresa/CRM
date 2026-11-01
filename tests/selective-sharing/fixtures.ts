@@ -1,3 +1,4 @@
+import { classifySyntheticTechnicalVersion, ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient, type RoleCode, type Document, type DocumentVersion } from '@prisma/client';
 import { createInternalSession } from '../../src/lib/internal-session-registry';
@@ -39,6 +40,8 @@ export async function syntheticSharingCase(db: PrismaClient, admin: Awaited<Retu
     const doc = await db.document.create({ data: { clientId: client.id, projectId: project.id, title: `Documento sintetico ${index}`, fileName: `sintetico-${index}.txt`,
       type: 'text/plain', mimeType: 'text/plain', documentCategory: 'altro', serviceArea: 'progetto_investimento', sizeBytes: bytes.length, storagePath: `selective/${randomUUID()}.txt`, checksum, uploadedById: admin.user.id } });
     const version = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, storagePath: doc.storagePath, checksum } });
+    await ensureSyntheticTechnicalBytes(db, version.storagePath, bytes);
+    if (index < 3) await classifySyntheticTechnicalVersion(db, admin, version.id, true);
     documents.push({ doc, version, bytes });
   }
   // A financial record can be linked through a service even when its own

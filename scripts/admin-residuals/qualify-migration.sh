@@ -47,7 +47,9 @@ psql "$db" -Atc "SELECT pg_get_functiondef('fai_technical_canonical_atomic()'::r
 cmp "$evidence/original-guard.sql" "$evidence/original-guard-after-fault.sql"
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npm run prisma:migrate:deploy
+mkdir -p "$evidence/baseline74"
+git archive 562bfae09c73c8d93332630b5381e764488a4cab prisma | tar -x -C "$evidence/baseline74"
+npx prisma migrate deploy --schema "$evidence/baseline74/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 74
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261030190000_admin_residual_provenance_v1' ORDER BY migration_name" > "$evidence/prefix73-after.txt"
 cmp "$evidence/prefix73-before.txt" "$evidence/prefix73-after.txt"
@@ -56,8 +58,11 @@ cmp "$evidence/before.txt" "$evidence/after.txt"
 node --import tsx tests/admin-residuals/migration-fixture.ts verify "$evidence/seed73.json" > "$evidence/read73-after74.json"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq ADMIN_RESIDUAL_SCHEMA73_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/baseline74/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"
 printf '{"synthetic":true,"before":73,"after":74,"prefix73Unchanged":true,"allPriorRowsPreserved":true,"originalAcquisitionAndFormalizationReadable":true,"atomicFailureRolledBack":true,"originalGuardRestoredOnFailure":true,"wrongBaseDenied":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
 cat "$evidence/proof.json"
+
+# Qualify the current additive migration only after preserving the schema74 proof.
+bash scripts/ordinary-reconciliation/qualify-migration.sh

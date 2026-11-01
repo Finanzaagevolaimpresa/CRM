@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { DocumentFileLinks } from '@/components/document-file-links';
 export const dynamic = 'force-dynamic';
 
@@ -64,7 +65,7 @@ const auditLabel = (event: string) => auditEventLabels[event] ?? event.replaceAl
 const isRedundantOperationalAudit = (event: { category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }, events: Array<{ category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }>) => event.category === 'audit' && events.some((candidate) => candidate.category !== 'audit' && candidate.dedupeKey && candidate.dedupeKey === event.dedupeKey && Math.abs(+new Date(candidate.date) - +new Date(event.date)) <= 120000 && ((event.type === 'Cambio stato pratica tecnica' && candidate.type === 'stato pratica tecnica') || (event.type === 'Aggiornamento pratica tecnica' && ['stato pratica tecnica', 'aggiornamento pratica tecnica'].includes(candidate.type))));
 
 
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ uploadError?: string; timelineFilter?: string; supersedesRequestId?: string; progressTask?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ uploadError?: string; timelineFilter?: string; supersedesRequestId?: string; progressTask?: string }> }) {
   const { id } = await params;
   const query = await searchParams;
   const progressTask = parseProgressTaskType(query?.progressTask);
@@ -487,3 +488,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card id="audit-log" title="Audit log / Timeline fascicolo"><ActivityTimeline events={auditLogs.map((a) => ({ id: `audit-only-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: auditLabel(a.event), entity: a.entityType, description: auditLabel(a.event), beforeAfter: a.before || a.after ? 'Dettaglio disponibile nel registro audit.' : null }))} /></Card>
   </div>;
 }
+
+export default withTechnicalPage("/clients/[id]", Page);

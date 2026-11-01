@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {classifySyntheticTechnicalVersion} from './technical-confidentiality-fixtures';
 import test, { before, after } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -20,7 +21,7 @@ let admin: Person;
 before(async () => {
   if (!enabled) return; await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const [ledger] = await db.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL');
-  assert.equal(ledger.count, 74n);
+  assert.equal(ledger.count, 75n);
   const existing = await db.selectiveAccessAuthority.findFirst();
   if (existing) { const user = await db.user.findUniqueOrThrow({ where: { id: existing.userId } }); admin = { user, ...await syntheticSession(db, user) }; }
   else admin = await syntheticAuthority(db);
@@ -80,12 +81,16 @@ test('Admin confirmation boundary and revoked sessions fail before any version i
 });
 test('old selected access is invalidated and a technician receives only the new explicitly selected version', options, async () => {
   const f = await fixture(), id = f.receipt.documentId;
+  await assert.rejects(assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId: f.receipt.versionId, allowDownload: true }] }));
+  await classifySyntheticTechnicalVersion(db, admin, f.receipt.versionId);
   await assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId: f.receipt.versionId, allowDownload: true }] });
   assert.deepEqual((await readTechnicalWorkDocument(db, f.techA.session, f.target, f.receipt.versionId, true, readPrivateDocumentBounded)).bytes, f.bytes);
   await saveAdminPrivateVersion(db, admin.session, await command(id), file(), proof());
   const added = await latest(id);
   await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, f.target, f.receipt.versionId, true, readPrivateDocumentBounded));
   await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, f.target, added.versionId, true, readPrivateDocumentBounded));
+  await assert.rejects(assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId: added.versionId, allowDownload: true }] }));
+  await classifySyntheticTechnicalVersion(db, admin, added.versionId);
   await assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId: added.versionId, allowDownload: true }] });
   assert.equal((await readTechnicalWorkDocument(db, f.techA.session, f.target, added.versionId, true, readPrivateDocumentBounded)).bytes.toString(), 'VERSIONE_PRIVATA_SINTETICA_2');
   await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, f.target, f.receipt.versionId, true, readPrivateDocumentBounded));

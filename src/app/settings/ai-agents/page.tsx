@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, PageHeader, TimestampMeta } from '@/components/ui';
@@ -12,7 +13,7 @@ function checklist(value: unknown) {
   return Array.isArray(value) ? value.map(String) : [];
 }
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('ai_agents.read');
   const [agentRows, controlPolicy] = await Promise.all([
     prisma.aiAgent.findMany({ orderBy: { code: 'asc' } }),
@@ -117,3 +118,5 @@ export default async function Page() {
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/ai-agents", Page);

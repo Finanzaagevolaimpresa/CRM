@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { z } from 'zod';
+import { isTechnicalAccount } from '../src/lib/technical-confidentiality';
 import { adminRequestQueueKind } from '../src/lib/admin-request-queue-query';
 
 // Execute the actual service function, with controlled SQL/admission/session
@@ -37,9 +38,9 @@ async function run(rows: Row[], options: { q?: string; kind?: string; page?: num
     assert.equal(values.length, 2); assert.match(sql, /LIMIT 6001$/);
     return selected.slice(0, 6001).map(item => ({ id: item.id }));
   } };
-  const sandbox = { exports: {} as Exports, Error, z, adminRequestQueueKind,
+  const sandbox = { exports: {} as Exports, Error, z, adminRequestQueueKind, isTechnicalAccount,
     readRequestTransaction: async (_db: object, read: (client: typeof tx) => Promise<Result>) => read(tx),
-    session: async () => ({ actor: { id: 'actor' }, isAdmin: !!options.admin }),
+    session: async () => ({ actor: { id: 'actor', role: options.admin ? 'admin' : 'commerciale' }, isAdmin: !!options.admin }),
     admittedRequest: async (_tx: object, _auth: object, id: string) => {
       z.string().uuid().parse(id); admissions++; const item = byId.get(id)!;
       if (options.storageFailure) throw new Error('STORAGE_FAILURE');

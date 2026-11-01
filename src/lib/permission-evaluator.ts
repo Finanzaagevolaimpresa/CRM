@@ -1,3 +1,4 @@
+import { technicalPermissionCeiling } from './technical-confidentiality';
 import type { RoleCode, UserPermissionOverride } from '@prisma/client';
 import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 import {
@@ -15,6 +16,7 @@ export type PermissionOverrideSnapshot = Pick<UserPermissionOverride, 'permissio
 export interface PermissionSession {
   readonly role: RoleCode;
   readonly active: boolean;
+  readonly technicalRestricted?: boolean;
   readonly permissionOverrides: readonly PermissionOverrideSnapshot[];
 }
 
@@ -27,6 +29,7 @@ export interface PermissionDecision {
 
 export function evaluatePermission(session: PermissionSession, permission: Permission): PermissionDecision {
   if (!isPermission(permission) || session.active !== true) return { allowed: false, source: 'ROLE' };
+  if (!technicalPermissionCeiling(session, permission)) return { allowed: false, source: 'ROLE' };
   if (isFinancialPermission(permission) && !hasFinancialRole(session)) return { allowed: false, source: 'ROLE' };
   if (permission === 'ai.execution.consume') {
     return { allowed: false, source: session.role === 'admin' ? 'ADMIN' : 'ROLE' };

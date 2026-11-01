@@ -1,4 +1,5 @@
 import type { connect, TLSSocket } from 'node:tls';
+import type { OrdinaryObservationSink } from './ordinary-email-observation';
 import { z } from 'zod';
 import type { ApprovedMessageSnapshot } from './approved-communication-contract';
 import { canonicalSha256 } from './canonical-json';
@@ -30,6 +31,8 @@ export type OrdinarySmtpDependencies = {
    * A host is never inferred from the provider name or accepted from a form. */
   readQualifiedTransport(lease: OrdinaryAttemptLease): Promise<{ host: string; password: string }>;
   connectTls: typeof connect;
+  /** Private native observation sink; never a browser/provider outcome override. */
+  observeOutcome?: OrdinaryObservationSink;
 };
 type Phase = 'PREPARATION' | 'CLAIM' | 'CONNECT' | 'GREETING' | 'EHLO' | 'AUTH' | 'MAIL' | 'RCPT' | 'DATA' | 'CONTENT';
 export type OrdinarySmtpResult = { outcome: 'ACCEPTED' | 'NOT_SENT' | 'UNCERTAIN'; phase: Phase; replyCode?: number };
@@ -90,6 +93,14 @@ export async function transmitOrdinaryEmailCandidate(
   let phase: Phase = 'PREPARATION', replyCode: number | undefined, contentSubmitted = false;
   let socket: TLSSocket | undefined, lease: OrdinaryAttemptLease | undefined, replies: Replies | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let request: OrdinaryAttemptRequest | undefined;
+  async function observe(result: OrdinarySmtpResult) {
+    if (lease?.committed && lease.attemptId === attemptId && request && result.outcome !== 'UNCERTAIN') {
+      // Preserve the wire fact before the authorization transaction can lose its
+      // commit response. Journal failure never manufactures or retries an outcome.
+      try { await dependencies.observeOutcome?.(lease, request, Object.freeze({ ...result }), new Date()); } catch {}
+    }
+  }
   const stop = new AbortController();
   const abort = () => { stop.abort(); socket?.destroy(); };
   const deadline = Math.min(control.deadline, performance.now() + 15_000);
@@ -116,7 +127,7 @@ export async function transmitOrdinaryEmailCandidate(
     // a reference to the private MIME/envelope used by this invocation.
     const prepared = prepareOrdinaryEmail(material.snapshot, material.channel, material.materials, material.preparedAt);
     const mime = prepared.mime.toString('ascii');
-    const request: OrdinaryAttemptRequest = Object.freeze({ attemptId, intentHash: prepared.intentHash, mimeHash: prepared.mimeHash,
+    request = Object.freeze({ attemptId, intentHash: prepared.intentHash, mimeHash: prepared.mimeHash,
       envelopeHash: canonicalSha256(prepared.envelope), channel: Object.freeze(prepared.intent.channel) });
     timer = setTimeout(abort, Math.max(0, deadline - performance.now()));
     control.signal.addEventListener('abort', abort, { once: true });
@@ -164,6 +175,7 @@ export async function transmitOrdinaryEmailCandidate(
       socket!.write(mime.replace(/(^|\r\n)\./g, '$1..') + '.\r\n');
       const reply = await response; replyCode = reply.code;
       result = { outcome: reply.code === 250 ? 'ACCEPTED' : reply.code >= 400 && reply.code < 600 ? 'NOT_SENT' : 'UNCERTAIN', phase, replyCode };
+      await observe(result);
       return result;
     }));
     if (!result) throw new Error('ORDINARY_SMTP_GUARD_REQUIRED');
@@ -172,7 +184,10 @@ export async function transmitOrdinaryEmailCandidate(
     if (result.outcome !== 'UNCERTAIN') { try { await command('QUIT', [221]); } catch {} }
     return result;
   } catch {
-    return { outcome: contentSubmitted ? 'UNCERTAIN' : 'NOT_SENT', phase, ...(replyCode === undefined ? {} : { replyCode }) };
+    const failedPhase = phase as Phase;
+    const failure: OrdinarySmtpResult = { outcome: contentSubmitted ? 'UNCERTAIN' : 'NOT_SENT', phase: !contentSubmitted && failedPhase === 'CONTENT' ? 'DATA' : failedPhase, ...(replyCode === undefined ? {} : { replyCode }) };
+    await observe(failure);
+    return failure;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     control.signal.removeEventListener('abort', abort);

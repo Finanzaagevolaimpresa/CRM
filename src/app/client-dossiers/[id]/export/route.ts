@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { auditClientDossierExport } from '@/lib/actions';
 import { requirePermission } from '@/lib/auth';
@@ -8,6 +9,7 @@ import { prisma } from '@/lib/prisma';
 function safeFileName(value: string) { return value.toLowerCase().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'dossier'; }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/client-dossiers/[id]/export");
   const { id } = await params;
   const session = await requirePermission('dossier.read');
   const context = await getClientDossierReadAccess(session, id);

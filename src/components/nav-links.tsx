@@ -3,6 +3,8 @@
 import type { RoleCode } from "@prisma/client";
 import type { Permission } from "@/lib/permissions";
 import { privilegedAccessPermissions } from "@/lib/privileged-access-contract";
+import { isTechnicalAccount } from '@/lib/technical-confidentiality';
+import { technicalPageMode } from '@/lib/technical-surface-policy';
 import { operationalNavigationAllows } from "@/lib/operational-role-view";
 import Link from "next/link";
 import { DashboardIcon } from "./dashboard-icon";
@@ -124,12 +126,14 @@ const sections: NavSection[] = [
 const adminRoles: RoleCode[] = ["admin", "direzione"];
 
 
-export function getVisibleNavItems({ role, effectivePermissions = [] }: { role?: RoleCode | null; effectivePermissions?: Permission[] }) {
+export function getVisibleNavItems({ role, technicalRestricted = false, effectivePermissions = [] }: { role?: RoleCode | null; technicalRestricted?: boolean; effectivePermissions?: Permission[] }) {
   const canSeeAdmin = Boolean(role && adminRoles.includes(role));
   const effectivePermissionSet = new Set(effectivePermissions);
   return sections.flatMap((section) => {
     const visibleItems = section.items.filter((item) => {
       if (!operationalNavigationAllows(role, item.href)) return false;
+      if (role && isTechnicalAccount({ role, technicalRestricted, permissionOverrides: effectivePermissions.map(permission => ({ permission, allowed: true })) })
+        && technicalPageMode(item.href) === 'denied') return false;
       if (item.adminOnly && !canSeeAdmin) return false;
       if (item.roles && (!role || !item.roles.includes(role))) return false;
       if (item.requiredPermission && !effectivePermissionSet.has(item.requiredPermission)) return false;
@@ -142,17 +146,19 @@ export function getVisibleNavItems({ role, effectivePermissions = [] }: { role?:
 
 export function NavLinks({
   role,
+  technicalRestricted = false,
   notificationCount = 0,
   effectivePermissions = [],
   onNavigate,
 }: {
   role?: RoleCode | null;
+  technicalRestricted?: boolean;
   notificationCount?: number;
   effectivePermissions?: Permission[];
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
-  const visibleSections = getVisibleNavItems({ role, effectivePermissions });
+  const visibleSections = getVisibleNavItems({ role, technicalRestricted, effectivePermissions });
   const all = visibleSections.flatMap(section => section.items);
   const primaryPaths = ["/dashboard", "/leads", "/clients", "/projects", "/technical-office", "/communications", "/documents", "/videos", "/settings/account"];
   const primary = primaryPaths.flatMap(path => all.filter(item => item.href === path));
@@ -175,6 +181,6 @@ export function NavLinks({
 }
 
 
-export function visibleNavItemsForTest({ role, effectivePermissions = [] }: { role?: RoleCode | null; effectivePermissions?: Permission[] }) {
-  return getVisibleNavItems({ role, effectivePermissions }).flatMap((section) => section.items.map((item) => item.href));
+export function visibleNavItemsForTest({ role, technicalRestricted = false, effectivePermissions = [] }: { role?: RoleCode | null; technicalRestricted?: boolean; effectivePermissions?: Permission[] }) {
+  return getVisibleNavItems({ role, technicalRestricted, effectivePermissions }).flatMap((section) => section.items.map((item) => item.href));
 }

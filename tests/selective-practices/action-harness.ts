@@ -1,3 +1,4 @@
+import { technicalActionBoundary } from '../technical-action-boundary';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -31,7 +32,7 @@ export function actualPracticeActions(db: PrismaClient, session: AuthSession,
     const value = Reflect.get(target, property);
     return typeof value === 'function' ? value.bind(target) : value;
   } });
-  const dependencies = { prisma: database, requirePermission: async () => session, hasPermission,
+  const dependencies = { prisma: database, requirePermission: async () => session, assertTechnicalServerAction: technicalActionBoundary(session), hasPermission,
     technicalPracticeStatusUpdateSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema,
     redactAuditPayload, assertTechnicalPracticeOperational, UserFacingActionError, denyWriteAccess,
     requireTechnicalPracticeMutationAccess,

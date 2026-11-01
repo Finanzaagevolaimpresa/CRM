@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getSession, hasPermission } from '@/lib/auth';
@@ -5,6 +6,7 @@ import { DocumentDownloadError, readOrdinaryDocument } from '@/lib/ordinary-docu
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/documents/[id]/download");
   const session = await getSession();
   if (!session || !hasPermission(session, 'document.download')) return new NextResponse('Documento non disponibile', {
     status: 403, headers: { 'Cache-Control': 'private, no-store' },

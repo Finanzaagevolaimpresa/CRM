@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { PageHeader, Card } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
@@ -7,7 +8,7 @@ import { getCompanyReadAccess } from '@/lib/read-access';
 import { canEditClient } from '@/lib/access-control';
 import { companyProfileFields } from '@/lib/record-profile-fields';
 import { recordProfileValues } from '@/lib/record-profile-view';
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('company.write'), { id } = await params;
   const context = await getCompanyReadAccess(session, id);
   if (!context || !canEditClient(session, context.client)) notFound();
@@ -16,3 +17,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card title={context.company.name}><RecordProfileForm fields={companyProfileFields} values={recordProfileValues(context.company, companyProfileFields)}
       hidden={{ kind: 'company', id, expectedVersion: context.company.updatedAt.toISOString() }} /></Card></div>;
 }
+
+export default withTechnicalPage("/companies/[id]/edit", Page);

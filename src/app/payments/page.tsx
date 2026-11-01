@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +11,7 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { registerPaymentAndRefresh } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('payment.read');
   const [items, clientRows, contracts, projects] = await Promise.all([
     prisma.payment.findMany({ orderBy: { dueDate: 'asc' } }),
@@ -55,3 +56,5 @@ export default async function Page() {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/payments", Page);

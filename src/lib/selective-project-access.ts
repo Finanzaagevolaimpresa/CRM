@@ -1,3 +1,6 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
+import { fieldsForDisclosure } from './technical-confidentiality';
+import { technicalVersionDisclosureAllowed } from './technical-document-disclosure';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient, type SelectiveProjectGrant } from '@prisma/client';
 import { z } from 'zod';
@@ -51,7 +54,7 @@ async function liveActor(tx: Tx, claimed: AuthSession) {
   if (internalSessionMode() !== 'registry' || !z.string().uuid().safeParse(claimed.sessionId).success) denied();
   const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
   if (!row || row.revokedAt || !row.active || row.deletedAt) denied();
-  const current = { ...claimed, registryExpiresAt: row.expiresAt, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+  const current = { ...claimed, registryExpiresAt: row.expiresAt, role: row.role, technicalRestricted: row.technicalRestricted, active: row.active, permissionOverrides: [...row.permissionOverrides],
     ...await loadSelectiveProjectScope(tx, claimed.userId) } satisfies AuthSession & { registryExpiresAt: Date };
   await assertLiveAtOutcome(tx, current);
   return current;
@@ -83,7 +86,7 @@ export async function mayManageSelectiveAccess(db: Db, session: AuthSession) {
 async function recipient(tx: Tx, id: string) {
   const user = await tx.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user?.active || user.deletedAt) denied();
-  return { user, actor: { userId: id, role: user.role, active: true, permissionOverrides: user.permissionOverrides,
+  return { user, actor: { userId: id, role: user.role, technicalRestricted: await currentTechnicalRestriction(tx, id, user), active: true, permissionOverrides: user.permissionOverrides,
     clientReadScope: await loadClientReadScope(tx, id), ...await loadSelectiveProjectScope(tx, id) } };
 }
 async function projectContext(tx: Tx, projectId: string) {
@@ -110,6 +113,7 @@ async function allowedVersion(tx: Tx, current: Awaited<ReturnType<typeof recipie
   // This increment never grants financial/private documents, even to an Admin.
   if (document.visibilityLevel !== 'interno' || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))
     || !await canAccessFinancialDocument(tx, { role: 'commerciale', active: true, permissionOverrides: [] }, document)) denied();
+  if (!await technicalVersionDisclosureAllowed(tx, current, document, version)) denied();
   const mime = versionSnapshot.shape.mimeType.safeParse(document.mimeType);
   if (!mime.success) throw new SelectiveAccessError('INVALID');
   return { version, document, mimeType: mime.data };
@@ -261,7 +265,8 @@ async function authorizedSnapshot(tx: Tx, current: AuthSession, projectId: strin
 export async function readSelectiveProject(db: Db, claimed: AuthSession, projectId: string) {
   return withSelectiveSession(db, claimed, async (tx, current) => {
     const state = await authorizedSnapshot(tx, current, projectId);
-    return projection(state.project, state.snapshot);
+    return projection(state.project, { ...state.snapshot, input: { ...state.snapshot.input,
+      fields: fieldsForDisclosure(current, 'Project', state.snapshot.input.fields) } });
   });
 }
 

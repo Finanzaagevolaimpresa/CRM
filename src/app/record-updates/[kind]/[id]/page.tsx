@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { PageHeader, Card } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
@@ -8,7 +9,7 @@ import { readRecordUpdateSetup } from '@/lib/record-updates';
 import { recordUpdateKinds, type RecordUpdateKind } from '@/lib/record-update-labels';
 import { RecordUpdateError } from '@/lib/record-update-contract';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params }: { params: Promise<{ kind: string; id: string }> }) {
+  async function Page({ params }: { params: Promise<{ kind: string; id: string }> }) {
   const session = await requireSession(), { kind, id } = await params;
   if (session.role !== 'admin' || !recordUpdateKinds.includes(kind as RecordUpdateKind)) notFound();
   let setup;
@@ -19,3 +20,5 @@ export default async function Page({ params }: { params: Promise<{ kind: string;
     {setup.kind !== 'LEAD' && <SecondaryLink href={`/record-reminders/${setup.kind}/${setup.id}`}>Programma promemoria CRM</SecondaryLink>}
     <Card title={setup.label}><RecordUpdateForm setup={setup}/></Card></div>;
 }
+
+export default withTechnicalPage("/record-updates/[kind]/[id]", Page);

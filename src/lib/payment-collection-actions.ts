@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { cookies, headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -32,11 +33,13 @@ function failure(error: unknown) {
   return { ok: false as const, uncertain: !certain, message };
 }
 export async function previewPaymentCollectionAction(raw: unknown) {
+  await assertTechnicalServerAction("payment-collection-actions:previewPaymentCollectionAction");
   const session = await actor();
   try { return { ok: true as const, preview: await previewPaymentCollection(prisma, session, raw) }; }
   catch (error) { return failure(error); }
 }
 export async function confirmPaymentCollectionAction(raw: unknown, digest: string) {
+  await assertTechnicalServerAction("payment-collection-actions:confirmPaymentCollectionAction");
   const session = await actor();
   try {
     await requireEnforcedPrivilegedMutation(session, 'PAYMENT_COLLECTION_DECLARE', { inline: true });
@@ -55,6 +58,7 @@ export async function confirmPaymentCollectionAction(raw: unknown, digest: strin
   }
 }
 export async function verifyPaymentCollectionAction(clientId: string, paymentId: string, commandId: string) {
+  await assertTechnicalServerAction("payment-collection-actions:verifyPaymentCollectionAction");
   const session = await actor();
   try { return { ok: true as const, result: await readPaymentCollectionReceipt(prisma, session, clientId, paymentId, commandId) }; }
   catch { return { ok: false as const, message: 'Verifica non disponibile. Non ripetere la conferma finché l’esito non è chiarito.' }; }

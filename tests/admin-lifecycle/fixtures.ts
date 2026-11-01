@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import type { AuthSession } from '@/lib/auth';
-import { syntheticCase, syntheticUser } from '../m5/fixtures';
+import { syntheticCase, syntheticUser, syntheticDossierOperator } from '../m5/fixtures';
 import { technicalFixture, technicalTarget } from '../technical-assignments/fixtures';
 import { leadProof, type Person } from '../selective-leads/fixtures';
 import { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
@@ -13,7 +13,9 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 
 export async function lifecycleReadinessFixture(db:PrismaClient,admin:AuthSession){
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
-  const operator=await syntheticUser(db,'consulente','Operatore sintetico lifecycle');
+  // Lifecycle reads must exercise a revocable, nontechnical commercial owner.
+  // Admin retains separate formalization, archive and restoration authority.
+  const operator=await syntheticDossierOperator(db,'Operatore commerciale lifecycle sintetico');
   return syntheticCase(db,'dossier_preanalisi',{admin,operator,human1:await syntheticUser(db,'revisore','Revisore sintetico 1'),
     human2:await syntheticUser(db,'revisore','Revisore sintetico 2')});
 }

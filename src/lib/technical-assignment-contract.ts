@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { technicalFieldAllowed } from './technical-confidentiality';
 import { technicalWorkItemGrants } from './technical-work-item-grant';
 import { technicalUploadProfile } from './technical-upload-profile';
 
@@ -140,7 +141,7 @@ export function technicalFieldPatch(selection: TechnicalAssignmentSelection, inp
   if (!technicalAssignmentSelection.safeParse(selection).success || !selection.actions.includes('update_fields')
       || !input || typeof input !== 'object' || Array.isArray(input)) return null;
   const allowed = new Set<string>(selection.editableFields), entries = Object.entries(input);
-  if (!entries.length || entries.some(([key]) => !allowed.has(key))) return null;
+  if (!entries.length || entries.some(([key]) => !allowed.has(key) || !technicalFieldAllowed(selection.kind, key))) return null;
   // Values still require the canonical field validators in the mutation layer.
   // Owner, client, project and service identifiers are never editable here.
   return Object.fromEntries(entries);

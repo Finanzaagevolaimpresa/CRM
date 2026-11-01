@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { NextResponse } from 'next/server';
 import { auditCommercialOfferExport } from '@/lib/actions';
@@ -12,6 +13,7 @@ function safeFileName(value: string) { return value.toLowerCase().replace(/[^a-z
 function leadName(lead: { companyName: string | null; firstName: string; lastName: string }) { return lead.companyName || `${lead.firstName} ${lead.lastName}`.trim(); }
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/commercial-offers/[id]/export/docx");
   const session = await requirePermission('lead.read');
   const { id } = await params;
   const offer = await prisma.commercialOffer.findFirst({ where: { id, deletedAt: null } });

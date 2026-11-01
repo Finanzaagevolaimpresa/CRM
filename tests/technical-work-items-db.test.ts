@@ -117,7 +117,7 @@ async function prepare(f: Fixture, person = f.techA, kind: TechnicalWorkItemGran
   const identity = { kind: option.kind, itemId: option.itemId, generation: option.generation,
     scopeGeneration: option.scopeGeneration, scopeSha256: option.scopeSha256 };
   const choice = kind === 'Task' ? { ...identity, kind, readableFields: ['title', 'dueAt', 'priority'], editableFields: ['dueAt', 'priority'] }
-    : { ...identity, kind, readableFields: ['title', 'notes', 'status'], editableFields: ['notes'] };
+    : { ...identity, kind, readableFields: ['title', 'status'], editableFields: ['title'] };
   const input = { ...base, selection: technicalAssignmentSelection.parse({ ...base.selection,
     actions: [...base.selection.actions, kind === 'Task' ? 'manage_deadlines' : 'manage_checklist'], workItems: [choice] }) };
   const ref = { ...target, recipientId: person.user.id };
@@ -220,7 +220,7 @@ test('refresh does not renew a chosen document snapshot; concurrent source chang
   const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
   await db.document.update({ where: { id: rows[64].id }, data: { title: 'Relazione aggiornata sintetica' } });
   const current = await documents(f, rows[64].fileName);
-  assert.notEqual(current.documentOptions[0].contextSha256, input.selection.documents[0].contextSha256);
+  assert.equal(current.documentOptions.length, 0, 'Changed metadata invalidates technical classification; a refresh cannot reclassify or renew it');
   await assert.rejects(previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input));
   await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true));
   assert.equal(await db.technicalAssignment.count({ where: { recipientId: f.techA.user.id, practiceId: target.targetId } }), 0);
@@ -378,16 +378,16 @@ test('selected deadline mutation commits once with minimized audit; exact retry 
   assert(!JSON.stringify(receipt).includes(f.task.title));
   assert.equal((await readTechnicalWorkItem(db, f.techA.session, target, { kind: 'Task', itemId: f.task.id })).fields.priority, 'urgente');
 });
-test('checklist notes can be edited without changing status, linking a document or exposing unselected tasks', options, async () => {
+test('checklist title can be edited without exposing notes or changing status, linking a document or exposing unselected tasks', options, async () => {
   const f = await fixture(), target = technicalTarget(f); await assign(f, f.techB, 'ChecklistItem');
   const view = await readTechnicalWorkItem(db, f.techB.session, target, { kind: 'ChecklistItem', itemId: f.check.id });
   const { fields: _f, editableFields: _e, ...identity } = view;
   void _f; void _e;
-  const input = { ...identity, commandId: randomUUID(), action: 'update_fields', patch: { notes: 'Integrazione tecnica completata' } };
+  const input = { ...identity, commandId: randomUUID(), action: 'update_fields', patch: { title: 'Checklist tecnica aggiornata' } };
   const p = await previewTechnicalWorkItem(db, f.techB.session, target, input);
   await confirmTechnicalWorkItem(db, f.techB.session, target, p.command, p.token, true);
   const row = await db.documentChecklistItem.findUniqueOrThrow({ where: { id: f.check.id } });
-  assert.equal(row.notes, input.patch.notes); assert.equal(row.status, f.check.status); assert.equal(row.documentId, null);
+  assert.equal(row.title, input.patch.title); assert.equal(row.notes, f.check.notes); assert.equal(row.status, f.check.status); assert.equal(row.documentId, null);
   await assert.rejects(previewTechnicalWorkItem(db, f.techB.session, target, { ...input, commandId: randomUUID(), patch: { status: 'validato' } }));
 });
 test('content changed after Admin preview or technician preview is rejected instead of overwriting', options, async () => {

@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/auth';
 import { canViewClient } from '@/lib/access-control';
@@ -5,6 +6,7 @@ import { prisma } from '@/lib/prisma';
 import { buildOperationalReportMarkdown, reportFileName } from '@/lib/operational-report';
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/clients/[id]/operational-report");
   const session = await requirePermission('client.read');
   const { id } = await params;
   const client = await prisma.client.findUnique({ where: { id } });

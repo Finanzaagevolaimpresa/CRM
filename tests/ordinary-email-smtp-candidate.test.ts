@@ -182,3 +182,22 @@ test('DATA requires the authorization guard, bounds waiting and cannot replay it
   assert.equal((await replayed.invoke()).outcome, 'UNCERTAIN');
   assert.equal(replayed.sockets[0].writes.filter(value => value.startsWith('From: ')).length,1);
 });
+
+test('definitive wire observation survives a lost authorization commit result without another socket', async () => {
+  const h = harness(), observations: Array<{ result: unknown; attempt: string }> = [];
+  h.deps.observeOutcome = async (lease, request, result) => {
+    assert.equal(lease.attemptId, request.attemptId); observations.push({ result, attempt: lease.attemptId });
+  };
+  h.deps.withCurrentAuthorization = async (lease, operation) => { await operation(() => h.deps.assertCurrent(lease)); throw new Error('SYNTHETIC_GUARD_COMMIT_LOST'); };
+  assert.equal((await h.invoke()).outcome, 'UNCERTAIN');
+  assert.deepEqual(observations, [{ attempt: h.attemptId, result: { outcome: 'ACCEPTED', phase: 'CONTENT', replyCode: 250 } }]);
+  assert.equal(h.sockets.length, 1);
+  await h.invoke(); assert.equal(h.sockets.length, 1); assert.equal(observations.length, 1);
+});
+test('uncertain DATA creates no definitive journal observation; observer failure cannot retry transport', async () => {
+  const h = harness(undefined, { final: null }); let observations = 0;
+  h.deps.observeOutcome = async () => { observations++; };
+  assert.equal((await h.invoke()).outcome, 'UNCERTAIN'); assert.equal(observations, 0);
+  const accepted = harness(); accepted.deps.observeOutcome = async () => { throw new Error('SYNTHETIC_DISK_FAULT'); };
+  assert.equal((await accepted.invoke()).outcome, 'ACCEPTED'); assert.equal(accepted.sockets.length, 1);
+});

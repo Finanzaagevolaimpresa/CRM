@@ -1,3 +1,4 @@
+import { adminRequestRecoveryScope } from '@/lib/admin-request-recovery-scope';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth';
@@ -14,7 +15,7 @@ export async function AdminRequestQueueView({ searchParams, integrations = false
   const user = await requireSession();
   const query = parseAdminRequestQueueSearch(await searchParams, integrations ? 'INTEGRATION' : undefined);
   if (!query) notFound();
-  if (query.recover) return <AdminRequestRecovery commandId={query.recover} />;
+  if (query.recover) return <AdminRequestRecovery recoveryScope={adminRequestRecoveryScope(user)} commandId={query.recover} />;
   let data, limited = false;
   try { data = await readAdminRequestQueue(prisma, user, query.page, query.q, query.kind); }
   catch (error) {

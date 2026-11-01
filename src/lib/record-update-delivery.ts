@@ -1,3 +1,4 @@
+import { isTechnicalAccount } from './technical-confidentiality';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { RecordUpdateError, recordUpdateEventLabels } from './record-update-contract';
@@ -15,8 +16,13 @@ async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof curr
   if (work.mode === 'EMAIL_DRAFT') return null;
   const admitted = await admitRecordUpdateWork(tx, actor, work, directory, now, admitCommunicationNotice);
   if (!admitted) return null;
+  const technical = isTechnicalAccount(actor);
+  if (technical && (!['PROJECT', 'PRACTICE'].includes(work.event.kind)
+    || admitted.summary.event === 'COMMUNICATION'
+    || !admitted.summary.changed.length
+    || admitted.summary.changed.some(field => !['status', 'displayName', 'dueDate', 'nextActionDate'].includes(field)))) return null;
   return { id: work.id, title: recordUpdateEventLabels[admitted.summary.event], category: 'Aggiornamento scelto dall’Admin',
-    related: admitted.context.label, href: `/notifications/updates/${work.id}`, recordHref: admitted.context.href,
+    related: technical ? 'Scheda tecnica nel tuo perimetro' : admitted.context.label, href: `/notifications/updates/${work.id}`, recordHref: admitted.context.href,
     date: work.event.occurredAt, readAt: work.readAt, changed: admitted.summary.changed, event: admitted.summary.event,
     priority: 'bassa' as const, accessUntil: admitted.accessUntil };
 }

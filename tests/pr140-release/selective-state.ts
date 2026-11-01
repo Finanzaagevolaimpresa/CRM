@@ -1,5 +1,6 @@
+import { ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
@@ -51,12 +52,8 @@ async function main() {
     if (previousMode === undefined) delete process.env.PRIVILEGED_ACCESS_MODE;
     else process.env.PRIVILEGED_ACCESS_MODE = previousMode;
   }
-  for (const item of [...f.documents, ...lifecycle.documents]) {
-    const target = path.resolve(storage, item.version.storagePath);
-    assert.ok(target.startsWith(path.resolve(storage) + path.sep));
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, item.bytes, { flag: 'wx', mode: 0o600 });
-  }
+  for (const item of [...f.documents, ...lifecycle.documents])
+    await ensureSyntheticTechnicalBytes(db, item.version.storagePath, item.bytes);
   await writeFile(process.env.R05_SELECTIVE_RECOVERY_FIXTURE!, JSON.stringify({ synthetic: true, email: f.reader.user.email,
     projectId: f.project.id, revokedProjectId: f.otherProject.id, clientId: f.client.id, contractId: f.contract.id,
     versions: f.documents.map(item => item.version.id), lifecycleProjectId: lifecycle.project.id,

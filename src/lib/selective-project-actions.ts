@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { revalidatePath } from 'next/cache';
 import { requireSession } from './auth';
@@ -14,6 +15,7 @@ function failure(error: unknown): SharingState {
     : 'Operazione non completata. Verifica selezione, sessione e abilitazione personale.' };
 }
 export async function prepareSharingPreview(_previous: SharingState, form: FormData): Promise<SharingState> {
+  await assertTechnicalServerAction("selective-project-actions:prepareSharingPreview");
   const session = await requireSession();
   try {
     const raw = JSON.parse(String(form.get('selection') ?? ''));
@@ -22,6 +24,7 @@ export async function prepareSharingPreview(_previous: SharingState, form: FormD
   } catch (error) { return failure(error); }
 }
 export async function confirmSharing(_previous: SharingState, form: FormData): Promise<SharingState> {
+  await assertTechnicalServerAction("selective-project-actions:confirmSharing");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PROJECT_ACCESS_CONFIRM', { inline: true });
@@ -32,6 +35,7 @@ export async function confirmSharing(_previous: SharingState, form: FormData): P
   } catch (error) { return failure(error); }
 }
 export async function revokeSharing(_previous: SharingState, form: FormData): Promise<SharingState> {
+  await assertTechnicalServerAction("selective-project-actions:revokeSharing");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'SELECTIVE_PROJECT_ACCESS_REVOKE', { inline: true });

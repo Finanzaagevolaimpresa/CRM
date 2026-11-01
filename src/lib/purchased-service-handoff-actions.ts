@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { revalidatePath } from 'next/cache';
 import { requirePermission } from './auth';
@@ -9,6 +10,7 @@ import { handoffInput, handoffPurchasedService } from './purchased-service-hando
 import { UserFacingActionError } from './action-errors';
 
 export async function purchasedServiceHandoffAction(_previous: { ok: boolean; message: string }, form: FormData): Promise<{ ok: boolean; message: string; stepUpRequired?: boolean }> {
+  await assertTechnicalServerAction("purchased-service-handoff-actions:purchasedServiceHandoffAction");
   const data = handoffInput.safeParse({ serviceId: form.get('serviceId'), expectedHash: form.get('expectedHash'),
     technicalOwnerId: form.get('technicalOwnerId'), departmentCode: form.get('departmentCode'), variantCode: form.get('variantCode'),
     dueDate: `${form.get('dueDate')}T12:00:00.000Z`, activities: String(form.get('activities') ?? '').split(/\r?\n/).map(value => value.trim()).filter(Boolean),

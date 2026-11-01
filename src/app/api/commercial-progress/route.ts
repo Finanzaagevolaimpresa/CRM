@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { z } from 'zod';
 import { getSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -7,6 +8,7 @@ import { SerializableConflictError } from '@/lib/serializable';
 export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'private, no-store, max-age=0', Vary: 'Cookie', 'X-Content-Type-Options': 'nosniff' };
 export async function GET(request: Request) {
+  await assertTechnicalFileRoute("/api/commercial-progress");
   const session = await getSession();
   if (!session) return Response.json({ error: 'Sessione richiesta' }, { status: 401, headers });
   try {

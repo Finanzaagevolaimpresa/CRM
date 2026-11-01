@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { Card, PageHeader } from '@/components/ui';
@@ -7,7 +8,7 @@ import { perimeterRoles } from '@/lib/client-read-perimeter-policy';
 import { prisma } from '@/lib/prisma';
 import { clientVisibilityWhere } from '@/lib/core-query-policy';
 
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ q?: string; after?: string; grantsAfter?: string }>;
 }) {
   const session = await requirePermission('user.read');
@@ -46,3 +47,5 @@ export default async function Page({ params, searchParams }: {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/settings/users/[id]/perimeter", Page);

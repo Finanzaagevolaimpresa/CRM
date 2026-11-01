@@ -1,3 +1,4 @@
+import { technicalFieldsFor } from './technical-confidentiality';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -88,7 +89,7 @@ function project(locked: Awaited<ReturnType<typeof lockedSnapshot>>, now: Date) 
     kind: s.item.kind, itemId: s.item.id, contextSha256: s.selection.contextSha256,
     active: s.item.active, archived: !s.parent.operational, financialRestricted: s.item.financialRestricted }, s.row.values, now);
   if (!fields) denied();
-  return { kind: s.item.kind, itemId: s.item.id, fields, editableFields: s.selection.editableFields,
+  return { kind: s.item.kind, itemId: s.item.id, fields, editableFields: technicalFieldsFor(s.item.kind, s.selection.editableFields),
     assignmentId: s.admission.assignmentId, assignmentRevision: s.admission.assignmentRevision,
     bindingId: s.admission.bindingId, bindingRevision: s.admission.bindingRevision,
     expectedContextSha256: s.admission.contextSha256, expectedItemVersion: s.admission.itemVersion };

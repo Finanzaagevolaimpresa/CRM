@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -11,7 +12,7 @@ import { readRecordReminderSetup, reminderTargetSchema } from '@/lib/record-remi
 import { RecordUpdateError } from '@/lib/record-update-contract';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
+  async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
   searchParams: Promise<{ q?: string; page?: string; reminderDecision?: string }> }) {
   const session = await requireSession(), ref = await params, query = await searchParams;
   const target = reminderTargetSchema.safeParse({ kind: ref.kind, recordId: ref.id });
@@ -47,3 +48,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     </>}
   </div>;
 }
+
+export default withTechnicalPage("/record-reminders/[kind]/[id]", Page);

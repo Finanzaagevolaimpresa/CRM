@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -6,7 +7,7 @@ import { Badge, Card, EmptyState, PageHeader, Table, formatDateTime } from '@/co
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('privacy.evidence.read');
   const [notices, evidence] = await Promise.all([
     prisma.privacyNoticeVersion.findMany({
@@ -56,3 +57,5 @@ export default async function Page() {
     <SecondaryLink href="/legal-compliance">Vai a Legale / Compliance</SecondaryLink>
   </div>;
 }
+
+export default withTechnicalPage("/legal-compliance/privacy", Page);

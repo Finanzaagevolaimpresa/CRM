@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { notFound, redirect } from 'next/navigation';
 import { Card, PageHeader } from '@/components/ui';
@@ -8,7 +9,7 @@ import { createEngagementDossierAction } from '@/lib/engagement-dossier-actions'
 import { listAccessiblePracticeReadiness } from '@/lib/practice-readiness';
 import { getEngagementDossierReadAccess } from '@/lib/engagement-dossier';
 
-export default async function Page({ params, searchParams }: { params: Promise<{ practiceId: string }>; searchParams: Promise<{ dossierError?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ practiceId: string }>; searchParams: Promise<{ dossierError?: string }> }) {
   const { practiceId } = await params; const session = await requirePermission('dossier.write');
   await requirePermission('dossier.read');
   const { dossierError } = await searchParams;
@@ -24,3 +25,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   void session;
   return <div className="crm-space-y-6"><PageHeader title="Nuovo dossier di pratica" description="Crea la prima versione collegata alla pratica già avviata. Nessuna consegna viene effettuata automaticamente."/>{dossierError ? <p className="rounded-xl bg-red-50 p-3 font-semibold text-red-700">Operazione non completata ({dossierError}). Verifica stato, ambito e riferimenti.</p> : null}<Card title="Contenuto iniziale"><form action={createEngagementDossierAction} className="grid gap-3"><input type="hidden" name="practiceReadinessId" value={practice.id}/><label>Preanalisi<select name="preAnalysisId" className="w-full rounded-xl border p-3">{preanalyses.map((p) => <option key={p.id} value={p.id}>{p.internalSummary?.slice(0,80) || `Preanalisi ${p.id}`}</option>)}</select></label><label>Titolo<input name="title" required maxLength={200} className="w-full rounded-xl border p-3"/></label><label>Contenuto<textarea name="content" required className="min-h-96 w-full rounded-xl border p-3 font-mono"/></label><PrimaryButton type="submit">Crea dossier versionato</PrimaryButton></form></Card></div>;
 }
+
+export default withTechnicalPage("/engagement-dossiers/new/[practiceId]", Page);

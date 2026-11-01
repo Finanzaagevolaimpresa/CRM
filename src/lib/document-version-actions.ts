@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { getSession } from './auth';
@@ -15,6 +16,7 @@ function failure(error: unknown): DocumentVersionResult {
   return unknown();
 }
 export async function uploadDocumentVersionAction(form: FormData): Promise<DocumentVersionResult> {
+  await assertTechnicalServerAction("document-version-actions:uploadDocumentVersionAction");
   try {
     const actor = await getSession(); if (!actor) return versionErrorResult('DENIED');
     let command: unknown; try { command = JSON.parse(String(form.get('command'))); } catch { return versionErrorResult('INVALID'); }
@@ -25,6 +27,7 @@ export async function uploadDocumentVersionAction(form: FormData): Promise<Docum
   } catch (error) { return failure(error); }
 }
 export async function checkDocumentVersionOutcome(raw: unknown): Promise<DocumentVersionResult> {
+  await assertTechnicalServerAction("document-version-actions:checkDocumentVersionOutcome");
   const command = z.object({ documentId: z.string().min(1).max(128), requestId: z.string().uuid() }).strict().safeParse(raw);
   if (!command.success) return versionErrorResult('INVALID');
   try {

@@ -22,16 +22,18 @@ test.after(async () => { await db.$disconnect(); });
 async function user(role: RoleCode) {
   const row = await db.user.create({ data: { email: `m4-${randomUUID()}@invalid.test`, name: 'Synthetic M4', role, passwordHash: 'synthetic-unusable-hash', active: true } });
   const session = await db.internalSession.create({ data: { userId: row.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3_600_000) } });
-  return { userId: row.id, sessionId: session.id, expiresAt: Math.floor(session.expiresAt.getTime() / 1000), role, active: true, permissionOverrides: [] };
+  const permissionOverrides = role === 'commerciale' ? ['document.download', 'practice_communications.mark_used'].map(permission => ({ permission, allowed: true })) : [];
+  if (permissionOverrides.length) await db.userPermissionOverride.createMany({ data: permissionOverrides.map(value => ({ userId: row.id, ...value })) });
+  return { userId: row.id, sessionId: session.id, expiresAt: Math.floor(session.expiresAt.getTime() / 1000), role, active: true, permissionOverrides };
 }
 async function fixture() {
-  const admin = await user('admin'), operator = await user('consulente'), commercial = await user('commerciale');
-  const client = await db.client.create({ data: { type: 'societa', displayName: 'Synthetic M4 Client', consultantId: operator.userId, salesOwnerId: commercial.userId } });
-  const project = await db.project.create({ data: { clientId: client.id, title: 'Synthetic M4', consultantId: operator.userId } });
+  const admin = await user('admin'), operator = await user('commerciale'), commercial = await user('commerciale');
+  const client = await db.client.create({ data: { type: 'societa', displayName: 'Synthetic M4 Client', salesOwnerId: commercial.userId } });
+  const project = await db.project.create({ data: { clientId: client.id, title: 'Synthetic M4' } });
   const catalog = await db.serviceCatalog.create({ data: { code: `M4-${randomUUID()}`, name: 'Synthetic M4', category: 'test' } });
   const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalog.id, assignedToId: operator.userId } });
   const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id, clientServiceId: service.id,
-    title: 'Synthetic M4', practiceType: 'test', targetEntity: 'Synthetic', createdById: admin.userId, technicalOwnerId: operator.userId, commercialOwnerId: commercial.userId } });
+    title: 'Synthetic M4', practiceType: 'test', targetEntity: 'Synthetic', createdById: admin.userId, commercialOwnerId: operator.userId } });
   const doc = await db.document.create({ data: { clientId: client.id, projectId: project.id, clientServiceId: service.id, type: 'documento_operativo', title: 'Synthetic M4 attachment',
     fileName: 'synthetic-m4.txt', mimeType: 'text/plain', sizeBytes: bytes.length, storagePath: 'synthetic/m4.txt', checksum, uploadedById: admin.userId, status: 'verificato' } });
   const version = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, checksum, storagePath: doc.storagePath } });
@@ -63,12 +65,17 @@ test('M4 migration registers exactly seven disabled mailboxes and preserves dorm
   assert.equal(boxes.length, 7); assert.ok(boxes.every(box => box.kind === 'UNATTESTED' && !box.enabled && !box.canSend && !box.testedAt));
   assert.equal(await db.communicationIntentRecord.count(), 0); assert.equal(await db.businessOutboxEvent.count(), 0);
   await assert.rejects(db.communicationMailbox.update({ where: { id: boxes[0].id }, data: { enabled: true } }));
-  assert.equal(Number((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count), 74);
+  assert.equal(Number((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count), 75);
 });
 
 test('M4 exact admin approval, commercial preparation and changed versions are enforced in storage', { skip: !enabled }, async () => {
   const f = await fixture();
-  const commercialDraft = await saveApprovedMessageDraft(db, f.commercial, { ...f.input, messageId: randomUUID(), attachmentVersionIds: [] }, runtime);
+  const commercialPractice = await db.technicalPractice.create({ data: { clientId: f.client.id, projectId: f.project.id,
+    title: 'Synthetic commercial context M4', practiceType: 'test', targetEntity: 'Synthetic',
+    createdById: f.admin.userId, commercialOwnerId: f.commercial.userId } });
+  const commercialDraft = await saveApprovedMessageDraft(db, f.commercial, { ...f.input, messageId: randomUUID(),
+    context: { kind: 'TECHNICAL', id: commercialPractice.id }, attachmentVersionIds: [] }, runtime);
+  await assert.rejects(readPracticeCommunications(db, f.operator, { kind: 'TECHNICAL', id: commercialPractice.id }), failure('DENIED'));
   assert.equal(commercialDraft.revision, 1);
   const saved = await saveApprovedMessageDraft(db, f.operator, f.input, runtime), binding = { messageId: saved.id, expectedRevision: saved.revision, snapshotHash: saved.snapshotHash };
   await submitApprovedMessage(db, f.operator, binding);
@@ -85,7 +92,7 @@ test('M4 exact admin approval, commercial preparation and changed versions are e
 });
 
 test('M4 readiness communications follow the originating lead, not its client owner, on read, save and reassignment', { skip: !enabled }, async () => {
-  const a = await user('consulente'), b = await user('consulente');
+  const a = await user('commerciale'), b = await user('commerciale');
   const f = await readinessCommunicationFixture(db, a.userId, b.userId);
   assert.equal(f.practice.projectId, null); assert.equal(f.practice.clientServiceId, null);
   const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
@@ -140,7 +147,7 @@ test('M4 fresh rights, suspension, approver revocation and mailbox disablement p
   await db.user.update({ where: { id: f.operator.userId }, data: { active: false } });
   await assert.rejects(prepareManualMessage(db, f.operator, input, runtime), failure('DENIED'));
   await db.user.update({ where: { id: f.operator.userId }, data: { active: true } });
-  const override = await db.userPermissionOverride.create({ data: { userId: f.operator.userId, permission: 'practice_communications.mark_used', allowed: false } });
+  const override = await db.userPermissionOverride.update({ where: { userId_permission: { userId: f.operator.userId, permission: 'practice_communications.mark_used' } }, data: { allowed: false } });
   await assert.rejects(prepareManualMessage(db, f.operator, input, runtime), failure('DENIED'));
   await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } });
   await db.clientService.update({ where: { id: f.service.id }, data: { status: 'sospeso' } });

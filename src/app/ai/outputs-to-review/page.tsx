@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { PrimaryButton } from '@/components/actions';
@@ -7,7 +8,7 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { approveAiOutputAndRefresh, reviewAiOutputAndRefresh } from '@/lib/form-actions';
 import { listAccessibleAiOutputs } from '@/lib/read-access';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('ai.review');
   const contexts = await listAccessibleAiOutputs(session, {
     where: { status: { in: ['needs_review', 'flagged'] } },
@@ -47,3 +48,5 @@ export default async function Page() {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/ai/outputs-to-review", Page);

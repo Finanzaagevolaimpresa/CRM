@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies,headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
@@ -34,6 +35,7 @@ function failure(error:unknown):MetadataResult{
   return {ok:false,uncertain:true,message:'Esito da verificare. Conserva il riferimento prima di preparare un’altra operazione.'};
 }
 export async function saveAdminPrivateDocumentMetadataAction(raw:unknown):Promise<MetadataResult>{
+  await assertTechnicalServerAction("admin-private-document-metadata-actions:saveAdminPrivateDocumentMetadataAction");
   const session=await sessionAndOrigin();if(!session)return {ok:false,message:'Sessione Admin o origine non ammessa.'};
   const readiness=await privilegedAccessReadiness(session);
   if(!readiness.active)return {ok:false,stepUp:readiness.mode==='enforced'&&readiness.keyReady,
@@ -49,6 +51,7 @@ export async function saveAdminPrivateDocumentMetadataAction(raw:unknown):Promis
   }catch(error){return failure(error);}
 }
 export async function reconcileAdminPrivateDocumentMetadataAction(raw:unknown):Promise<MetadataResult>{
+  await assertTechnicalServerAction("admin-private-document-metadata-actions:reconcileAdminPrivateDocumentMetadataAction");
   const session=await sessionAndOrigin();if(!session)return {ok:false,uncertain:true,message:'Sessione Admin o origine non ammessa. Verifica il tentativo dopo l’accesso.'};
   try{
     const result=await reconcileAdminPrivateDocumentMetadata(prisma,session,raw);

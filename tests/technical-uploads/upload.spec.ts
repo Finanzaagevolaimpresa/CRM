@@ -70,6 +70,20 @@ async function screenshot(page: Page, name: string) {
 async function privateFile(context: BrowserContext, url: string) { const response = await context.request.get(url);
   expect(response.status()).toBe(200); expect(response.headers()['cache-control']).toContain('private, no-store');
   expect(response.headers()['content-security-policy']).toContain('sandbox'); expect(await response.body()).toEqual(content); }
+async function rawDepositUrl(r: Row) {
+  const [row] = await db.$queryRaw<Array<{ commandId: string }>>`SELECT "commandId" FROM "TechnicalUploadSubmission" WHERE "targetId"=${r.practiceId}`;
+  expect(row).toBeTruthy(); return upload(r) + '/files/' + row.commandId;
+}
+async function classifyExactTechnicalVersion(page: Page, versionId: string) {
+  await page.goto('/admin/document-disclosure/' + versionId);
+  await page.getByRole('combobox', { name: 'Classificazione', exact: true }).selectOption('TECHNICAL_CONTENT');
+  await page.getByLabel(/^Ho esaminato questa versione completa e i suoi metadati:/).check();
+  await page.getByLabel('Motivazione', { exact: true }).fill('Esame completo del file sintetico e dei suoi metadati');
+  await page.getByLabel('Confermo questa classificazione, senza aggiungere destinatari o versioni.', { exact: true }).check();
+  await page.getByRole('button', { name: 'Registra classificazione', exact: true }).click();
+  await page.getByRole('link', { name: 'Riapri e verifica la classificazione', exact: true }).click();
+  await expect(page.locator('main')).toContainText('Classificazione corrente: Contenuto tecnico verificato');
+}
 test.beforeAll(async () => { expect(process.env.CI).toBe('true'); expect(f.synthetic).toBe(true); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.afterAll(async () => db.$disconnect());
 test('native personal assignment, private upload and Admin approval; two technicians and sales remain separated', async ({ browser }) => {
@@ -77,8 +91,9 @@ test('native personal assignment, private upload and Admin approval; two technic
   const a = await ac.newPage(), t = await tc.newPage(), b = await bc.newPage(); await login(a, f.adminEmail, true); await login(t, r.techA.email); await login(b, r.techB.email);
   await assign(a, r); await assign(a, r, r.techB); const documents = await db.document.count(), versions = await db.documentVersion.count();
   await prepare(t, r); await screenshot(t, 'deposit-preview'); await deposit(t);
-  await t.goto(upload(r)); const ownUrl = await t.getByRole('link', { name: 'Visualizza file', exact: true }).getAttribute('href'); expect(ownUrl).toBeTruthy();
-  await privateFile(tc, ownUrl!); expect((await bc.request.get(ownUrl!)).status()).toBe(404);
+  await t.goto(upload(r)); const ownUrl = await rawDepositUrl(r);
+  await expect(t.getByRole('link', { name: 'Visualizza file', exact: true })).toHaveCount(0);
+  expect((await tc.request.get(ownUrl)).status()).toBe(404); expect((await bc.request.get(ownUrl)).status()).toBe(404);
   await prepareReview(a, r); await screenshot(a, 'review-preview');
   const adminUrl = await a.getByRole('link', { name: 'Visualizza file da revisionare', exact: true }).getAttribute('href'); await privateFile(ac, adminUrl!);
   expect((await tc.request.get(adminUrl!)).status()).toBe(404);
@@ -93,13 +108,16 @@ test('native personal assignment, private upload and Admin approval; two technic
   expect(await counts(r)).toEqual({ uploads: 1, reviews: 1 }); expect(await db.document.count()).toBe(documents); expect(await db.documentVersion.count()).toBe(versions);
   await ac.close(); await tc.close(); await bc.close();
 });
-test('native rejection retains the file and shows its reason without publishing', async ({ browser }) => {
+test('native rejection retains the file for Admin; technical history contains no free notes or raw attachment', async ({ browser }) => {
   const r = f.rows[1], ac = await browser.newContext(), tc = await browser.newContext(), a = await ac.newPage(), t = await tc.newPage();
   await login(a, f.adminEmail, true); await login(t, r.techA.email); await assign(a, r); await prepare(t, r); await deposit(t);
   await prepareReview(a, r, 'REJECT_PRIVATE'); await a.getByRole('button', { name: 'Conferma revisione', exact: true }).click();
   await expect(a.getByText('Revisione registrata. Il file resta nel deposito privato; nessun documento è stato pubblicato o inviato.', { exact: true })).toBeVisible();
-  await t.goto(upload(r)); await expect(t.getByText('Rifiutato · storico conservato', { exact: true })).toBeVisible(); await expect(t.getByText('Motivo: Elaborato sintetico esaminato', { exact: true })).toBeVisible();
-  await privateFile(tc, (await t.getByRole('link', { name: 'Visualizza file', exact: true }).getAttribute('href'))!);
+  await t.goto(upload(r)); await expect(t.getByText('Rifiutato · storico conservato', { exact: true })).toBeVisible(); await expect(t.getByText('Motivo: Elaborato sintetico esaminato', { exact: true })).toHaveCount(0);
+  await expect(t.getByRole('link', { name: 'Visualizza file', exact: true })).toHaveCount(0);
+  expect((await tc.request.get(await rawDepositUrl(r))).status()).toBe(404);
+  await a.goto(review(r)); await expect(a.locator('main')).toContainText('Elaborato sintetico esaminato');
+  await privateFile(ac, (await a.getByRole('link', { name: 'Visualizza file da revisionare', exact: true }).getAttribute('href'))!);
   expect(await counts(r)).toEqual({ uploads: 1, reviews: 1 }); await ac.close(); await tc.close();
 });
 async function loseResponse(page: Page, routeGlob: string, button: string) {
@@ -121,7 +139,9 @@ test('lost upload and review responses recover the original receipts without a s
 test('revocation with author and Admin pages open blocks pending review and direct file reads', async ({ browser }) => {
   const r = f.rows[3], ac = await browser.newContext(), tc = await browser.newContext(), a = await ac.newPage(), t = await tc.newPage();
   await login(a, f.adminEmail, true); await login(t, r.techA.email); await assign(a, r); await prepare(t, r); await deposit(t);
-  await t.goto(upload(r)); const ownUrl = (await t.getByRole('link', { name: 'Visualizza file', exact: true }).getAttribute('href'))!;
+  await t.goto(upload(r)); const ownUrl = await rawDepositUrl(r);
+  await expect(t.getByRole('link', { name: 'Visualizza file', exact: true })).toHaveCount(0);
+  expect((await tc.request.get(ownUrl)).status()).toBe(404);
   await prepareReview(a, r); const adminUrl = (await a.getByRole('link', { name: 'Visualizza file da revisionare', exact: true }).getAttribute('href'))!;
   const revoke = await ac.newPage(); await revoke.goto(management(r) + '?recipient=' + r.techA.id); await revoke.locator('[data-technical-editor-ready="true"]').waitFor();
   await revoke.getByLabel('Motivo della revoca', { exact: true }).fill('Revoca sintetica durante la revisione'); await revoke.getByRole('button', { name: 'Anteprima della revoca', exact: true }).click();
@@ -180,6 +200,7 @@ test('native private acquisition, exact technical version selection, positive by
     expect(ordinary.status()).toBe(403); expect(await ordinary.text()).not.toContain(content.toString());
   }
   for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl)).status()).toBe(404);
+  await classifyExactTechnicalVersion(a, saved.versionId);
   await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
   await expect(a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
   await a.getByRole('combobox', { name: 'Responsabilità', exact: true }).selectOption('supporto');
@@ -188,6 +209,9 @@ test('native private acquisition, exact technical version selection, positive by
   await a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true }).check();
   await a.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Mostra soltanto la versione acquisita');
+  // Existing upload authority is retained; this replacement explicitly removes it.
+  await expect(a.getByLabel('Caricare documenti tecnici', { exact: true })).toBeChecked();
+  await a.getByLabel('Caricare documenti tecnici', { exact: true }).uncheck();
   await expect(a.getByLabel('Caricare documenti tecnici', { exact: true })).not.toBeChecked();
   await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await a.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
@@ -255,6 +279,7 @@ test('native Office acquisition stays private; metadata-only, explicit download 
   expect(personal.headers()['content-type']).toBe('application/octet-stream');
   expect(await (await ac.request.get(privateUrl + '?download=1')).body()).toEqual(officeBytes);
   for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl + '?download=1')).status()).toBe(404);
+  await classifyExactTechnicalVersion(a, saved.versionId);
   for (const allowDownload of [false, true]) {
     await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
     await a.getByRole('combobox', { name: 'Responsabilità', exact: true }).selectOption('supporto');

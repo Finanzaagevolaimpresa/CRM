@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic='force-dynamic';
 import { randomUUID } from 'node:crypto';
 import { notFound,redirect } from 'next/navigation';
@@ -10,7 +11,7 @@ import { TechnicalAssignmentError } from '@/lib/technical-assignment-transaction
 import { RecordUpdateError } from '@/lib/record-update-contract';
 import { AdminPrivateDocumentMetadataEditor } from '@/components/admin-private-document-metadata-editor';
 import { PageHeader } from '@/components/ui';
-export default async function Page({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}){
+  async function Page({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}){
   const session=await requireSession();if(session.role!=='admin')notFound();
   const {id}=await params,query=await searchParams,page=z.coerce.number().int().min(1).max(10000).safeParse(query.page??1);
   if(!page.success||!id||id.length>128)notFound();
@@ -25,3 +26,5 @@ export default async function Page({params,searchParams}:{params:Promise<{id:str
     <AdminPrivateDocumentMetadataEditor key={id+':'+query.command} data={data} commandId={String(query.command)} recovering={Boolean(query.decision)}/>
   </div>;
 }
+
+export default withTechnicalPage("/admin/private-documents/[id]", Page);

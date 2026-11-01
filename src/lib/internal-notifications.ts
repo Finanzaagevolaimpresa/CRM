@@ -1,3 +1,4 @@
+import { isTechnicalAccount } from './technical-confidentiality';
 import { hasPermission, type AuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { TaskStatus } from "@prisma/client";
@@ -28,6 +29,7 @@ function todayBounds(now = new Date()) {
 }
 
 export async function getInternalNotifications(session: AuthSession, options?: { limit?: number }) {
+  if (isTechnicalAccount(session)) return [] as InternalNotification[];
   const now = new Date();
   const { startOfToday, endOfToday } = todayBounds(now);
   const limit = options?.limit ?? 100;

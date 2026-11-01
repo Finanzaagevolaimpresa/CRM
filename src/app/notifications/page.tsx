@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from "next/link";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
@@ -12,7 +13,7 @@ const priorityTone = {
   bassa: "gray",
 } as const;
 
-export default async function NotificationsPage() {
+  async function NotificationsPage() {
   const session = await requireSession();
   const notifications = await getInternalNotifications(session);
 
@@ -72,3 +73,5 @@ export default async function NotificationsPage() {
     </div>
   );
 }
+
+export default withTechnicalPage("/notifications", NotificationsPage);

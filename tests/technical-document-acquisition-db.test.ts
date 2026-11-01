@@ -1,3 +1,4 @@
+import { classifySyntheticTechnicalVersion } from './technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile, realpath, writeFile } from 'node:fs/promises';
@@ -34,7 +35,7 @@ before(async () => {
   if (!enabled) return;
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
-  assert.equal((await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].n, 74n);
+  assert.equal((await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].n, 75n);
   root = await realpath(process.env.LOCAL_DOCUMENT_STORAGE_ROOT!);
   assert(root.startsWith(await realpath(process.env.RUNNER_TEMP!) + path.sep));
   assert(path.basename(root).startsWith('fai-upload-db-only-'));
@@ -142,6 +143,8 @@ test('changed physical bytes fail before acquisition and after acquisition befor
 });
 test('exact technical selection makes the approved file usable; omitted, foreign and download paths stay denied', options, async () => {
   const f = await fixture(), { receipt } = await acquire(f);
+  assert(!(await readTechnicalAssignmentManagement(db, admin.session, f.target, f.techA.user.id)).documentOptions.some(d => d.fileId === receipt.versionId));
+  await classifySyntheticTechnicalVersion(db, admin, receipt.versionId);
   await assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId: receipt.versionId, allowDownload: false }] });
   await assignTechnical(db, admin, f.target, f.techB);
   assert.equal((await readTechnicalWork(db, f.techA.session, f.target)).documents[0].fileId, receipt.versionId);
@@ -216,6 +219,7 @@ test('current lifecycle and personal authority revocation close acquired views w
 test('Office metadata alone grants no bytes; explicit technical download works and revocation closes it', options, async () => {
   const f = await fixture('APPROVE_PRIVATE', { name: 'Relazione.docx', bytes: officeBytes }), { receipt } = await acquire(f);
   const fileId = receipt.versionId;
+  await classifySyntheticTechnicalVersion(db, admin, receipt.versionId);
   await assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId, allowDownload: false }] });
   assert.equal((await readTechnicalWork(db, f.techA.session, f.target)).documents[0].fileName, 'Relazione.docx');
   let reads = 0;
@@ -273,6 +277,7 @@ test('client Office sharing requires its own download decision and rechecks phys
 
 test('practice download selects an exact Office version without opening the client or a sibling practice', options, async () => {
   const f = await fixture('APPROVE_PRIVATE', { name: 'Relazione.docx', bytes: officeBytes }), { receipt } = await acquire(f);
+  await classifySyntheticTechnicalVersion(db, admin, receipt.versionId);
   const input = { version: 2, practiceId: f.practice.id, recipientId: f.techB.user.id, commandId: randomUUID(), revision: 0,
     fields: [], documents: [{ versionId: receipt.versionId, download: false }], expiresAt: new Date(Date.now() + 3600000).toISOString() };
   await grantPractice(db, admin, input);

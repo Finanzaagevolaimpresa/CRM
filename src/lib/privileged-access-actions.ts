@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { redirect } from 'next/navigation';
 import { requireAnyPermission, getSession, hasPermission } from './auth';
@@ -11,6 +12,7 @@ import {
 } from './privileged-access';
 
 export async function establishPrivilegedStepUpAction(formData: FormData) {
+  await assertTechnicalServerAction("privileged-access-actions:establishPrivilegedStepUpAction");
   const session = await requireAnyPermission([...privilegedAccessPermissions]);
   const password = String(formData.get('password') ?? '');
   const returnPath = securityReturnPath(formData.get('returnTo'));
@@ -26,6 +28,7 @@ export async function establishPrivilegedStepUpAction(formData: FormData) {
 /** No redirect: the open editor and its choices remain mounted. This confirms
  * identity only and never replays the operation that requested confirmation. */
 export async function establishPrivilegedStepUpInline(_previous: { ok: boolean; message: string; expiresAt?: number }, form: FormData) {
+  await assertTechnicalServerAction("privileged-access-actions:establishPrivilegedStepUpInline");
   try {
     const session = await getSession();
     if (!session || !privilegedAccessPermissions.some(permission => hasPermission(session, permission)))
@@ -41,6 +44,7 @@ export async function establishPrivilegedStepUpInline(_previous: { ok: boolean; 
 }
 
 export async function clearPrivilegedStepUpAction() {
+  await assertTechnicalServerAction("privileged-access-actions:clearPrivilegedStepUpAction");
   await requireAnyPermission([...privilegedAccessPermissions]);
   await clearPrivilegedStepUpCookie();
   redirect('/settings/security?status=cleared');

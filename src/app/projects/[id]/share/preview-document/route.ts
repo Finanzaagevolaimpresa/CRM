@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { requireSession } from '@/lib/auth';
@@ -7,6 +8,7 @@ import { readPrivateDocumentBounded } from '@/lib/storage';
 import { isAllowedMutationOrigin } from '@/lib/application-security-policy';
 
 export async function POST(request: Request) {
+  await assertTechnicalFileRoute("/projects/[id]/share/preview-document");
   const session = await requireSession();
   if (!isAllowedMutationOrigin({ origin: request.headers.get('origin'), secFetchSite: request.headers.get('sec-fetch-site'), configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) {
     return new NextResponse('Non autorizzato', { status: 403 });

@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
@@ -14,6 +15,7 @@ const schema = z.object({
   expectedVersion: z.coerce.number().int().min(0).max(2_147_483_646), active: z.enum(['true', 'false']),
 });
 export async function updateClientReadPerimeter(_previous: { ok: boolean; message: string }, form: FormData) {
+  await assertTechnicalServerAction("client-read-perimeter-actions:updateClientReadPerimeter");
   const session = await requirePermission('user.write');
   if (session.role !== 'admin') return { ok: false, message: 'Solo l’amministratore può cambiare i perimetri.' };
   await requireEnforcedPrivilegedMutation(session, 'R05_CLIENT_READ_PERIMETER');

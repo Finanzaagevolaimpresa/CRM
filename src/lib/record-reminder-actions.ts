@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies, headers } from 'next/headers';
 import { ZodError } from 'zod';
 import { requireSession } from './auth';
@@ -34,12 +35,14 @@ function failure(error: unknown) {
 // the retained decision in its URL would replace the live form with recovery
 // and discard a confirmed result. Explicit navigation reads the current state.
 export async function previewRecordReminderAction(raw: unknown) {
+  await assertTechnicalServerAction("record-reminder-actions:previewRecordReminderAction");
   const session = await requireSession();
   try { await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true }); return { ok: true as const, preview: await previewRecordReminder(prisma, session, await credentials(), raw) }; }
   catch (error) { return failure(error); }
 }
 export async function confirmRecordReminderAction(raw: unknown,
   token: Parameters<typeof confirmRecordReminder>[4], confirmed: boolean) {
+  await assertTechnicalServerAction("record-reminder-actions:confirmRecordReminderAction");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true });
@@ -48,11 +51,13 @@ export async function confirmRecordReminderAction(raw: unknown,
   } catch (error) { return failure(error); }
 }
 export async function verifyRecordReminderAction(commandId: string) {
+  await assertTechnicalServerAction("record-reminder-actions:verifyRecordReminderAction");
   const session = await requireSession();
   try { return { ok: true as const, result: await readRecordReminderReceipt(prisma, session, await credentials(), commandId) }; }
   catch { return { ok: false as const, message: 'Verifica non disponibile. Riconferma la tua identità e riprova soltanto la verifica.' }; }
 }
 export async function cancelRecordReminderAction(raw: unknown, confirmed: boolean) {
+  await assertTechnicalServerAction("record-reminder-actions:cancelRecordReminderAction");
   const session = await requireSession();
   try {
     await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE', { inline: true });
@@ -61,6 +66,7 @@ export async function cancelRecordReminderAction(raw: unknown, confirmed: boolea
   } catch (error) { return failure(error); }
 }
 export async function verifyRecordReminderCancellationAction(raw: unknown) {
+  await assertTechnicalServerAction("record-reminder-actions:verifyRecordReminderCancellationAction");
   const session = await requireSession();
   try { return { ok: true as const, result: await readRecordReminderCancellation(prisma, session, await credentials(), raw) }; }
   catch { return { ok: false as const, message: 'Verifica non disponibile. Conserva il riferimento e non ripetere l’annullamento.' }; }

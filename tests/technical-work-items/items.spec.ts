@@ -31,8 +31,8 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
   await page.getByLabel('Titolo', { exact: true }).check();
   const selected = page.getByLabel(checklist ? 'Checklist · Checklist scelta' : 'Attività · Attività tecnica scelta', { exact: true });
   await selected.check(); const card = selected.locator('..').locator('..');
-  for (const name of checklist ? ['Titolo', 'Note tecniche', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
-  await card.getByLabel(checklist ? 'Consenti modifica note tecniche' : 'Consenti modifica priorità', { exact: true }).check();
+  for (const name of checklist ? ['Titolo', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
+  await card.getByLabel(checklist ? 'Consenti modifica titolo' : 'Consenti modifica priorità', { exact: true }).check();
   await expect(page.getByText('Checklist finanziaria esclusa', { exact: false })).toHaveCount(0);
   await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Selezione sintetica di elementi e campi');
@@ -45,8 +45,8 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
 async function prepare(page: Page, row: Row, checklist = false) {
   await page.goto(item(row, checklist)); await page.locator('[data-technical-item-ready="true"]').waitFor();
   for (const value of row.excluded) expect(await page.content()).not.toContain(value);
-  await page.getByLabel(checklist ? 'Modifica note tecniche' : 'Modifica priorità', { exact: true }).check();
-  if (checklist) await page.getByRole('textbox', { name: 'Note tecniche', exact: true }).fill('Nota tecnica aggiornata');
+  await page.getByLabel(checklist ? 'Modifica titolo' : 'Modifica priorità', { exact: true }).check();
+  if (checklist) await page.getByRole('textbox', { name: 'Titolo', exact: true }).fill('Checklist tecnica aggiornata');
   else await page.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('urgente');
   await page.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma le modifiche', exact: true })).toBeVisible();
@@ -73,7 +73,8 @@ test('personal Admin selects different items for two technicians; native edits p
   await prepare(b, row, true); await screenshot(b, 'checklist-preview'); await save(b);
   expect(await count(row)).toBe(2);
   expect((await db.task.findUniqueOrThrow({ where: { id: row.taskId } })).priority).toBe('urgente');
-  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: row.checklistId } })).notes).toBe('Nota tecnica aggiornata');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: row.checklistId } })).title).toBe('Checklist tecnica aggiornata');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: row.checklistId } })).notes).toBe('Nota iniziale');
   expect((await tc.request.get(item(row, true))).status()).toBe(404); expect((await bc.request.get(item(row))).status()).toBe(404);
   for (const person of [row.salesA, row.salesB]) { const sc = await browser.newContext(), s = await sc.newPage(); await login(s, person.email);
     for (const url of [item(row), item(row, true)]) expect((await sc.request.get(url)).status()).toBe(404);
@@ -271,6 +272,22 @@ test('document search retains stale selected context until explicit removal and 
   expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
   await screenshot(admin, 'document-catalogue-stale');
   await admin.getByRole('button', { name: 'Rimuovi questa versione', exact: true }).click();
+  await expect(admin.getByLabel(documentLabel({ ...chosen, title }), { exact: true })).toHaveCount(0);
+  // Changed metadata invalidates the previous classification. Re-examine the
+  // exact synthetic bytes and record a separate Admin decision before reuse.
+  const classification = await ac.newPage();
+  const versionId = chosen.versions[0].fileId;
+  const bytes = await ac.request.get('/documents/' + chosen.id + '/view?versionId=' + versionId);
+  expect(bytes.status()).toBe(200); expect(await bytes.body()).toEqual(Buffer.from(chosen.versions[0].text));
+  await classification.goto('/admin/document-disclosure/' + versionId);
+  await classification.locator('[data-interactive-ready="true"]').last().waitFor({ state: 'attached' });
+  await classification.getByRole('combobox', { name: 'Classificazione', exact: true }).selectOption('TECHNICAL_CONTENT');
+  await classification.getByRole('checkbox', { name: /^Ho esaminato questa versione completa/ }).check();
+  await classification.getByLabel('Motivazione', { exact: true }).fill('Nuova verifica dei metadati e dei byte della sola fixture sintetica');
+  await classification.getByLabel('Confermo questa classificazione, senza aggiungere destinatari o versioni.', { exact: true }).check();
+  await classification.getByRole('button', { name: 'Registra classificazione', exact: true }).click();
+  await expect(classification.getByRole('link', { name: 'Riapri e verifica la classificazione', exact: true })).toBeVisible();
+  await classification.close(); await searchDocuments(admin, chosen.fileName);
   await admin.getByLabel(documentLabel({ ...chosen, title }), { exact: true }).check();
   await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
@@ -303,7 +320,8 @@ test('a real catalogue lock timeout leaves native history and personal revocatio
   await assign(admin, row, row.techA); await prepare(tech, row);
   const url = management(row) + '?recipient=' + row.techA.id;
   // Warm the actual page before holding the row, so compilation is not the
-  // timing condition. The real app keeps its unchanged 5s transaction timeout.
+  // timing condition. The real app has a 4s lock-wait limit inside its larger
+  // management-read budget; the fallback must not wait for this blocker.
   await admin.goto(url); await expect(admin.getByLabel('Motivo della revoca', { exact: true })).toBeVisible();
   let locked!: () => void, release!: () => void;
   const acquired = new Promise<void>(resolve => { locked = resolve; });

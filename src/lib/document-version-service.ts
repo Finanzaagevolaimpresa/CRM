@@ -1,3 +1,4 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthSession } from './auth';
@@ -28,7 +29,7 @@ async function lockContext(tx: Tx, claimed: AuthSession, documentId: string) {
   await lockInternalUser(tx, claimed.userId);
   const user = await tx.user.findUnique({ where: { id: claimed.userId }, include: { permissionOverrides: true } });
   if (!user?.active || user.deletedAt || !Number.isFinite(claimed.expiresAt) || claimed.expiresAt * 1000 <= Date.now()) return denied();
-  const actor = { ...claimed, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides,
+  const actor = { ...claimed, role: user.role, technicalRestricted: await currentTechnicalRestriction(tx, user.id, user), active: user.active, permissionOverrides: user.permissionOverrides,
     clientReadScope: await loadClientReadScope(tx, user.id), ...await guardProjectResources(tx, user.id, [{ documentId }]) };
   if (!hasPermission(actor, 'document.download')) return denied();
   await tx.$queryRaw`SELECT id FROM "Document" WHERE id=${documentId} FOR UPDATE`;

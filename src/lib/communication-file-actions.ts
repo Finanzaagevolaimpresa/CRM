@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { headers } from 'next/headers';
 import { unstable_rethrow } from 'next/navigation';
@@ -15,6 +16,7 @@ async function admission() {
 }
 
 export async function uploadCommunicationFileAction(form: FormData): Promise<'RECORDED' | 'CHECK_CURRENT'> {
+  await assertTechnicalServerAction("communication-file-actions:uploadCommunicationFileAction");
   try {
     const session = await admission(), file = form.get('file');
     if (!(file instanceof File)) return 'CHECK_CURRENT';
@@ -26,6 +28,7 @@ export async function uploadCommunicationFileAction(form: FormData): Promise<'RE
 }
 
 export async function revokeCommunicationFileAction(raw: unknown): Promise<'RECORDED' | 'CHECK_CURRENT'> {
+  await assertTechnicalServerAction("communication-file-actions:revokeCommunicationFileAction");
   try {
     await revokeCommunicationFile(prisma, await admission(), raw);
     revalidatePath('/communications');
@@ -34,6 +37,7 @@ export async function revokeCommunicationFileAction(raw: unknown): Promise<'RECO
 }
 
 export async function reconcileCommunicationFileAction(raw: unknown): Promise<'RECORDED' | 'CLOSED' | 'UNKNOWN' | 'CHECK_CURRENT'> {
+  await assertTechnicalServerAction("communication-file-actions:reconcileCommunicationFileAction");
   try {
     const result = await reconcileCommunicationFileCommand(prisma, await admission(), raw);
     revalidatePath('/communications');

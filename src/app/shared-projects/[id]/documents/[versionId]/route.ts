@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { requireSession } from '@/lib/auth';
@@ -6,6 +7,7 @@ import { readSelectiveDocument } from '@/lib/selective-project-access';
 import { readPrivateDocumentBounded } from '@/lib/storage';
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; versionId: string }> }) {
+  await assertTechnicalFileRoute("/shared-projects/[id]/documents/[versionId]");
   const session = await requireSession(), { id, versionId } = await params;
   const download = new URL(request.url).searchParams.get('download') === '1';
   try {

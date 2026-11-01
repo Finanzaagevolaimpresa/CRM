@@ -70,9 +70,9 @@ test('ordinary and exact selective documents remain usable while unselected and 
   await login(page, f.techA.email);
   await page.goto('/technical-office/practices/' + f.ordinary.practiceId);
   await expect(page.getByText('Documento ordinario R04', { exact: true })).toBeVisible();
-  const ordinaryPreview = page.locator(`a[href="/documents/${f.ordinary.documentId}/view"]`);
+  const ordinaryPreview = page.locator(`a[href^="/documents/${f.ordinary.documentId}/view?versionId="]`);
   await expect(ordinaryPreview).toHaveText('Visualizza');
-  await expect(page.locator(`a[href="/documents/${f.ordinary.documentId}/download"]`)).toHaveText('Scarica');
+  await expect(page.locator(`a[href^="/documents/${f.ordinary.documentId}/download?versionId="]`)).toHaveText('Scarica');
   const popupPromise = page.waitForEvent('popup'); await ordinaryPreview.click();
   const popup = await popupPromise;
   await expect(popup.getByText('DOCUMENTO_ORDINARIO_R04', { exact: true })).toBeVisible();
@@ -105,7 +105,7 @@ test('second technician and two commercial actors keep their own records and adm
   for (const [person, denied] of [[f.techB, f.selective.practiceId], [f.salesB, f.ordinary.practiceId]] as const) {
     const page = await browser.newPage(); await login(page, person.email);
     await page.goto('/technical-office/practices/' + denied);
-    await expect(page.getByRole('heading', { name: 'Pratica non accessibile' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: person.id === f.techB.id ? '404' : 'Pratica non accessibile', exact: true })).toBeVisible();
     await page.goto('/technical-work/practices/' + denied);
     expect(await page.content()).not.toContain('Pratica tecnica multipla sintetica');
     await page.close();
@@ -139,6 +139,6 @@ test('revocation with an open browser removes the selected record from every vie
   }
   expect([403, 404]).toContain((await page.request.get(href)).status());
   await page.goto('/technical-office/practices/' + f.selective.practiceId);
-  await expect(page.getByRole('heading', { name: 'Pratica non accessibile' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '404', exact: true })).toBeVisible();
   await page.goto('/technical-office/practices'); await screen(page, 'after-revocation');
 });

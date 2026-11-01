@@ -135,7 +135,19 @@ test('P1-01 actual server actions from pre-grant forms deny admin and assigned t
     const url = `/technical-office/practices/${f.technicalPractice.id}`;
     await page.goto(url);
     const labels = ['Salva stato', 'Salva dati', 'Archivia pratica', 'Assegna', 'Crea nota per commerciale', 'Approva', 'Segna usata/inviata', 'Archivia'];
-    const forms = (await page.locator('form').evaluateAll(nodes => nodes.map(node => ({
+    // A technician never receives the old confidential forms. Capture actual
+    // native payloads in a separate Admin session, then replay only those form
+    // fields with the technician's own request context; no session is copied.
+    let formContext = context, formPage = page;
+    if (role === 'consulente') {
+      for (const label of labels) await expect(page.getByRole('button', { name: label, exact: true })).toHaveCount(0);
+      formContext = await browser.newContext(); formPage = await formContext.newPage();
+      await login(formPage, fixture.emails.admin);
+      await formPage.goto('/settings/security'); await formPage.getByLabel('Password corrente').fill(password);
+      await formPage.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
+      await expect(formPage).toHaveURL(/status=active/); await formPage.goto(url);
+    }
+    const forms = (await formPage.locator('form').evaluateAll(nodes => nodes.map(node => ({
       label: node.querySelector('button[type="submit"]')?.textContent?.trim() ?? '',
       fields: Object.fromEntries([...new FormData(node as HTMLFormElement).entries()].map(([key, value]) => [key, String(value)])),
     })))).filter(form => labels.includes(form.label));
@@ -144,19 +156,35 @@ test('P1-01 actual server actions from pre-grant forms deny admin and assigned t
     for (const form of forms) expect(Object.keys(form.fields).some(key => key.startsWith('$ACTION_'))).toBe(true);
     const post = (fields: Record<string, string>) => context.request.post(url, { multipart: fields,
       headers: { Origin: 'http://127.0.0.1:3035' }, maxRedirects: 0 });
-    // Positive control: the captured form really dispatches the existing action.
+    const footprint = async () => ({
+      practice: await db.technicalPractice.findUniqueOrThrow({ where: { id: f.technicalPractice.id } }),
+      communications: await db.practiceCommunication.findMany({ where: { technicalPracticeId: f.technicalPractice.id }, orderBy: { id: 'asc' } }),
+      audits: await db.auditLog.findMany({ orderBy: { id: 'asc' } }),
+    });
+    if (role === 'consulente') {
+      const before = await footprint();
+      for (const form of forms) {
+        const response = await post(form.fields);
+        expect(response.status()).toBe(404);
+        const body = await response.text();
+        expect(body).not.toContain('Failed to find Server Action');
+        if (role === 'consulente') {
+          expect(response.status()).toBe(404);
+          expect(body).not.toContain('Synthetic internal note');
+          expect(body).not.toContain('Unchanged synthetic note');
+        }
+        expect(await footprint(), 'technical before grant/' + form.label).toEqual(before);
+      }
+    }
+    // Positive control is performed by the actual Admin who rendered the form.
     const statusForm = forms.find(form => form.label === 'Salva stato')!;
-    await post({ ...statusForm.fields, status: 'in_progettazione' });
+    await formContext.request.post(url, { multipart: { ...statusForm.fields, status: 'in_progettazione' },
+      headers: { Origin: 'http://127.0.0.1:3035' }, maxRedirects: 0 });
     expect((await db.technicalPractice.findUniqueOrThrow({ where: { id: f.technicalPractice.id } })).status).toBe('in_progettazione');
     const preview = await previewSelectiveAccess(db, authority.session, f.input);
     const grant = await confirmSelectiveAccess(db, authority.session, preview.token, true);
     for (const revoked of [false, true]) {
       if (revoked) await revokeSelectiveAccess(db, authority.session, grant.id, grant.revision, true);
-      const footprint = async () => ({
-        practice: await db.technicalPractice.findUniqueOrThrow({ where: { id: f.technicalPractice.id } }),
-        communications: await db.practiceCommunication.findMany({ where: { technicalPracticeId: f.technicalPractice.id }, orderBy: { id: 'asc' } }),
-        audits: await db.auditLog.findMany({ orderBy: { id: 'asc' } }),
-      });
       const before = await footprint();
       for (const form of forms) {
         const fields = { ...form.fields };
@@ -164,10 +192,17 @@ test('P1-01 actual server actions from pre-grant forms deny admin and assigned t
         if (form.label === 'Salva dati') fields.title = 'Unauthorized change';
         if (form.label === 'Assegna') fields.technicalOwnerId = f.otherAdmin.user.id;
         const response = await post(fields);
-        expect(await response.text()).not.toContain('Failed to find Server Action');
+        const body = await response.text();
+        expect(body).not.toContain('Failed to find Server Action');
+        if (role === 'consulente') {
+          expect(response.status()).toBe(404);
+          expect(body).not.toContain('Synthetic internal note');
+          expect(body).not.toContain('Unchanged synthetic note');
+        }
         expect(await footprint(), `${role}/${revoked ? 'revoked' : 'active'}/${form.label}`).toEqual(before);
       }
     }
+    if (formContext !== context) await formContext.close();
     await context.close();
   }
   writeFileSync(path.join(evidence, 'stale-practice-actions.json'), JSON.stringify({

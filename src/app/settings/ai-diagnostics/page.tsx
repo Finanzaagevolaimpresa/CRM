@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { randomUUID } from 'node:crypto';
@@ -12,7 +13,7 @@ function yesNo(value: boolean) {
   return value ? 'sì' : 'no';
 }
 
-export default async function Page({ searchParams }: { searchParams?: Promise<{ status?: string; message?: string; supersedesRequestId?: string }> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<{ status?: string; message?: string; supersedesRequestId?: string }> }) {
   const session = await requirePermission('ai_agents.read');
   const diagnostics = getAiProviderDiagnostics();
   const controlPolicy = await getAiControlPolicy();
@@ -150,3 +151,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/ai-diagnostics", Page);

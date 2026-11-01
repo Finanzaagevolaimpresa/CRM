@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -25,6 +26,7 @@ function receiptView(receipt: HistoricalContactViewReceipt): HistoricalContactVi
   return { id: receipt.id, input: receipt.input, recordedAt: receipt.recordedAt, inboxVersionAfter: receipt.inboxVersionAfter };
 }
 export async function prepareHistoricalContactAction(raw: unknown): Promise<HistoricalContactViewResult> {
+  await assertTechnicalServerAction("commercial-lead-historical-actions:prepareHistoricalContactAction");
   try {
     const current = await actor(), key = await loadActivePrivilegedStepUpKey(prisma);
     if (!key) return denied();
@@ -32,6 +34,7 @@ export async function prepareHistoricalContactAction(raw: unknown): Promise<Hist
   } catch { return denied(); }
 }
 export async function saveHistoricalContactAction(raw: unknown): Promise<HistoricalContactViewResult> {
+  await assertTechnicalServerAction("commercial-lead-historical-actions:saveHistoricalContactAction");
   try {
     const current = await actor();
     const input = z.object({ token: z.string().max(16_000), confirmed: z.literal(true) }).strict().parse(raw);
@@ -43,6 +46,7 @@ export async function saveHistoricalContactAction(raw: unknown): Promise<Histori
   } catch { return denied(); }
 }
 export async function checkHistoricalContactAction(raw: unknown): Promise<HistoricalContactViewResult> {
+  await assertTechnicalServerAction("commercial-lead-historical-actions:checkHistoricalContactAction");
   try {
     const current = await actor(), result = await readHistoricalLeadContactOutcome(prisma, current, raw);
     return result.state === 'RECORDED' ? { state: 'RECORDED', receipt: receiptView(result.receipt) }
@@ -51,6 +55,7 @@ export async function checkHistoricalContactAction(raw: unknown): Promise<Histor
 }
 
 export async function prepareHistoricalConversionAction(raw: unknown): Promise<HistoricalConversionViewResult> {
+  await assertTechnicalServerAction("commercial-lead-historical-actions:prepareHistoricalConversionAction");
   try {
     const current = await actor(), key = await loadActivePrivilegedStepUpKey(prisma);
     if (!key) return { state: 'DENIED', message: 'Conversione non disponibile.' };
@@ -58,6 +63,7 @@ export async function prepareHistoricalConversionAction(raw: unknown): Promise<H
   } catch { return { state: 'DENIED', message: 'Conversione non disponibile con lo stato o i permessi correnti.' }; }
 }
 export async function saveHistoricalConversionAction(raw: unknown): Promise<HistoricalConversionViewResult> {
+  await assertTechnicalServerAction("commercial-lead-historical-actions:saveHistoricalConversionAction");
   try {
     const current = await actor();
     const request = z.object({ token: z.string().max(16_000).regex(/^[A-Za-z0-9_-]+$/u), confirmed: z.literal(true) }).strict().parse(raw);
@@ -81,6 +87,7 @@ export async function saveHistoricalConversionAction(raw: unknown): Promise<Hist
   } catch { return { state: 'DENIED', message: 'Esito da verificare: non ripetere la conversione.' }; }
 }
 export async function checkHistoricalConversionAction(raw: unknown): Promise<HistoricalConversionViewResult> {
+  await assertTechnicalServerAction("commercial-lead-historical-actions:checkHistoricalConversionAction");
   try {
     const lookup = z.object({ leadId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), commandId: z.string().uuid() }).strict().parse(raw);
     const result = await readHistoricalLeadConversionOutcome(prisma, await actor(), lookup);

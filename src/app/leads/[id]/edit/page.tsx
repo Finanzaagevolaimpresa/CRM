@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { notFound } from 'next/navigation';
 import { PageHeader, Card } from '@/components/ui';
@@ -8,7 +9,7 @@ import { prisma } from '@/lib/prisma';
 import { canEditLead } from '@/lib/access-control';
 import { leadProfileFields } from '@/lib/record-profile-fields';
 import { recordProfileValues } from '@/lib/record-profile-view';
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('lead.write'), { id } = await params;
   const lead = await prisma.lead.findFirst({ where: { id, deletedAt: null, AND: [leadVisibilityWhere(session)] } });
   if (!lead || !canEditLead(session, lead)) notFound();
@@ -17,3 +18,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card title={`${lead.firstName} ${lead.lastName}`}><RecordProfileForm fields={leadProfileFields} values={recordProfileValues(lead, leadProfileFields)}
       hidden={{ kind: 'lead', id, expectedVersion: lead.updatedAt.toISOString() }} /></Card></div>;
 }
+
+export default withTechnicalPage("/leads/[id]/edit", Page);

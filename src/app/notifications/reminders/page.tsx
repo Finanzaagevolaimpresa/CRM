@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -10,7 +11,7 @@ import { RecordUpdateError } from '@/lib/record-update-contract';
 
 export const dynamic = 'force-dynamic';
 const time = (value: string) => new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'long', timeStyle: 'short' }).format(new Date(value));
-export default async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const session = await requireSession(), query = await searchParams, page = z.coerce.number().int().min(1).max(100).safeParse(query.page ?? 1);
   if (session.role !== 'admin' || !page.success) notFound();
   const key = await loadActivePrivilegedStepUpKey(prisma);
@@ -34,3 +35,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ p
     </nav>
   </div>;
 }
+
+export default withTechnicalPage("/notifications/reminders", Page);

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { PaginationNav } from '@/components/pagination-nav';
 import { Card, EmptyState, PageHeader, StatusBadge, formatDateTime } from '@/components/ui';
@@ -18,7 +19,7 @@ function displayIdentity(parts: readonly (string | null | undefined)[]) {
   return parts.filter(Boolean).join(' ') || 'Dato non disponibile';
 }
 
-export default async function Page({
+  async function Page({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | undefined>>;
@@ -141,3 +142,5 @@ export default async function Page({
 }
 
 export const dynamic = 'force-dynamic';
+
+export default withTechnicalPage("/leads/duplicates", Page);

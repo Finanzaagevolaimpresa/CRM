@@ -60,21 +60,23 @@ const ids = {
   managerSession: randomUUID(),
 };
 const expiresAt = Math.floor(Date.now() / 1000) + 3_600;
+const authorPermissions = ['dossier.read', 'dossier.write', 'document.download', 'service.write', 'practice_communications.mark_used']
+  .map(permission => ({ permission, allowed: true }));
 const actorA = {
   userId: ids.userA,
   sessionId: ids.sessionA,
   expiresAt,
-  role: "consulente" as const,
+  role: "commerciale" as const,
   active: true,
-  permissionOverrides: [],
+  permissionOverrides: authorPermissions,
 };
 const actorB = {
   userId: ids.userB,
   sessionId: ids.sessionB,
   expiresAt,
-  role: "consulente" as const,
+  role: "commerciale" as const,
   active: true,
-  permissionOverrides: [],
+  permissionOverrides: authorPermissions,
 };
 const manager = {
   userId: ids.manager,
@@ -103,14 +105,13 @@ async function createContext(label: string, consultantId: string) {
     data: {
       type: "persona_fisica",
       displayName: `Cliente sintetico ${label} ${suffix}`,
-      consultantId,
+      salesOwnerId: consultantId,
     },
   });
   const project = await db.project.create({
     data: {
       clientId: client.id,
       title: `Pratica sintetica ${label} ${suffix}`,
-      consultantId,
     },
   });
   const lead = await db.lead.create({
@@ -332,16 +333,16 @@ test.before(async () => {
       {
         id: ids.userA,
         email: `${ids.userA}@invalid.test`,
-        name: "Consulente A",
+        name: "Redattore commerciale A",
         passwordHash: "synthetic",
-        role: "consulente",
+        role: "commerciale",
       },
       {
         id: ids.userB,
         email: `${ids.userB}@invalid.test`,
-        name: "Consulente B",
+        name: "Redattore commerciale B",
         passwordHash: "synthetic",
-        role: "consulente",
+        role: "commerciale",
       },
       {
         id: ids.manager,
@@ -352,6 +353,7 @@ test.before(async () => {
       },
     ],
   });
+  await db.userPermissionOverride.createMany({ data: [ids.userA, ids.userB].flatMap(userId => authorPermissions.map(value => ({ userId, ...value }))) });
   await db.internalSession.createMany({
     data: [
       {
@@ -1046,7 +1048,7 @@ test(
     const practiceA = await ensurePractice(a, actorA);
     await db.client.update({
       where: { id: a.client.id },
-      data: { consultantId: ids.userB },
+      data: { salesOwnerId: ids.userB },
     });
     await expectDeniedWithoutEffects(practiceA.id, () =>
       recordPracticeFunding(db, actorA, {
@@ -1062,7 +1064,7 @@ test(
     );
     await db.client.update({
       where: { id: a.client.id },
-      data: { consultantId: ids.userA },
+      data: { salesOwnerId: ids.userA },
     });
     await db.internalSession.update({
       where: { id: ids.sessionA },
@@ -1936,7 +1938,7 @@ test("dossier access, export and delivery recheck current authority and roll bac
   }
   assert.deepEqual([...await getVisibleEngagementDossierIds(db, actorA, [dossier.id])], [dossier.id]);
   const service = await db.clientService.findUniqueOrThrow({ where: { id: dossier.clientServiceId! } });
-  await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userB } });
+  await db.client.update({ where: { id: a.client.id }, data: { salesOwnerId: ids.userB } });
   await db.project.update({ where: { id: a.project.id }, data: { consultantId: ids.userB } });
   await db.clientService.update({ where: { id: service.id }, data: { assignedToId: ids.userB } });
   try {
@@ -1945,7 +1947,7 @@ test("dossier access, export and delivery recheck current authority and roll bac
     await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
     assert.deepEqual(await snapshot(), before);
   } finally {
-    await db.client.update({ where: { id: a.client.id }, data: { consultantId: a.client.consultantId } });
+    await db.client.update({ where: { id: a.client.id }, data: { salesOwnerId: a.client.salesOwnerId } });
     await db.project.update({ where: { id: a.project.id }, data: { consultantId: a.project.consultantId } });
     await db.clientService.update({ where: { id: service.id }, data: { assignedToId: service.assignedToId } });
   }
@@ -2057,11 +2059,11 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
     assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
     assert.deepEqual(await footprint(), before);
   } finally { await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null, revokedByUserId: null } }); }
-  const override = await db.userPermissionOverride.create({ data: { userId: ids.userA, permission: 'document.download', allowed: false } });
+  const override = await db.userPermissionOverride.update({ where: { userId_permission: { userId: ids.userA, permission: 'document.download' } }, data: { allowed: false } });
   try {
     await assert.rejects(exportEngagementWorkPackage(db, actorA, { ...exportInput, expectedVersionId: imported.id, packageId: randomUUID() }, runtime), deniedWork);
     assert.deepEqual(await footprint(), before);
-  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  } finally { await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } }); }
   const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: exportInput.packageId } });
   await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: { ...(exportAudit.after as Record<string, Prisma.InputJsonValue>), materialSnapshotHash: '0'.repeat(64) } } });
   try {

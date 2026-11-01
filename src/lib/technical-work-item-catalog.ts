@@ -7,7 +7,7 @@ export const technicalWorkItemCatalogueQuery = z.object({
 }).strict();
 export type TechnicalWorkItemCatalogueQuery = z.infer<typeof technicalWorkItemCatalogueQuery>;
 export type TechnicalWorkItemOption = { kind: 'ChecklistItem' | 'Task'; itemId: string;
-  generation: number; scopeGeneration: number; scopeSha256: string; title: string };
+  generation: number; scopeGeneration: number; scopeSha256: string; title: string; retainedReference?: true };
 export type TechnicalWorkItemCatalogue = { options: TechnicalWorkItemOption[];
   query: TechnicalWorkItemCatalogueQuery; hasNext: boolean };
 export type TechnicalWorkItemChoices = Record<string, { option: TechnicalWorkItemOption; readable: string[]; editable: string[] }>;

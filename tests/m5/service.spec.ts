@@ -1,3 +1,4 @@
+import { syntheticDossierOperator } from './fixtures';
 import { captureManual } from '../manuals-r23/capture';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,7 +60,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
       await operator.goto(target);
       const workHeading = operator.getByRole('heading', { name: 'Lavorazione manuale con Work', exact: true });
       await expect(operator.getByRole('button', { name: 'Scarica pacchetto Work', exact: true })).toBeVisible();
-      await captureManual(operator, 'S06-dossier-work', 'consulente', 'Percorso manuale Work della versione sintetica corrente: conferma dell’operatore e preparazione del pacchetto; nessuna sincronizzazione automatica.', workHeading, [operator.getByRole('button', { name: 'Scarica pacchetto Work', exact: true })]);
+      await captureManual(operator, 'S06-dossier-work', 'commerciale', 'Percorso manuale Work della versione sintetica corrente: conferma dell’operatore e preparazione del pacchetto; nessuna sincronizzazione automatica.', workHeading, [operator.getByRole('button', { name: 'Scarica pacchetto Work', exact: true })]);
     }
     // Exercise the actual protected download route, not just the dossier page.
     const sourceVersion = await db.documentVersion.findUniqueOrThrow({ where: { id: item.documentVersionId } });
@@ -134,7 +135,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     expect((receipt.evidence as { deliveredAt: string }).deliveredAt).toBe('2026-09-27T10:00:00.000Z');
     if (item === f.cases[0] && process.env.R23_MANUAL_EVIDENCE) {
       await operator.reload();
-      await captureManual(operator, 'S08-consegna-manuale', 'consulente', 'Ricevuta manuale sintetica della versione autorizzata; non è un invio reale.', operator.getByRole('heading', { name: 'Consegne manuali tracciate', exact: true }));
+      await captureManual(operator, 'S08-consegna-manuale', 'commerciale', 'Ricevuta manuale sintetica della versione autorizzata; non è un invio reale.', operator.getByRole('heading', { name: 'Consegne manuali tracciate', exact: true }));
       for (const role of ['sales', 'collaborator']) {
         const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3025' }), reader = await context.newPage();
         await login(reader, role); const response = await reader.goto('/clients/' + item.clientId);
@@ -161,7 +162,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
 test('readiness hides sibling practices, funding, revisions and selector options on a shared client', async ({ browser }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const hash = await bcrypt.hash(password, 4);
-  const a = await syntheticUser(db, 'consulente', 'Synthetic client owner', hash), b = await syntheticUser(db, 'consulente', 'Synthetic service owner', hash);
+  const a = await syntheticDossierOperator(db, 'Synthetic commercial client owner', hash), b = await syntheticDossierOperator(db, 'Synthetic commercial service owner', hash);
   const fixture = await syntheticCase(db, 'dossier_preanalisi', { operator: b, admin: await syntheticUser(db, 'admin', 'Synthetic admin'),
     human1: await syntheticUser(db, 'revisore', 'Synthetic reviewer one'), human2: await syntheticUser(db, 'revisore', 'Synthetic reviewer two') });
   const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: fixture.practice.id } });
@@ -172,7 +173,7 @@ test('readiness hides sibling practices, funding, revisions and selector options
   const proposal = await proposePracticeOfferRevision(db, b, { controlledIntakeId: practice.controlledIntakeId, commercialOfferId: offer.id,
     serviceRevisionId: revision.serviceRevisionId, clientId: fixture.client.id, projectId: fixture.project.id, scope: scopeMarker,
     startupConditions: startupMarker, requiredInitialAmount: revision.requiredInitialAmount.toFixed(2), expectedOfferUpdatedAt: offer.updatedAt });
-  await db.client.update({ where: { id: fixture.client.id }, data: { consultantId: a.userId } });
+  await db.client.update({ where: { id: fixture.client.id }, data: { salesOwnerId: a.userId } });
   const ac = await browser.newContext(), bc = await browser.newContext(); const ap = await ac.newPage(), bp = await bc.newPage();
   for (const [page, actor] of [[ap, a], [bp, b]] as const) {
     const user = await db.user.findUniqueOrThrow({ where: { id: actor.userId } });
@@ -182,12 +183,15 @@ test('readiness hides sibling practices, funding, revisions and selector options
   }
   const denied = await ap.goto('/practice-readiness'), allowed = await bp.goto('/practice-readiness');
   const deniedHtml = await denied!.text(), allowedHtml = await allowed!.text();
-  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker, 'SYNTHETIC_M5_PAYMENT'])
+  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, scopeMarker, startupMarker, 'SYNTHETIC_M5_PAYMENT'])
     expect(deniedHtml).not.toContain(marker);
-  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker]) expect(allowedHtml).toContain(marker);
+  for (const marker of [practice.id, practice.controlledIntakeId, revision.commercialOfferId]) expect(allowedHtml).toContain(marker);
+  // Service assignment admits this existing practice, not a separate project
+  // proposal after client responsibility changed. Its creator has no bypass.
+  for (const marker of [proposal.id, scopeMarker, startupMarker, fixture.project.id, 'SYNTHETIC_M5_PAYMENT']) expect(allowedHtml).not.toContain(marker);
   await db.clientService.update({ where: { id: fixture.service.id }, data: { assignedToId: a.userId } });
-  // The separate proposal still belongs to B and deliberately mentions the practice ID in its synthetic text.
-  // Check the actual practice row, not that unrelated text marker.
+  // Reassignment withdraws the actual practice row from B. The unrelated
+  // proposal remains inaccessible; its synthetic text is not an assignment.
   expect(await (await bp.goto('/practice-readiness'))!.text()).not.toContain('id="practice-' + practice.id + '"');
   await expect(bp.locator('[id="practice-' + practice.id + '"]')).toHaveCount(0);
   expect(await (await ap.goto('/practice-readiness'))!.text()).toContain('id="practice-' + practice.id + '"');

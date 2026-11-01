@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { Card } from '@/components/ui';
 import { UserAccountForms } from '@/components/user-account-forms';
@@ -5,7 +6,7 @@ import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { internalSessionMode } from '@/lib/session';
 
-export default async function AccountPage() {
+  async function AccountPage() {
   const session = await requireSession();
   const user = await prisma.user.findFirst({
     where: { id: session.userId, active: true, deletedAt: null },
@@ -14,3 +15,5 @@ export default async function AccountPage() {
   if (!user) notFound();
   return <Card title="Il mio account"><UserAccountForms user={user} own admin={session.role === 'admin'} available={internalSessionMode() === 'registry'} /></Card>;
 }
+
+export default withTechnicalPage("/settings/account", AccountPage);

@@ -1,3 +1,4 @@
+import { classifySyntheticTechnicalVersion } from './technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -33,8 +34,8 @@ before(async()=>{
   const sql=readFileSync(resolve(import.meta.dirname,'../prisma/migrations',migration,'migration.sql'),'utf8').replaceAll('\r\n','\n');
   const ledger=await db.$queryRaw<Array<{migration_name:string;checksum:string}>>`SELECT migration_name,checksum
     FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name`;
-  assert.equal(ledger.length,74);assert.equal(ledger.at(-2)?.migration_name,migration);
-  assert.equal(ledger.at(-2)?.checksum,createHash('sha256').update(sql).digest('hex'),'CURRENT_LIFECYCLE_SQL_REQUIRED');
+  assert.equal(ledger.length,75);assert.equal(ledger.at(-3)?.migration_name,migration);
+  assert.equal(ledger.at(-3)?.checksum,createHash('sha256').update(sql).digest('hex'),'CURRENT_LIFECYCLE_SQL_REQUIRED');
   const existing=await db.selectiveAccessAuthority.findFirst();
   if(existing){const user=await db.user.findUniqueOrThrow({where:{id:existing.userId}});admin={user,...await syntheticSession(db,user)};}
   else admin=await syntheticAuthority(db);
@@ -313,6 +314,11 @@ test('an archived outgoing message still admits new immutable inbound receipts w
 test('private document lifecycle closes bytes and invalidates old selection through restore while retaining signed acquisition',options,async()=>{
   const f=await lifecyclePrivateDocumentFixture(db,admin),id=f.receipt.documentId,versionId=f.receipt.versionId;
   const original=await db.document.findUniqueOrThrow({where:{id}}),version=await db.documentVersion.findUniqueOrThrow({where:{id:versionId}});
+  await assert.rejects(assignTechnical(db,admin,f.target,f.techA,{documents:[{fileId:versionId,allowDownload:true}]}),/SYNTHETIC_DOCUMENT_NOT_OFFERED/);
+  assert.deepEqual((await readPersonalAcquiredDocument(db,admin.session,id)).bytes,f.bytes);
+  // Acquisition provenance is preserved; an explicit separate classification
+  // of these exact synthetic bytes is required before any technical selection.
+  await classifySyntheticTechnicalVersion(db,admin,versionId);
   await assignTechnical(db,admin,f.target,f.techA,{documents:[{fileId:versionId,allowDownload:true}]});
   await readTechnicalWorkDocument(db,f.techA.session,f.target,versionId,true,readPrivateDocumentBounded);
   const before=await db.$queryRaw`SELECT "record"::text FROM "TechnicalDocumentAcquisition" WHERE "commandId"=${f.receipt.commandId}::uuid`;

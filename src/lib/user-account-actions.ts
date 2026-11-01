@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
@@ -75,7 +76,11 @@ async function mutate(operation: Operation, form: FormData): Promise<AccountForm
   return { ok: result.ok, message: result.message };
 }
 
-export async function saveAccountProfile(_state: AccountFormState, form: FormData) { return mutate('profile', form); }
-export async function saveOwnPassword(_state: AccountFormState, form: FormData) { return mutate('password', form); }
-export async function adminResetPassword(_state: AccountFormState, form: FormData) { return mutate('reset', form); }
-export async function revokeAllAccountSessions(_state: AccountFormState, form: FormData) { return mutate('revoke', form); }
+export async function saveAccountProfile(_state: AccountFormState, form: FormData) {
+  await assertTechnicalServerAction("user-account-actions:saveAccountProfile"); return mutate('profile', form); }
+export async function saveOwnPassword(_state: AccountFormState, form: FormData) {
+  await assertTechnicalServerAction("user-account-actions:saveOwnPassword"); return mutate('password', form); }
+export async function adminResetPassword(_state: AccountFormState, form: FormData) {
+  await assertTechnicalServerAction("user-account-actions:adminResetPassword"); return mutate('reset', form); }
+export async function revokeAllAccountSessions(_state: AccountFormState, form: FormData) {
+  await assertTechnicalServerAction("user-account-actions:revokeAllAccountSessions"); return mutate('revoke', form); }

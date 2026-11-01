@@ -17,7 +17,7 @@ import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-read
 import { filterAdmittedOrdinaryReplies, readAdmittedOrdinaryAttachmentMetadata } from './ordinary-email-inbound-reader';
 import { readPrivateDocumentBounded } from './storage';
 import { buildApprovedMessagePackage } from './approved-message-package';
-import { communicationRecordWhere, communicationFileWhere, expandedCommunicationScope, lockedCommunicationRecipients } from './communication-contexts';
+import { communicationRecordWhere, communicationFileWhere, expandedCommunicationScope, lockedCommunicationRecipients, assertCommunicationTechnicalRecipients } from './communication-contexts';
 import { communicationRecipientSelectionSchema } from './communication-recipient-policy';
 import { lockCommunicationDirectory } from './communication-directory-lock';
 import { admitRecordUpdateEmail } from './record-update-email-admission';
@@ -247,6 +247,7 @@ async function snapshotAttachments(tx: Tx, current: CommunicationPrincipal, scop
 }
 
 async function revalidateSnapshotRecipients(tx: Tx, scope: Awaited<ReturnType<typeof contextScope>>, snapshot: ApprovedMessageSnapshot) {
+  await assertCommunicationTechnicalRecipients(tx, snapshot);
   if (snapshot.schema !== 'fai.approved-email.v2') return;
   if (snapshot.contextEvidenceHash !== canonicalSha256(JSON.parse(JSON.stringify(scope)))) conflict();
   const resolved = await lockedCommunicationRecipients(tx, snapshot.recipientSelection, snapshot.externalRecipients,
@@ -524,6 +525,7 @@ export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: Aut
       ...(resolved?.recipients ?? externalRecipients), subject: input.subject, body: input.body, attachments: files.snapshot, classification: input.classification,
       ...(resolved ? { recipientSelection: resolved.selection, externalRecipients, recipientEvidenceHash: resolved.evidenceHash,
         contextEvidenceHash: canonicalSha256(JSON.parse(JSON.stringify(scope))) } : {}) });
+    await assertCommunicationTechnicalRecipients(tx, snapshot);
     if (updateAdmission) replyAccessUntil = Math.min(replyAccessUntil, await updateRecipientAdmission(tx, updateAdmission, snapshot));
     if (!existing) await tx.approvedCommunication.create({ data: { id: input.messageId, clientId: scope.client?.id ?? null,
       updateDeliveryId: input.updateSource?.deliveryId ?? null,

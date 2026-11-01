@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
 import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
@@ -225,6 +226,7 @@ function externalNumericValue(value: unknown): string | number | null {
 }
 
 export async function runAiProviderDiagnosticTest(form: FormData) {
+  await assertTechnicalServerAction("actions:runAiProviderDiagnosticTest");
   const s = await requirePermission('ai.execution.request');
   if (!hasPermission(s, 'ai_agents.read')) {
     throw new UserFacingActionError('La diagnostica richiede anche il permesso ai_agents.read.');
@@ -312,6 +314,7 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
 }
 
 export async function updateAiAgentConfig(form: FormData) {
+  await assertTechnicalServerAction("actions:updateAiAgentConfig");
   const s = await requirePermission('ai_agents.write');
   await requirePrivilegedMutation(s, 'AI_AGENT_CONFIG_UPDATE');
   const raw = clean(form);
@@ -402,6 +405,7 @@ export async function updateAiAgentConfig(form: FormData) {
 }
 
 export async function updateAiControlSetting(form: FormData) {
+  await assertTechnicalServerAction("actions:updateAiControlSetting");
   const s = await requirePermission('settings.manage');
   await requirePrivilegedMutation(s, 'AI_CONTROL_SETTING_UPDATE');
   const raw = clean(form);
@@ -461,6 +465,7 @@ export async function updateAiControlSetting(form: FormData) {
 }
 
 export async function createLead(form: FormData) {
+  await assertTechnicalServerAction("actions:createLead");
   const s = await requirePermission('lead.write');
   const data = leadSchema.parse(clean(form));
   if (data.clientId) denyWriteAccess();
@@ -494,6 +499,7 @@ export async function createLead(form: FormData) {
 }
 
 export async function resolveLeadDuplicateCaseAction(form: FormData) {
+  await assertTechnicalServerAction("actions:resolveLeadDuplicateCaseAction");
   const session = await requirePermission('lead.duplicate.resolve');
   await requireEnforcedPrivilegedMutation(session, 'LEAD_DUPLICATE_RESOLVE');
   let registrySession = false;
@@ -563,6 +569,7 @@ function mapCommercialLeadInboxError(error: unknown): never {
 }
 
 export async function initializeCommercialLeadInboxAction(form: FormData) {
+  await assertTechnicalServerAction("actions:initializeCommercialLeadInboxAction");
   const data = commercialLeadInboxInitializeSchema.parse(clean(form));
   if (data.originKind === 'MANUAL_CRM') {
     throw new UserFacingActionError('La provenienza manuale può essere registrata soltanto nella transazione di creazione del Lead.');
@@ -589,6 +596,7 @@ export async function initializeCommercialLeadInboxAction(form: FormData) {
 }
 
 export async function claimCommercialLeadInboxAction(_form: FormData) {
+  await assertTechnicalServerAction("actions:claimCommercialLeadInboxAction");
   void _form;
   await requirePermission('lead.inbox.claim');
   // Acceptance is a separate action; it cannot establish ownership.
@@ -596,6 +604,7 @@ export async function claimCommercialLeadInboxAction(_form: FormData) {
 }
 
 export async function assignCommercialLeadInboxAction(form: FormData) {
+  await assertTechnicalServerAction("actions:assignCommercialLeadInboxAction");
   const session = await requirePermission('lead.inbox.assign');
   if (session.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_ASSIGN');
@@ -609,6 +618,7 @@ export async function assignCommercialLeadInboxAction(form: FormData) {
 }
 
 export async function unassignCommercialLeadInboxAction(form: FormData) {
+  await assertTechnicalServerAction("actions:unassignCommercialLeadInboxAction");
   const session = await requirePermission('lead.inbox.assign');
   if (session.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_UNASSIGN');
@@ -621,6 +631,7 @@ export async function unassignCommercialLeadInboxAction(form: FormData) {
 }
 
 export async function recordCommercialLeadFirstResponseAction(form: FormData) {
+  await assertTechnicalServerAction("actions:recordCommercialLeadFirstResponseAction");
   const session = await requirePermission('lead.write');
   const data = commercialLeadInboxCommandSchema.parse(clean(form));
   try {
@@ -631,6 +642,7 @@ export async function recordCommercialLeadFirstResponseAction(form: FormData) {
 }
 
 export async function closeCommercialLeadInboxAction(form: FormData) {
+  await assertTechnicalServerAction("actions:closeCommercialLeadInboxAction");
   const session = await requirePermission('lead.write');
   const data = commercialLeadInboxCloseSchema.parse(clean(form));
   try {
@@ -642,6 +654,7 @@ export async function closeCommercialLeadInboxAction(form: FormData) {
 }
 
 export async function reopenCommercialLeadInboxAction(form: FormData) {
+  await assertTechnicalServerAction("actions:reopenCommercialLeadInboxAction");
   const session = await requirePermission('lead.inbox.assign');
   if (session.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_REOPEN');
@@ -654,6 +667,7 @@ export async function reopenCommercialLeadInboxAction(form: FormData) {
 }
 
 export async function updateLeadCommercial(form: FormData) {
+  await assertTechnicalServerAction("actions:updateLeadCommercial");
   const s = await requirePermission('lead.write');
   const data = leadCommercialUpdateSchema.parse(clean(form));
   const before = await requireLeadEditAccess(s, data.id);
@@ -690,6 +704,7 @@ export async function updateLeadCommercial(form: FormData) {
 }
 
 export async function convertLeadToClient(form: FormData) {
+  await assertTechnicalServerAction("actions:convertLeadToClient");
   const s = await requirePermission('client.write');
   if (!hasPermission(s, 'lead.write')) denyWriteAccess();
   const data = leadConvertSchema.parse(clean(form));
@@ -732,6 +747,7 @@ export async function convertLeadToClient(form: FormData) {
 }
 
 export async function createCommercialOffer(form: FormData) {
+  await assertTechnicalServerAction("actions:createCommercialOffer");
   const s = await requirePermission('lead.write');
   const data = commercialOfferSchema.parse(clean(form));
   await requireCommercialOfferTargetAccess(s, data);
@@ -748,6 +764,7 @@ export async function createCommercialOffer(form: FormData) {
   });
 }
 export async function updateCommercialOffer(form: FormData) {
+  await assertTechnicalServerAction("actions:updateCommercialOffer");
   const s = await requirePermission('lead.write');
   const data = commercialOfferUpdateSchema.parse(clean(form));
   await requireCommercialOfferEditAccess(s, data.id);
@@ -833,12 +850,14 @@ export async function updateCommercialOffer(form: FormData) {
   });
 }
 export async function auditCommercialOfferExport(offerId: string, format: 'docx') {
+  await assertTechnicalServerAction("actions:auditCommercialOfferExport");
   const s = await requirePermission('lead.read');
   await requireCommercialOfferEditAccess(s, offerId);
   await audit(s.userId, 'commercial_offer_export_word', 'CommercialOffer', offerId, { format });
 }
 
 export async function createClient(form: FormData) {
+  await assertTechnicalServerAction("actions:createClient");
   const s = await requirePermission('client.write');
   const data = clientSchema.parse(clean(form));
   if (data.leadId) await requireLeadEditAccess(s, data.leadId);
@@ -856,6 +875,7 @@ export async function createClient(form: FormData) {
 }
 
 export async function createCompany(form: FormData) {
+  await assertTechnicalServerAction("actions:createCompany");
   const s = await requirePermission('company.write');
   const data = companySchema.parse(clean(form));
   await requireClientContextWriteAccess(s, { clientId: data.clientId });
@@ -870,6 +890,7 @@ export async function createCompany(form: FormData) {
 }
 
 export async function createProject(form: FormData) {
+  await assertTechnicalServerAction("actions:createProject");
   const s = await requirePermission('project.write');
   const data = projectSchema.parse(clean(form));
   await requireClientContextWriteAccess(s, { clientId: data.clientId, companyId: data.companyId });
@@ -884,11 +905,13 @@ export async function createProject(form: FormData) {
 }
 
 export async function createProjectExpense(form: FormData) {
+  await assertTechnicalServerAction("actions:createProjectExpense");
   const s = await requirePermission('project.write');
   return createProjectExpenseRecord(prisma, s, clean(form));
 }
 
 export async function uploadDocument(form: FormData) {
+  await assertTechnicalServerAction("actions:uploadDocument");
   const actor = await getSession();
   if (!actor || !hasPermission(actor, 'document.upload')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   try { return await storeUploadedDocument(prisma, actor, form); }
@@ -910,6 +933,7 @@ async function assertChecklistContext(session: AuthSession, clientId: string, cl
 }
 
 export async function createDocumentChecklistItem(form: FormData) {
+  await assertTechnicalServerAction("actions:createDocumentChecklistItem");
   const s = await requirePermission('service.write');
   const data = documentChecklistItemSchema.parse(clean(form));
   if (!canAccessFinancialDocumentMetadata(s, data)) denyWriteAccess();
@@ -922,6 +946,7 @@ export async function createDocumentChecklistItem(form: FormData) {
 }
 
 export async function createStandardDocumentChecklist(form: FormData) {
+  await assertTechnicalServerAction("actions:createStandardDocumentChecklist");
   const s = await requirePermission('service.write');
   const clientId = String(form.get('clientId') || '');
   const clientServiceId = String(form.get('clientServiceId') || '') || undefined;
@@ -939,6 +964,7 @@ export async function createStandardDocumentChecklist(form: FormData) {
 }
 
 export async function updateDocumentChecklistItemStatus(form: FormData) {
+  await assertTechnicalServerAction("actions:updateDocumentChecklistItemStatus");
   const s = await requirePermission('service.write');
   const data = checklistItemStatusUpdateSchema.parse(clean(form));
   const before = await requireChecklistEditAccess(s, data.id);
@@ -950,6 +976,7 @@ export async function updateDocumentChecklistItemStatus(form: FormData) {
 }
 
 export async function linkDocumentToChecklistItem(form: FormData) {
+  await assertTechnicalServerAction("actions:linkDocumentToChecklistItem");
   const s = await requirePermission('service.write');
   const data = checklistItemDocumentLinkSchema.parse(clean(form));
   const before = await requireChecklistEditAccess(s, data.id);
@@ -962,6 +989,7 @@ export async function linkDocumentToChecklistItem(form: FormData) {
 }
 
 export async function unlinkDocumentFromChecklistItem(form: FormData) {
+  await assertTechnicalServerAction("actions:unlinkDocumentFromChecklistItem");
   const s = await requirePermission('service.write');
   const data = checklistItemIdSchema.parse(clean(form));
   const before = await requireChecklistEditAccess(s, data.id);
@@ -973,6 +1001,7 @@ export async function unlinkDocumentFromChecklistItem(form: FormData) {
 }
 
 export async function deactivateDocumentChecklistItem(form: FormData) {
+  await assertTechnicalServerAction("actions:deactivateDocumentChecklistItem");
   const s = await requirePermission('service.write');
   const data = checklistItemIdSchema.parse(clean(form));
   const before = await requireChecklistEditAccess(s, data.id);
@@ -989,6 +1018,7 @@ async function assertTaskContext(session: AuthSession, clientId: string, clientS
 }
 
 export async function createClientTask(form: FormData) {
+  await assertTechnicalServerAction("actions:createClientTask");
   const s = await requirePermission('service.write');
   const data = clientTaskSchema.parse(clean(form));
   if (data.type) {
@@ -1007,6 +1037,7 @@ export async function createClientTask(form: FormData) {
 }
 
 export async function updateClientTask(form: FormData) {
+  await assertTechnicalServerAction("actions:updateClientTask");
   const s = await requirePermission('service.write');
   const data = taskUpdateSchema.parse(clean(form));
   const before = await requireTaskEditAccess(s, data.id);
@@ -1027,6 +1058,7 @@ export async function updateClientTask(form: FormData) {
 }
 
 export async function completeClientTask(form: FormData) {
+  await assertTechnicalServerAction("actions:completeClientTask");
   const s = await requirePermission('service.write');
   const data = taskIdSchema.parse(clean(form));
   const before = await requireTaskEditAccess(s, data.id);
@@ -1142,6 +1174,7 @@ function buildAiOutputDossierContent(input: {
 }
 
 export async function createClientDossierFromAiOutput(form: FormData) {
+  await assertTechnicalServerAction("actions:createClientDossierFromAiOutput");
   const s = await requirePermission('dossier.write');
   if (!hasPermission(s, 'ai.review')) throw new UserFacingActionError('Permesso ai.review richiesto per trasformare un output AI in bozza dossier.');
   const data = aiOutputDossierSchema.parse(clean(form));
@@ -1220,6 +1253,7 @@ export async function createClientDossierFromAiOutput(form: FormData) {
 }
 
 export async function generateClientDossier(form: FormData) {
+  await assertTechnicalServerAction("actions:generateClientDossier");
   const s = await requirePermission('dossier.write');
   const data = clientDossierGenerateSchema.parse(clean(form));
   await assertClientDossierContext(s, data.clientId, data.clientServiceId, data.projectId);
@@ -1232,6 +1266,7 @@ export async function generateClientDossier(form: FormData) {
 }
 
 export async function updateClientDossier(form: FormData) {
+  await assertTechnicalServerAction("actions:updateClientDossier");
   const s = await requirePermission('dossier.write');
   const data = clientDossierUpdateSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
@@ -1273,6 +1308,7 @@ export async function updateClientDossier(form: FormData) {
 }
 
 export async function approveClientDossier(form: FormData) {
+  await assertTechnicalServerAction("actions:approveClientDossier");
   const s = await requirePermission('dossier.approve');
   const data = clientDossierIdSchema.parse(clean(form));
   const context = await getClientDossierReadAccess(s, data.id);
@@ -1312,6 +1348,7 @@ export async function approveClientDossier(form: FormData) {
 }
 
 export async function archiveClientDossier(form: FormData) {
+  await assertTechnicalServerAction("actions:archiveClientDossier");
   const s = await requirePermission('dossier.write');
   const data = clientDossierIdSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
@@ -1338,6 +1375,7 @@ export async function archiveClientDossier(form: FormData) {
 }
 
 export async function auditClientDossierExport(id: string, format: 'markdown' | 'docx' = 'markdown') {
+  await assertTechnicalServerAction("actions:auditClientDossierExport");
   const s = await requirePermission('dossier.read');
   const dossier = await prisma.clientDossier.findUniqueOrThrow({ where: { id } });
   if (dossier.practiceReadinessId) throw new UserFacingActionError('Usa l’esportazione della versione approvata del dossier.');
@@ -1347,11 +1385,13 @@ export async function auditClientDossierExport(id: string, format: 'markdown' | 
 }
 
 export async function registerDocument(form: FormData) {
+  await assertTechnicalServerAction("actions:registerDocument");
   await requirePermission('document.upload');
   void form;
   throw new UserFacingActionError('Registrazione documentale legacy disabilitata: usa il caricamento protetto del CRM.');
 }
 export async function createPreAnalysis(form: FormData) {
+  await assertTechnicalServerAction("actions:createPreAnalysis");
   const s = await requirePermission('project.write');
   if (!hasPermission(s, 'dossier.read')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   const data = preAnalysisSchema.parse(clean(form));
@@ -1360,6 +1400,7 @@ export async function createPreAnalysis(form: FormData) {
 }
 
 export async function updatePreAnalysis(form: FormData) {
+  await assertTechnicalServerAction("actions:updatePreAnalysis");
   const s = await requirePermission('project.write');
   if (!hasPermission(s, 'dossier.read')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   const data = preAnalysisUpdateSchema.parse(clean(form));
@@ -1371,6 +1412,7 @@ export async function updatePreAnalysis(form: FormData) {
 }
 
 export async function createDossier(form: FormData) {
+  await assertTechnicalServerAction("actions:createDossier");
   const s = await requirePermission('project.write');
   const data = dossierSchema.parse(clean(form));
   const project = await requireProjectEditAccess(s, data.projectId);
@@ -1387,6 +1429,7 @@ export async function createDossier(form: FormData) {
 }
 
 export async function createContract(form: FormData) {
+  await assertTechnicalServerAction("actions:createContract");
   const s = await requirePermission('contract.write');
   const data = contractSchema.parse(clean(form));
   if (data.projectId && s.selectiveProjectIds?.includes(data.projectId)) denyWriteAccess();
@@ -1403,6 +1446,7 @@ export async function createContract(form: FormData) {
 }
 
 export async function registerPayment(form: FormData) {
+  await assertTechnicalServerAction("actions:registerPayment");
   const s = await requirePermission('payment.write');
   const data = paymentSchema.parse(clean(form));
   if (s.selectiveContractIds?.includes(data.contractId)) denyWriteAccess();
@@ -1416,6 +1460,7 @@ export async function registerPayment(form: FormData) {
 }
 
 export async function createClientService(form: FormData) {
+  await assertTechnicalServerAction("actions:createClientService");
   const s = await requirePermission('service.write');
   const data = clientServiceSchema.parse(clean(form));
   if ((!financialReadAccess(s).contract && data.contractId) || (!financialReadAccess(s).payment && (data.paymentId || data.paymentStatus || data.status === "pagato"))) denyWriteAccess();
@@ -1442,25 +1487,30 @@ export async function createClientService(form: FormData) {
 }
 
 export async function updateClientServiceStatus(id: string, status: string) {
+  await assertTechnicalServerAction("actions:updateClientServiceStatus");
   const s = await requirePermission('service.write');
   return updateClientServiceStatusRecord(prisma, s, id, status);
 }
 
 export async function assignClientService(id: string, assignedToId: string) {
+  await assertTechnicalServerAction("actions:assignClientService");
   const s = await requirePermission('service.assign');
   return assignClientServiceRecord(prisma, s, id, assignedToId);
 }
 
 export async function updateClientServicePipeline(form: FormData) {
+  await assertTechnicalServerAction("actions:updateClientServicePipeline");
   const s = await requirePermission('service.write');
   return updateClientServicePipelineRecord(prisma, s, clean(form), form.has('assignedToId'));
 }
 export async function linkDocumentToService(form: FormData) {
+  await assertTechnicalServerAction("actions:linkDocumentToService");
   const s = await requirePermission('service.write');
   return linkDocumentToServiceRecord(prisma, s, clean(form));
 }
 
 export async function updateDocumentSection(form: FormData) {
+  await assertTechnicalServerAction("actions:updateDocumentSection");
   const s = await requirePermission('document.upload');
   const data = documentServiceLinkSchema.parse(clean(form));
   const before = await requireDocumentEditAccess(s, data.documentId);
@@ -1473,6 +1523,7 @@ export async function updateDocumentSection(form: FormData) {
 
 
 export async function runClientAiAgent(form: FormData) {
+  await assertTechnicalServerAction("actions:runClientAiAgent");
   const s = await requirePermission('ai.execution.request');
   const data = clientAiRunSchema.parse(clean(form));
   const { agent: requestedAgent, snapshot: requestedSnapshot } = await currentAiAgentWithSnapshot(data.agentId);
@@ -1688,6 +1739,7 @@ export async function runMockAgent(
   requestKeyValue: string,
   supersedesRequestIdValue?: string,
 ) {
+  await assertTechnicalServerAction("actions:runMockAgent");
   const s = await requirePermission('ai.execution.request');
   if (!hasPermission(s, 'ai_agents.write')) {
     throw new UserFacingActionError('Il quick mock richiede anche il permesso ai_agents.write.');
@@ -1752,6 +1804,7 @@ function hydratedAiPolicyContext(context: Awaited<ReturnType<typeof requireAiOut
 }
 
 export async function reviewAiOutput(id: string) {
+  await assertTechnicalServerAction("actions:reviewAiOutput");
   const s = await requirePermission('ai.review');
   const data = aiOutputApprovalSchema.parse({ id });
   const context = await requireAiOutputReadAccess(s, data.id);
@@ -1778,6 +1831,7 @@ export async function reviewAiOutput(id: string) {
 }
 
 export async function approveAiOutput(id: string) {
+  await assertTechnicalServerAction("actions:approveAiOutput");
   const s = await requirePermission('ai.approve');
   const data = aiOutputApprovalSchema.parse({ id });
   const context = await requireAiOutputReadAccess(s, data.id);
@@ -1814,6 +1868,7 @@ export async function approveAiOutput(id: string) {
 }
 
 export async function createTechnicalPractice(form: FormData) {
+  await assertTechnicalServerAction("actions:createTechnicalPractice");
   const s = await requirePermission('technical.write');
   const raw = clean(form);
   const data = technicalPracticeSchema.parse(raw);
@@ -1883,6 +1938,7 @@ function hasTechnicalPracticeChanges(before: Record<TechnicalPracticeComparableF
 }
 
 export async function updateTechnicalPractice(form: FormData) {
+  await assertTechnicalServerAction("actions:updateTechnicalPractice");
   const s = await requirePermission('technical.write');
   const raw = clean(form);
   const data = technicalPracticeUpdateSchema.parse(raw);
@@ -1925,6 +1981,7 @@ export async function updateTechnicalPractice(form: FormData) {
 }
 
 export async function updateTechnicalPracticeStatus(form: FormData) {
+  await assertTechnicalServerAction("actions:updateTechnicalPracticeStatus");
   const s = await requirePermission('technical.status');
   const data = technicalPracticeStatusUpdateSchema.parse(clean(form));
   const before = await requireTechnicalPracticeEditAccess(s, data.id);
@@ -1941,6 +1998,7 @@ export async function updateTechnicalPracticeStatus(form: FormData) {
 }
 
 export async function assignTechnicalPractice(form: FormData) {
+  await assertTechnicalServerAction("actions:assignTechnicalPractice");
   const s = await requirePermission('technical.assign');
   if (s.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
@@ -1960,6 +2018,7 @@ export async function assignTechnicalPractice(form: FormData) {
 }
 
 export async function archiveTechnicalPractice(form: FormData) {
+  await assertTechnicalServerAction("actions:archiveTechnicalPractice");
   const s = await requirePermission('technical.write');
   if (!hasPermission(s, 'technical.status')) denyWriteAccess();
   const data = technicalPracticeIdSchema.parse(clean(form));
@@ -1985,6 +2044,7 @@ async function getActivePracticeCommunication(id: string) {
 }
 
 export async function createPracticeCommunicationDraft(form: FormData) {
+  await assertTechnicalServerAction("actions:createPracticeCommunicationDraft");
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationDraftSchema.parse(clean(form));
   if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara i messaggi esterni da Comunicazioni approvate della pratica.');
@@ -2002,6 +2062,7 @@ export async function createPracticeCommunicationDraft(form: FormData) {
 }
 
 export async function updatePracticeCommunicationDraft(form: FormData) {
+  await assertTechnicalServerAction("actions:updatePracticeCommunicationDraft");
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationUpdateSchema.parse(clean(form));
   if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara una versione in Comunicazioni approvate della pratica.');
@@ -2017,6 +2078,7 @@ export async function updatePracticeCommunicationDraft(form: FormData) {
 }
 
 export async function approvePracticeCommunicationDraft(form: FormData) {
+  await assertTechnicalServerAction("actions:approvePracticeCommunicationDraft");
   const s = await requirePermission('practice_communications.review');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);
@@ -2032,6 +2094,7 @@ export async function approvePracticeCommunicationDraft(form: FormData) {
 }
 
 export async function markPracticeCommunicationAsUsed(form: FormData) {
+  await assertTechnicalServerAction("actions:markPracticeCommunicationAsUsed");
   const s = await requirePermission('practice_communications.mark_used');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);
@@ -2049,6 +2112,7 @@ export async function markPracticeCommunicationAsUsed(form: FormData) {
 }
 
 export async function archivePracticeCommunication(form: FormData) {
+  await assertTechnicalServerAction("actions:archivePracticeCommunication");
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);

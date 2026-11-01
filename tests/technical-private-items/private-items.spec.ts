@@ -49,8 +49,8 @@ async function assign(page: Page, row: Row, person: Person, title: string, kind:
   await page.getByLabel('Titolo', { exact: true }).check();
   const selected = page.getByLabel((kind === 'Task' ? 'Attività · ' : 'Checklist · ') + title, { exact: true });
   await selected.check(); const card = selected.locator('..').locator('..');
-  for (const field of kind === 'Task' ? ['Titolo', 'Priorità'] : ['Titolo', 'Note tecniche']) await card.getByLabel(field, { exact: true }).check();
-  await card.getByLabel(kind === 'Task' ? 'Consenti modifica priorità' : 'Consenti modifica note tecniche', { exact: true }).check();
+  for (const field of kind === 'Task' ? ['Titolo', 'Priorità'] : ['Titolo', 'Stato']) await card.getByLabel(field, { exact: true }).check();
+  await card.getByLabel(kind === 'Task' ? 'Consenti modifica priorità' : 'Consenti modifica titolo', { exact: true }).check();
   await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Decisione sintetica separata dalla creazione');
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
@@ -113,10 +113,11 @@ test('Admin creates then explicitly assigns different items to two technicians; 
   await expect(a.getByText('Modifica registrata con ricevuta. Nessun messaggio è stato inviato.', { exact: true })).toBeVisible();
   await screenshot(a, 'private-task-assigned-work');
   await b.goto(workItem(row, 'ChecklistItem', check.itemId)); await b.locator('[data-technical-item-ready="true"]').waitFor();
-  await expect(b.getByRole('definition').filter({ hasText: /^TESTO_PRIVATO_NON_SCELTO$/ })).toBeVisible();
-  await expect(b.getByRole('textbox', { name: 'Note tecniche', exact: true })).toHaveValue('TESTO_PRIVATO_NON_SCELTO');
-  await b.getByLabel('Modifica note tecniche', { exact: true }).check();
-  await b.getByRole('textbox', { name: 'Note tecniche', exact: true }).fill('Preparazione tecnica verificata da B');
+  await expect(b.getByRole('definition').filter({ hasText: /^Checklist riservata al tecnico B$/ })).toBeVisible();
+  await expect(b.getByRole('textbox', { name: /Note/, exact: true })).toHaveCount(0);
+  expect(await b.content()).not.toContain('TESTO_PRIVATO_NON_SCELTO');
+  await b.getByLabel('Modifica titolo', { exact: true }).check();
+  await b.getByRole('textbox', { name: 'Titolo', exact: true }).fill('Checklist verificata da B');
   await b.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
   await b.getByLabel('Confermo soltanto le modifiche riepilogate.', { exact: true }).check();
   await b.getByRole('button', { name: 'Conferma modifica dell’attività', exact: true }).click();
@@ -128,7 +129,8 @@ test('Admin creates then explicitly assigns different items to two technicians; 
     for (const url of [creation(row), workItem(row, 'Task', task.itemId), workItem(row, 'ChecklistItem', check.itemId)]) expect((await s.request.get(url)).status()).toBe(404);
     await sc.close(); }
   expect((await db.task.findUniqueOrThrow({ where: { id: task.itemId } })).priority).toBe('urgente');
-  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: check.itemId } })).notes).toBe('Preparazione tecnica verificata da B');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: check.itemId } })).title).toBe('Checklist verificata da B');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: check.itemId } })).notes).toBe('TESTO_PRIVATO_NON_SCELTO');
   await ac.close(); await tc.close(); await bc.close();
 });
 test('lost native response recovers the single creation receipt without another write', async ({ page }) => {

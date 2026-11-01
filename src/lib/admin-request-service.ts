@@ -1,3 +1,4 @@
+import { isTechnicalAccount } from './technical-confidentiality';
 import type { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -113,7 +114,10 @@ export async function readAdminRequest(db: PrismaClient, claimed: AuthSession, i
     const events = await tx.$queryRaw<RequestEvent[]>`SELECT * FROM "AdminRequestEvent" WHERE "requestId"=${id}::uuid ORDER BY revision`;
     const draft = auth.isAdmin ? await requestDraftOrigin(tx, id) : null;
     await finish(tx, auth, row.origin.accessUntil);
-    return { ...row.state, createdAt: row.createdAt, isAdmin: auth.isAdmin,
+    const technicalRestricted = isTechnicalAccount(auth.actor);
+    return { ...row.state, ...(technicalRestricted ? {
+      submitted: { ...row.state.submitted, title: 'Richiesta all’Admin', details: '' }, requesterReply: null,
+    } : {}), technicalRestricted, createdAt: row.createdAt, isAdmin: auth.isAdmin,
       history: events.map(e => ({ revision: e.revision, operation: e.operation, createdAt: e.createdAt })),
       draftHref: draft ? `/communications?kind=${row.origin.communicationContext.kind}&practice=${encodeURIComponent(row.origin.communicationContext.id)}&request=${id}` : null };
   });
@@ -146,10 +150,11 @@ export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSessi
       try {
         const row = await admittedRequest(tx, auth, candidate.id), s = row.state;
         until = Math.min(until, row.origin.accessUntil);
-        if (term && !s.submitted.title.toLocaleLowerCase('it-IT').includes(term)) continue;
+        const title = isTechnicalAccount(auth.actor) ? 'Richiesta all’Admin' : s.submitted.title;
+        if (term && !title.toLocaleLowerCase('it-IT').includes(term)) continue;
         if (selectedKind && s.submitted.kind !== selectedKind) continue;
         if (admitted++ < skip) continue;
-        items.push({ id: s.requestId, title: s.submitted.title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });
+        items.push({ id: s.requestId, title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });
         if (items.length === 31) break;
       } catch (error) { if (!isRequestUnavailable(error)) throw error; }
     }

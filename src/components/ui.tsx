@@ -366,12 +366,14 @@ export function PageHeader({
 
 export function Nav({
   role,
+  technicalRestricted = false,
   notificationCount = 0,
   effectivePermissions = [],
 }: {
   role?: import("@prisma/client").RoleCode | null;
+  technicalRestricted?: boolean;
   notificationCount?: number;
   effectivePermissions?: import("@/lib/permissions").Permission[];
 }) {
-  return <MobileNavigation role={role} notificationCount={notificationCount} effectivePermissions={effectivePermissions} />;
+  return <MobileNavigation role={role} technicalRestricted={technicalRestricted} notificationCount={notificationCount} effectivePermissions={effectivePermissions} />;
 }

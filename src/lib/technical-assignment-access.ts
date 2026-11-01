@@ -1,3 +1,4 @@
+import { technicalFieldsFor } from './technical-confidentiality';
 import { lockAuthorizedTechnicalAssignment } from './technical-assignment-admission';
 import { selectedDocumentMode } from './selected-document-formats';
 import { selectedDocumentResponseMime } from './selected-document-content';
@@ -31,8 +32,8 @@ async function projection(tx: Tx, state: TechnicalAssignmentTransaction, target:
   return { target, assignmentId: found.payload.id, assignmentRevision: found.payload.revision,
     contextSha256: found.context.contextSha256, targetSha256: technicalWorkTargetDigest(target, row.updatedAt),
     responsibility: found.payload.selection.responsibility, expiresAt: found.payload.selection.expiresAt,
-    fields: technicalFieldPreview(target.kind, found.payload.selection.readableFields, projected.fields),
-    editableFields: found.payload.selection.editableFields,
+    fields: technicalFieldPreview(target.kind, technicalFieldsFor(target.kind, found.payload.selection.readableFields), projected.fields),
+    editableFields: technicalFieldsFor(target.kind, found.payload.selection.editableFields),
     actions: found.payload.selection.actions.filter(action => admitsTechnicalRolePermission(state.current, target.kind, action)),
     documents: documents.metadata, workItems };
 }

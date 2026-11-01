@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { headers, cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { requireSession } from './auth';
@@ -25,6 +26,7 @@ const failure = (uncertain = false): TechnicalUploadState => ({ ok: false, uncer
   ? 'Esito non confermato. Verifica la ricevuta del comando originale prima di ripetere l’acquisizione.'
   : 'Acquisizione non disponibile. Ricarica per verificare revisione, incarico, file e permessi correnti.' });
 export async function prepareTechnicalAcquisition(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-document-acquisition-actions:prepareTechnicalAcquisition");
   const session = await requireSession();
   try { await origin(); const acquisitionPreview = await previewTechnicalDocumentAcquisition(prisma, session,
     technicalAssignmentReference.parse(json(form, 'reference')), json(form, 'command'));
@@ -32,6 +34,7 @@ export async function prepareTechnicalAcquisition(_state: TechnicalUploadState, 
   } catch { return failure(); }
 }
 export async function saveTechnicalAcquisition(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-document-acquisition-actions:saveTechnicalAcquisition");
   const session = await requireSession();
   try { await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE', { inline: true }); await origin(); const ref = technicalAssignmentReference.parse(json(form, 'reference'));
     const store = await cookies(), key = await loadActivePrivilegedStepUpKey(prisma); if (!key) return denied();
@@ -43,6 +46,7 @@ export async function saveTechnicalAcquisition(_state: TechnicalUploadState, for
   } catch (error) { return error instanceof PrivilegedAdmissionRequired ? error.formState : failure(true); }
 }
 export async function checkTechnicalAcquisition(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-document-acquisition-actions:checkTechnicalAcquisition");
   const session = await requireSession();
   try { await origin(); const result = await readTechnicalDocumentAcquisitionOutcome(prisma, session,
     technicalAssignmentReference.parse(json(form, 'reference')), String(form.get('commandId') ?? ''));

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import type { Prisma } from '@prisma/client';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
@@ -30,7 +31,7 @@ function queueValue(value: string | undefined): Queue {
   return queues.includes(value as Queue) ? value as Queue : 'open';
 }
 
-export default async function Page({
+  async function Page({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | undefined>>;
@@ -139,3 +140,5 @@ export default async function Page({
 }
 
 export const dynamic = 'force-dynamic';
+
+export default withTechnicalPage("/leads/inbox", Page);

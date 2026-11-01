@@ -73,6 +73,10 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
   if(mode==='PERSONAL_DECISION' && !proof) deny();
   if(inactiveRecipientForRevocation && mode==='RECIPIENT') deny();
   return withSerializableTransaction(db,async tx=>{
+    // A complete catalogue may need time to read many versions, but a blocked
+    // row must release this transaction promptly so the independent history
+    // and revocation fallback remains usable. This setting is transaction-local.
+    if(mode==='MANAGEMENT_READ') await tx.$executeRaw`SET LOCAL lock_timeout = '4000ms'`;
     if(internalSessionMode()!=='registry' || !z.string().uuid().safeParse(claimed.sessionId).success) deny();
     const key=proof?.key ?? await loadActivePrivilegedStepUpKey(tx);
     if(!key || !await lockRegisteredPrivilegedStepUpKey(tx,key)) throw new TechnicalAssignmentError('UNAVAILABLE');
@@ -87,7 +91,7 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
       await lockInternalUser(tx,id);
     const live=await lockAuthoritativeInternalSession(tx,{userId:claimed.userId,sessionId:claimed.sessionId!});
     if(!live || !live.active || live.deletedAt || live.revokedAt || !live.live) deny();
-    const current:CurrentSession={...claimed,role:live.role,active:live.active,
+    const current:CurrentSession={...claimed,role:live.role,technicalRestricted:live.technicalRestricted,active:live.active,
       permissionOverrides:[...live.permissionOverrides],registryExpiresAt:live.expiresAt,
       ...await (mode==='RECIPIENT' ? loadTechnicalAssignmentIndependentScope
         : inactiveRecipientForRevocation ? loadPersonalSelectiveProjectScope : loadSelectiveProjectScope)(tx,claimed.userId)};
@@ -105,7 +109,11 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     await assertSessionTime(tx,current);
     if(proof) await assertPersonal(tx,current,proof);
     return result;
-  });
+  // The bounded management catalogue can inspect 256 exact versions and their
+  // canonical references. Give this read its own finite budget; decisions and
+  // recipient operations retain their existing transaction limits. Session
+  // validity above is checked again at completion, not extended by this budget.
+  }, mode === 'MANAGEMENT_READ' ? { timeout: 30_000 } : undefined);
 }
 
 /** Read-only management loaders must keep their callbacks free of writes. */

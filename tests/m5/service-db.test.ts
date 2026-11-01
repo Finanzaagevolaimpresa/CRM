@@ -10,7 +10,7 @@ import { buildMarkdownDocx } from '../../src/lib/docx-export';
 import { EngagementDossierError, getEngagementMaterialDownloadAccess, mutateInitialServiceWorkflow, getEngagementDossierReadAccess, getVisibleEngagementDossierIds, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
   authorizeEngagementDossierDelivery, recordEngagementDossierDelivery, reviseEngagementDossier } from '../../src/lib/engagement-dossier';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
-import { syntheticUser, syntheticCase } from './fixtures';
+import { syntheticUser, syntheticCase, syntheticDossierOperator } from './fixtures';
 import { listAccessiblePracticeReadiness, PracticeReadinessError, recordPracticeFunding, proposePracticeOfferRevision } from '../../src/lib/practice-readiness';
 import { buildOperationalReportMarkdown } from '../../src/lib/operational-report';
 const enabled = process.env.M5_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
@@ -146,7 +146,7 @@ for (const kind of ['authorization', 'receipt'] as const) test('M5 ' + kind + ' 
   proof.push({ kind: kind + '-retry', engine: 'PostgreSQL', aborts, attempts, committedReceipts: 1, committedAudits: 1, idempotent: true });
 });
 
-async function actors() { return { operator: await syntheticUser(db, 'consulente', 'Responsabile M5'), admin: await syntheticUser(db, 'admin', 'Admin M5'),
+async function actors() { return { operator: await syntheticDossierOperator(db, 'Redattore commerciale M5'), admin: await syntheticUser(db, 'admin', 'Admin M5'),
   human1: await syntheticUser(db, 'revisore', 'Revisore umano 1'), human2: await syntheticUser(db, 'revisore', 'Revisore umano 2') }; }
 type Fixture = Awaited<ReturnType<typeof syntheticCase>>;
 async function configure(f: Fixture, dual = false) {
@@ -216,8 +216,8 @@ test('M5 reviewer assignment opens only the designated dossier and revocation ta
 
 test('readiness and funding on a shared client follow the service assignment and immediate reassignment', { skip: !enabled }, async () => {
   const a = await actors(), f = await syntheticCase(db, 'dossier_preanalisi', a);
-  const clientOwner = await syntheticUser(db, 'consulente', 'Shared client owner');
-  await db.client.update({ where: { id: f.client.id }, data: { consultantId: clientOwner.userId } });
+  const clientOwner = await syntheticDossierOperator(db, 'Shared commercial client owner');
+  await db.client.update({ where: { id: f.client.id }, data: { salesOwnerId: clientOwner.userId } });
   assert.ok((await listAccessiblePracticeReadiness(db, a.operator)).some(p => p.id === f.practice.id));
   assert.ok(!(await listAccessiblePracticeReadiness(db, clientOwner)).some(p => p.id === f.practice.id));
   const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: f.practice.id } });
@@ -225,7 +225,7 @@ test('readiness and funding on a shared client follow the service assignment and
   await assert.rejects(recordPracticeFunding(db, clientOwner, { practiceId: practice.id, expectedVersion: practice.version, reference: 'UNAUTHORIZED', amount: '1.00', currency: 'EUR' }),
     (error: unknown) => error instanceof PracticeReadinessError && error.code === 'DENIED');
   assert.equal(await db.auditLog.count({ where: { entityId: practice.id } }), before);
-  const ownProject = await db.project.create({ data: { clientId: f.client.id, consultantId: clientOwner.userId, title: 'Own project cannot open sibling offer' } });
+  const ownProject = await db.project.create({ data: { clientId: f.client.id, consultantId: a.admin.userId, title: 'Different project cannot open sibling offer' } });
   const source = await db.commercialOffer.findUniqueOrThrow({ where: { id: practice.commercialOfferId } });
   const revisionsBefore = await db.practiceOfferRevision.count({ where: { commercialOfferId: source.id } });
   const auditsBefore = await db.auditLog.count({ where: { actorId: clientOwner.userId } });
@@ -247,7 +247,7 @@ for (const code of initialServiceCodes) test('M5 full synthetic service: ' + cod
   const docx = buildMarkdownDocx({ title: f.version.title, content: f.version.content, exportedAt: new Date(), logo: readFileSync('public/logo-fai.png') });
   const record = await exportApprovedEngagementDossier(db, f.actors.operator, { dossierId: f.dossier.id, versionId: f.version.id, format: 'docx' }, docx);
   assert.equal(record.record.artifactHash, createHash('sha256').update(docx).digest('hex'));
-  const decoded = JSON.parse(execFileSync('python3', ['-I','-S','-c', 'import sys,io,zipfile,hashlib,json; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({"logo":hashlib.sha256(z.read("word/media/logo-fai.png")).hexdigest(),"disclaimer":"Non eroghiamo finanziamenti." in z.read("word/document.xml").decode()}))'], { input: docx, encoding: 'utf8' }));
+  const decoded = JSON.parse(execFileSync(process.env.PYTHON_BIN ?? 'python3', ['-I','-S','-c', 'import sys,io,zipfile,hashlib,json; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({"logo":hashlib.sha256(z.read("word/media/logo-fai.png")).hexdigest(),"disclaimer":"Non eroghiamo finanziamenti." in z.read("word/document.xml").decode()}))'], { input: docx, encoding: 'utf8' }));
   assert.equal(decoded.logo, createHash('sha256').update(readFileSync('public/logo-fai.png')).digest('hex')); assert.equal(decoded.disclaimer, true);
   const authorization = await authorizeEngagementDossierDelivery(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash,
     recipients: [{ kind: 'CLIENT', name: 'Cliente sintetico M5', address: 'synthetic@invalid.test', synthetic: true }] });

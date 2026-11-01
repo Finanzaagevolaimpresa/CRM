@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { notFound, redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -8,7 +9,7 @@ import { profileRole } from '@/lib/admin-role-profile-contract';
 import { readAdminRoleProfile } from '@/lib/admin-role-profiles';
 import { AdminRoleProfileEditor } from '@/components/admin-role-profile-editor';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ role: string }>; searchParams: Promise<{ command?: string; decision?: string; page?: string }>;
 }) {
   const session = await requireAuth(['admin']), { role } = await params, query = await searchParams;
@@ -26,3 +27,5 @@ export default async function Page({ params, searchParams }: {
     <AdminRoleProfileEditor key={role + ':' + query.command} data={data} commandId={query.command} recovering={Boolean(query.decision)}/>
   </div>;
 }
+
+export default withTechnicalPage("/settings/roles/[role]", Page);

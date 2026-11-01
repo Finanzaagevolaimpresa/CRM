@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { Prisma } from '@prisma/client';
@@ -23,19 +24,23 @@ async function execute(form: FormData, operation: (actor: Awaited<ReturnType<typ
   }
 }
 export async function createEngagementDossierAction(form: FormData) {
+  await assertTechnicalServerAction("engagement-dossier-actions:createEngagementDossierAction");
   const result = await execute(form, (actor, value) => createEngagementDossier(prisma, actor, value)) as Awaited<ReturnType<typeof createEngagementDossier>>;
   revalidatePath('/practice-readiness'); redirect(`/client-dossiers/${result.dossier.id}`);
 }
 export async function reviseEngagementDossierAction(form: FormData) {
+  await assertTechnicalServerAction("engagement-dossier-actions:reviseEngagementDossierAction");
   await execute(form, (actor, value) => reviseEngagementDossier(prisma, actor, value));
   revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
 export async function importEngagementWorkResultAction(form: FormData) {
+  await assertTechnicalServerAction("engagement-dossier-actions:importEngagementWorkResultAction");
   const [packageId, packageArtifactHash] = String(form.get('packageBinding') ?? '').split(':');
   await execute(form, (actor, value) => importEngagementWorkResult(prisma, actor, { ...value, packageId, packageArtifactHash }));
   revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
 export async function reviewEngagementDossierVersionAction(form: FormData) {
+  await assertTechnicalServerAction("engagement-dossier-actions:reviewEngagementDossierVersionAction");
   const session = await requirePermission('dossier.approve');
   const context = await getEngagementDossierReadAccess(prisma, session, String(form.get('dossierId')));
   if (context?.engagementHistory.initialService && form.get('decision') === 'APPROVED')
@@ -43,6 +48,7 @@ export async function reviewEngagementDossierVersionAction(form: FormData) {
   await execute(form, (actor, value) => reviewEngagementDossierVersion(prisma, actor, value)); revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
 export async function authorizeEngagementDossierDeliveryAction(form: FormData) {
+  await assertTechnicalServerAction("engagement-dossier-actions:authorizeEngagementDossierDeliveryAction");
   const session = await requirePermission('dossier.approve');
   const context = await getEngagementDossierReadAccess(prisma, session, String(form.get('dossierId')));
   if (context?.engagementHistory.initialService) await requireEnforcedPrivilegedMutation(session, 'M5_SERVICE_APPROVAL');
@@ -50,6 +56,7 @@ export async function authorizeEngagementDossierDeliveryAction(form: FormData) {
   await execute(form, (actor, value) => authorizeEngagementDossierDelivery(prisma, actor, { ...value, recipients })); revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
 export async function recordEngagementDossierDeliveryAction(form: FormData) {
+  await assertTechnicalServerAction("engagement-dossier-actions:recordEngagementDossierDeliveryAction");
   const evidence = { reference: String(form.get('reference')), deliveredAt: String(form.get('deliveredAt')), synthetic: form.get('evidenceSynthetic') === 'on', note: String(form.get('note') ?? '') || undefined };
   const authorizationId = String(form.get('authorizationId'));
   await execute(form, (actor, value) => recordEngagementDossierDelivery(prisma, actor, { ...value, authorizationId, evidence })); revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);

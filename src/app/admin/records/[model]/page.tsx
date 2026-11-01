@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -6,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { adminRecordCatalogue } from '@/lib/admin-record-catalogue';
 import { listAdminRecords } from '@/lib/admin-records';
 import { Card, PageHeader } from '@/components/ui';
-export default async function Page({ params, searchParams }: { params: Promise<{ model: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ model: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireSession(), { model } = await params, query = await searchParams;
   const policy = adminRecordCatalogue.find(item => item.model === model); if (!policy || session.role !== 'admin') notFound();
   const q = typeof query.q === 'string' ? query.q : '', page = Number(query.page ?? '1'), trash = query.trash === '1';
@@ -22,3 +23,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       {data.hasNext && <Link className="underline" href={`?trash=${trash ? 1 : 0}&q=${encodeURIComponent(q)}&page=${page + 1}`}>Successivi</Link>}</nav>
   </div>;
 }
+
+export default withTechnicalPage("/admin/records/[model]", Page);

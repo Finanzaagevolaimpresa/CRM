@@ -17,7 +17,9 @@ async function main() {
   const admin = await db.user.create({ data: { name: 'Profiles Browser Admin', email: 'profiles-admin@example.test', role: 'admin', active: true, passwordHash } });
   const owner = await db.user.create({ data: { name: 'Profiles Browser Owner', email: 'profiles-owner@example.test', role: 'consulente', active: true, passwordHash } });
   await db.user.create({ data: { name: 'Profiles Browser Outsider', email: 'profiles-outsider@example.test', role: 'consulente', active: true, passwordHash } });
-  const client = await db.client.create({ data: { type: 'societa', displayName: 'Profiles Browser Client', consultantId: owner.id } });
+  const editor = await db.user.create({ data: { name: 'Profiles Browser Editor', email: 'profiles-editor@example.test', role: 'commerciale', active: true, passwordHash } });
+  await db.userPermissionOverride.createMany({ data: ['company.read', 'company.write'].map(permission => ({ userId: editor.id, permission, allowed: true })) });
+  const client = await db.client.create({ data: { type: 'societa', displayName: 'Profiles Browser Client', consultantId: owner.id, salesOwnerId: editor.id } });
   const lead = await db.lead.create({ data: { firstName: '', lastName: '', companyName: 'Synthetic company-only lead', assignedToId: admin.id, clientId: client.id } });
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, clientId: client.id, leadId: lead.id, ownerId: owner.id }));

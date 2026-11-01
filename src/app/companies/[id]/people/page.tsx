@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { PageHeader, Card, EmptyState } from '@/components/ui';
@@ -10,7 +11,7 @@ import { prisma } from '@/lib/prisma';
 import { personProfileFields } from '@/lib/record-profile-fields';
 import { personProfileVersion } from '@/lib/record-profile-contract';
 import { recordProfileValues } from '@/lib/record-profile-view';
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('company.write'), { id } = await params;
   const context = await getCompanyReadAccess(session, id);
   if (!context || !canEditClient(session, context.client)) notFound();
@@ -26,3 +27,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card title="Aggiungi referente"><RecordProfileForm fields={personProfileFields} values={{}}
       hidden={{ kind: 'new-person', id: randomUUID(), companyId: id }} submitLabel="Aggiungi referente" /></Card></div>;
 }
+
+export default withTechnicalPage("/companies/[id]/people", Page);

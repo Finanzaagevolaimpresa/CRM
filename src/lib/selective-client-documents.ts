@@ -1,8 +1,9 @@
+import { technicalVersionDisclosuresAllowed } from './technical-document-disclosure';
 import { Prisma, type Document } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { isSensitiveDocument } from './access-control';
 import { canonicalSha256 } from './canonical-json';
-import { canAccessFinancialDocument, filterFinancialDocuments } from './financial-document-access';
+import { filterFinancialDocuments } from './financial-document-access';
 import { hasPermission } from './permission-evaluator';
 import { guardProjectResources } from './project-resource-guard';
 import { loadIndependentProjectExclusions, loadTechnicalDocumentProjectCeilings } from './selective-project-scope';
@@ -93,7 +94,7 @@ async function readClientDocumentOptions(tx: Tx, manager: Recipient, clientId: s
  * document route remains excluded for a selected client. This function admits
  * only exact versions, preserving independent project ceilings and lifecycle. */
 export async function selectClientDocuments(tx: Tx, authorityId: string, target: Recipient, clientId: string,
-  choices: readonly ClientDocumentChoice[]): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string> }> {
+  choices: readonly ClientDocumentChoice[]): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string>; disclosedVersionIds: Set<string> }> {
   return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadIndependentProjectExclusions);
 }
 
@@ -103,13 +104,13 @@ export async function selectClientDocuments(tx: Tx, authorityId: string, target:
  * personal project/document selections remain independent ceilings. */
 export async function selectClientDocumentsForTechnicalAssignment(tx: Tx, authorityId: string, target: Recipient, clientId: string,
   choices: readonly ClientDocumentChoice[]) {
-  return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadTechnicalDocumentProjectCeilings);
+  return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadTechnicalDocumentProjectCeilings, false);
 }
 
 async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recipient, clientId: string,
-  choices: readonly ClientDocumentChoice[], ceilings: typeof loadIndependentProjectExclusions): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string> }> {
-  const snapshots: ClientDocumentSnapshot[] = [], paths = new Map<string, string>();
-  if (!choices.length) return { snapshots, paths };
+  choices: readonly ClientDocumentChoice[], ceilings: typeof loadIndependentProjectExclusions, enforceDisclosure = true): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string>; disclosedVersionIds: Set<string> }> {
+  const snapshots: ClientDocumentSnapshot[] = [], paths = new Map<string, string>(), disclosedVersionIds = new Set<string>();
+  if (!choices.length) return { snapshots, paths, disclosedVersionIds };
   if (!target.active || target.permissionOverrides.some(p => p.permission === 'document.download' && !p.allowed)) unavailable();
   const scope = await ceilings(tx, target.id);
   const ordered = [...choices].sort((a, b) => a.versionId.localeCompare(b.versionId));
@@ -121,41 +122,71 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
   // Two selections containing the same files in a different order cannot invert
   // project/document locks. Concurrent re-association still fails SERIALIZABLE.
   await guardProjectResources(tx, authorityId, documentIds.map(documentId => ({ documentId })));
-  for (const id of documentIds) await tx.$queryRaw`SELECT id FROM "Document" WHERE id=${id} FOR SHARE`;
-  for (const choice of ordered) await tx.$queryRaw`SELECT id FROM "DocumentVersion" WHERE id=${choice.versionId} FOR SHARE`;
-  for (const choice of ordered) {
+
+  await tx.$queryRawUnsafe('SELECT id FROM "Document" WHERE id=ANY($1::text[]) ORDER BY id FOR SHARE', documentIds);
+  await tx.$queryRawUnsafe('SELECT id FROM "DocumentVersion" WHERE id=ANY($1::text[]) ORDER BY id FOR SHARE', ordered.map(row => row.versionId));
+  const [versions, originals] = await Promise.all([
+    tx.documentVersion.findMany({ where: { id: { in: ordered.map(row => row.versionId) } } }),
+    tx.document.findMany({ where: { id: { in: documentIds } } }),
+  ]);
+  if (versions.length !== ordered.length || originals.length !== documentIds.length) return unavailable();
+  const acquiredById = new Map<string, Awaited<ReturnType<typeof selectedTechnicalAcquisition>>>();
+  for (const document of originals) if (document.visibilityLevel === technicalDocumentPrivateVisibility) {
+    acquiredById.set(document.id, await selectedTechnicalAcquisition(tx, authorityId, document));
+  }
+  const entries = ordered.map(choice => {
+    const version = versions.find(row => row.id === choice.versionId);
     const identity = identities.find(row => row.id === choice.versionId);
-    if (!identity) return unavailable();
-    const version = await tx.documentVersion.findUnique({ where: { id: choice.versionId } });
-    const originalDocument = await tx.document.findUnique({ where: { id: identity.documentId } });
-    const acquired = originalDocument?.visibilityLevel === technicalDocumentPrivateVisibility
-      ? await selectedTechnicalAcquisition(tx, authorityId, originalDocument) : null;
-    const document=acquired ? acquiredVersionDocument(acquired,choice.versionId) : originalDocument;
-    const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
-    if (!clock || !version || version.documentId !== identity.documentId || !document || document.deletedAt
-      || document.clientId !== clientId || (document.visibilityLevel !== 'interno' && !acquired)
+    const original = originals.find(row => row.id === identity?.documentId);
+    if (!version || !original || version.documentId !== original.id) return unavailable();
+    const acquired = acquiredById.get(original.id);
+    const document = acquired ? acquiredVersionDocument(acquired, choice.versionId) : original;
+    if (!document) return unavailable();
+    return { choice, document, version, original, acquired };
+  });
+  const effective = entries.map(row => row.document);
+  const allowedOriginals = new Set((await filterFinancialDocuments(tx, target, originals)).map(row => row.id));
+  // Effective metadata may differ per private version; keep object identity so
+  // one allowed version cannot authorize another version of the same document.
+  const allowedEffective = await filterFinancialDocuments(tx, target, effective);
+  const disclosed = await technicalVersionDisclosuresAllowed(tx, target, entries);
+  const [clock] = await tx.$queryRawUnsafe<Array<{ now: Date }>>('SELECT clock_timestamp() AS now');
+  if (!clock) return unavailable();
+  const ids = (values: Array<string | null>) => [...new Set(values.filter((id): id is string => !!id))];
+  const [companies, projects, services, allContracts, allPayments, allFormalizations, allMaterials] = await Promise.all([
+    tx.company.findMany({ where: { id: { in: ids(effective.map(row => row.companyId)) } } }),
+    tx.project.findMany({ where: { id: { in: ids(effective.map(row => row.projectId)) } } }),
+    tx.clientService.findMany({ where: { id: { in: ids(effective.map(row => row.clientServiceId)) } } }),
+    tx.contract.findMany({ where: { signedDocumentId: { in: documentIds } }, orderBy: { id: 'asc' }, select: { signedDocumentId: true, id: true, clientId: true, projectId: true, updatedAt: true, status: true } }),
+    tx.payment.findMany({ where: { accountingDocumentId: { in: documentIds } }, orderBy: { id: 'asc' }, select: { accountingDocumentId: true, id: true, contractId: true, updatedAt: true, status: true } }),
+    tx.practiceFormalization.findMany({ where: { signedDocumentId: { in: documentIds } }, orderBy: { id: 'asc' }, select: { signedDocumentId: true, id: true, contractId: true, practiceId: true, practice: { select: { clientId: true, projectId: true, clientServiceId: true } } } }),
+    tx.practiceMaterialEvidence.findMany({ where: { documentId: { in: documentIds } }, orderBy: { id: 'asc' }, select: { documentId: true, id: true, practiceId: true, practice: { select: { clientId: true, projectId: true, clientServiceId: true } } } }),
+  ]);
+  const boundRows = await tx.contract.findMany({ where: { id: { in: ids([...allPayments.map(row => row.contractId), ...allFormalizations.map(row => row.contractId)]) } },
+    orderBy: { id: 'asc' }, select: { id: true, clientId: true, projectId: true, updatedAt: true, status: true } });
+  for (const { choice, document, version, original, acquired } of entries) {
+    if (document.deletedAt || document.clientId !== clientId || (document.visibilityLevel !== 'interno' && !acquired)
       || ['archiviato', 'respinto', 'scaduto'].includes(document.status)
-      || document.sizeBytes < 0 || document.sizeBytes > maxClientDocumentBytes
-      || selectedDocumentMode(document) === null
+      || document.sizeBytes < 0 || document.sizeBytes > maxClientDocumentBytes || selectedDocumentMode(document) === null
       || (document.validUntil && document.validUntil <= clock.now)
       || (isSensitiveDocument(document) && !hasPermission(target, 'document.sensitive.read'))
       || (choice.download && !hasPermission(target, 'document.download'))
-      || (originalDocument && !await canAccessFinancialDocument(tx, target, originalDocument))
-      || !await canAccessFinancialDocument(tx, target, document)
+      || !allowedOriginals.has(original.id) || !allowedEffective.includes(document)
       || scope.selectiveDocumentIds?.includes(document.id)
       || (document.projectId && scope.selectiveProjectIds?.includes(document.projectId))
       || (document.clientServiceId && scope.selectiveServiceIds?.includes(document.clientServiceId))) return unavailable();
-    const [company, project, service, contracts, payments, formalizations, materials] = await Promise.all([
-      document.companyId ? tx.company.findUnique({ where: { id: document.companyId } }) : null,
-      document.projectId ? tx.project.findUnique({ where: { id: document.projectId } }) : null,
-      document.clientServiceId ? tx.clientService.findUnique({ where: { id: document.clientServiceId } }) : null,
-      tx.contract.findMany({ where: { signedDocumentId: document.id }, orderBy: { id: 'asc' }, select: { id: true, clientId: true, projectId: true, updatedAt: true, status: true } }),
-      tx.payment.findMany({ where: { accountingDocumentId: document.id }, orderBy: { id: 'asc' }, select: { id: true, contractId: true, updatedAt: true, status: true } }),
-      tx.practiceFormalization.findMany({ where: { signedDocumentId: document.id }, orderBy: { id: 'asc' }, select: { id: true, contractId: true, practiceId: true, practice: { select: { clientId: true, projectId: true, clientServiceId: true } } } }),
-      tx.practiceMaterialEvidence.findMany({ where: { documentId: document.id }, orderBy: { id: 'asc' }, select: { id: true, practiceId: true, practice: { select: { clientId: true, projectId: true, clientServiceId: true } } } }),
-    ]);
-    const boundContracts = await tx.contract.findMany({ where: { id: { in: [...new Set([...payments.map(p => p.contractId), ...formalizations.map(f => f.contractId)])] } },
-      orderBy: { id: 'asc' }, select: { id: true, clientId: true, projectId: true, updatedAt: true, status: true } });
+    if (enforceDisclosure && !disclosed.has(version.id)) return unavailable();
+    if (disclosed.has(version.id)) disclosedVersionIds.add(version.id);
+    const company = companies.find(row => row.id === document.companyId) ?? null;
+    const project = projects.find(row => row.id === document.projectId) ?? null;
+    const service = services.find(row => row.id === document.clientServiceId) ?? null;
+    // Strip grouping columns to preserve the exact historical snapshot format.
+    const contracts = allContracts.filter(row => row.signedDocumentId === document.id).map(({ signedDocumentId: _id, ...row }) => { void _id; return row; });
+    const payments = allPayments.filter(row => row.accountingDocumentId === document.id).map(({ accountingDocumentId: _id, ...row }) => { void _id; return row; });
+    const formalizations = allFormalizations.filter(row => row.signedDocumentId === document.id).map(({ signedDocumentId: _id, ...row }) => { void _id; return row; });
+    const materials = allMaterials.filter(row => row.documentId === document.id).map(({ documentId: _id, ...row }) => { void _id; return row; });
+    const boundIds = ids([...payments.map(row => row.contractId), ...formalizations.map(row => row.contractId)]);
+    const boundContracts = boundRows.filter(row => boundIds.includes(row.id));
     if ((document.companyId && (!company || company.deletedAt || company.clientId !== clientId))
       || (document.projectId && (!project || project.deletedAt || project.status === 'archiviato' || project.clientId !== clientId))
       || (document.clientServiceId && (!service || service.deletedAt || service.clientId !== clientId
@@ -170,5 +201,5 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
     });
     snapshots.push(snapshot); paths.set(version.id, version.storagePath);
   }
-  return { snapshots, paths };
+  return { snapshots, paths, disclosedVersionIds };
 }

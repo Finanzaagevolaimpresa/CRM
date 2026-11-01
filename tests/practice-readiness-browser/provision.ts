@@ -106,7 +106,6 @@ async function main() {
         id: `readiness-browser-client-${item.key}`,
         type: item.clientType,
         displayName: `Cliente ${item.label}`,
-        consultantId: "readiness-browser-owner",
       },
     });
     await db.clientReadGrant.create({ data: { userId: "readiness-browser-reader", clientId: client.id,
@@ -116,7 +115,6 @@ async function main() {
         id: `readiness-browser-project-${item.key}`,
         clientId: client.id,
         title: `Pratica ${item.label}`,
-        consultantId: "readiness-browser-owner",
       },
     });
     const lead = await db.lead.create({
@@ -297,7 +295,6 @@ async function main() {
       id: "readiness-browser-client-sensitive-history",
       type: "persona_fisica",
       displayName: "Cliente storico riservato",
-      consultantId: "readiness-browser-owner",
     },
   });
   const historicalProject = await db.project.create({
@@ -305,7 +302,6 @@ async function main() {
       id: "readiness-browser-project-sensitive-history",
       clientId: historicalClient.id,
       title: "Pratica storica riservata",
-      consultantId: "readiness-browser-owner",
     },
   });
   const historicalLead = await db.lead.create({

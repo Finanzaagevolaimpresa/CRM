@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
@@ -7,7 +8,7 @@ import { listAccessibleTasks } from '@/lib/read-access';
 import { listAdminRecords } from '@/lib/admin-records';
 import { operationalRomeTime } from '@/lib/operational-time';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('service.read');
   const tasks = await listAccessibleTasks(session, { where: { deletedAt: null, dueAt: { not: null }, status: { not: 'completata' } }, orderBy: { dueAt: 'asc' }, take: 101 });
   const manual = session.role === 'admin' ? await listAdminRecords(prisma, session, 'Deadline') : null;
@@ -25,3 +26,5 @@ export default async function Page() {
       {manual.hasNext && <Link className="underline" href="/admin/records/Deadline?page=2">Altre scadenze</Link>}</Card>}
   </div>;
 }
+
+export default withTechnicalPage("/deadlines", Page);

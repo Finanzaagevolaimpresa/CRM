@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { cookies, headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
@@ -38,6 +39,7 @@ function failure(error:unknown):OperationalResult {
   return {ok:false,uncertain:true,message:'Esito da verificare. Conserva il riferimento e verifica prima di preparare un’altra operazione.'};
 }
 export async function saveAdminOperationalStateAction(raw:unknown):Promise<OperationalResult>{
+  await assertTechnicalServerAction("admin-operational-lifecycle-actions:saveAdminOperationalStateAction");
   const session=await sessionAndOrigin();
   if(!session)return {ok:false,message:'Sessione Admin o origine non ammessa.'};
   const readiness=await privilegedAccessReadiness(session);
@@ -54,6 +56,7 @@ export async function saveAdminOperationalStateAction(raw:unknown):Promise<Opera
   }catch(error){return failure(error);}
 }
 export async function reconcileAdminOperationalStateAction(raw:unknown):Promise<OperationalResult>{
+  await assertTechnicalServerAction("admin-operational-lifecycle-actions:reconcileAdminOperationalStateAction");
   const session=await sessionAndOrigin();if(!session)return {ok:false,uncertain:true,message:'Sessione Admin o origine non ammessa. Il tentativo resta da verificare.'};
   try{
     const result=await reconcileAdminOperationalState(prisma,session,raw);

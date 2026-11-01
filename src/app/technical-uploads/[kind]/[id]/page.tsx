@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -12,7 +13,7 @@ import { prepareTechnicalUpload, saveTechnicalUpload, checkTechnicalUpload } fro
 import { parseTechnicalUploadTarget, technicalUploadPath, technicalUploadVerdictLabels } from '@/lib/technical-upload-display';
 import { technicalWorkPath } from '@/lib/technical-assignment-display';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>; searchParams: Promise<{ uploadDecision?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>; searchParams: Promise<{ uploadDecision?: string }> }) {
   const session = await requireSession(), target = parseTechnicalUploadTarget(await params);
   if (!target.success) notFound();
   const recovery = (await searchParams).uploadDecision, path = technicalUploadPath(target.data);
@@ -35,8 +36,8 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       : <ul className="space-y-4">{data.deposits.map(d => <li key={d.commandId} className="min-w-0 space-y-2 rounded-xl border p-4">
         <h2 className="break-words font-bold">{d.title}</h2><p className="break-words">{d.fileName} · {d.sizeBytes} byte</p>
         <p>{d.review ? technicalUploadVerdictLabels[d.review.verdict] : 'In attesa della revisione Admin'}</p>
-        {d.review && <p className="whitespace-pre-wrap break-words">Motivo: {d.review.reason}</p>}
-        <div className="flex flex-wrap gap-4">{d.previewMime && <a className="font-semibold underline" href={`${path}/files/${d.commandId}`} target="_blank" rel="noopener noreferrer">Visualizza file</a>}
-          <a className="font-semibold underline" href={`${path}/files/${d.commandId}?download=1`}>Scarica il mio file</a></div>
+        <p>Per aprire il documento occorrono acquisizione, classificazione della versione e concessione nell’incarico. Le note di revisione restano riservate.</p>
       </li>)}</ul>}</Card></div>;
 }
+
+export default withTechnicalPage("/technical-uploads/[kind]/[id]", Page);

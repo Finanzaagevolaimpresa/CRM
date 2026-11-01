@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { headers, cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
@@ -35,6 +36,7 @@ const failure = (uncertain = false): TechnicalUploadState => ({ ok: false, uncer
   ? 'Esito non confermato. Verifica la ricevuta senza ripetere l’operazione. Nessun nuovo comando viene avviato automaticamente.'
   : 'Operazione non disponibile: controlla formato, dimensione e quote, oppure ricarica per verificare incarico e permessi correnti.' });
 export async function prepareTechnicalUpload(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-upload-actions:prepareTechnicalUpload");
   const session = await requireSession();
   try { await origin(); const value = await file(form);
     const uploadPreview = await previewTechnicalUpload(prisma, session, technicalTargetReference.parse(json(form, 'target')), json(form, 'command'), value.name, value.bytes);
@@ -42,6 +44,7 @@ export async function prepareTechnicalUpload(_state: TechnicalUploadState, form:
   } catch { return failure(); }
 }
 export async function saveTechnicalUpload(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-upload-actions:saveTechnicalUpload");
   const session = await requireSession();
   try { await origin(); const target = technicalTargetReference.parse(json(form, 'target')), value = await file(form);
     await confirmTechnicalUpload(prisma, session, target, json(form, 'command'), String(form.get('token') ?? ''), value.bytes, form.get('confirmed') === 'on');
@@ -50,18 +53,21 @@ export async function saveTechnicalUpload(_state: TechnicalUploadState, form: Fo
   } catch { return failure(true); }
 }
 export async function checkTechnicalUpload(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-upload-actions:checkTechnicalUpload");
   const session = await requireSession();
   try { await origin(); const result = await readTechnicalUploadOutcome(prisma, session, technicalTargetReference.parse(json(form, 'target')), String(form.get('commandId') ?? ''));
     return result.status === 'RECORDED' ? { ok: true, recorded: true, message: 'Deposito già registrato. Non ripetere il caricamento.' } : failure(true);
   } catch { return failure(true); }
 }
 export async function prepareTechnicalUploadReview(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-upload-actions:prepareTechnicalUploadReview");
   const session = await requireSession();
   try { await origin(); const reviewPreview = await previewTechnicalUploadReview(prisma, session, technicalAssignmentReference.parse(json(form, 'reference')), json(form, 'command'));
     return { ok: true, message: 'Verifica la decisione sul file esatto.', reviewPreview };
   } catch { return failure(); }
 }
 export async function saveTechnicalUploadReview(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-upload-actions:saveTechnicalUploadReview");
   const session = await requireSession();
   await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE');
   try { await origin(); const ref = technicalAssignmentReference.parse(json(form, 'reference'));
@@ -75,6 +81,7 @@ export async function saveTechnicalUploadReview(_state: TechnicalUploadState, fo
   } catch { return failure(true); }
 }
 export async function checkTechnicalUploadReview(_state: TechnicalUploadState, form: FormData): Promise<TechnicalUploadState> {
+  await assertTechnicalServerAction("technical-upload-actions:checkTechnicalUploadReview");
   const session = await requireSession();
   try { await origin(); const result = await readTechnicalUploadReviewOutcome(prisma, session, technicalAssignmentReference.parse(json(form, 'reference')), String(form.get('commandId') ?? ''));
     return result.status === 'RECORDED' ? { ok: true, recorded: true, message: 'Revisione già registrata. Non ripetere la decisione.' } : failure(true);

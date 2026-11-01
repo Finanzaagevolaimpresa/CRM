@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
@@ -15,7 +16,7 @@ import {
   toCoreQueryPage,
 } from '@/lib/core-query-policy';
 
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
   const session = await requirePermission('client.read');
   const params = (await searchParams) ?? {};
   const pageNumber = parseCoreQueryPage(params.page);
@@ -71,3 +72,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/clients", Page);

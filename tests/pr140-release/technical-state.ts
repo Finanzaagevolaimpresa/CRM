@@ -1,6 +1,6 @@
+import { ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
@@ -11,7 +11,6 @@ import { readTechnicalWork } from '../../src/lib/technical-assignment-access';
 import { readTechnicalAssignmentManagement } from '../../src/lib/technical-assignment-management';
 import { readTechnicalWorkItem, previewTechnicalWorkItem, confirmTechnicalWorkItem } from '../../src/lib/technical-work-item-service';
 import { technicalWorkItemGrant } from '../../src/lib/technical-work-item-grant';
-import { localPathFromStoragePath } from '../../src/lib/storage';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { leadProof } from '../selective-leads/fixtures';
 import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../../src/lib/technical-private-item-service';
@@ -25,10 +24,15 @@ async function main() {
   const admin = await syntheticPerson(db, 'Synthetic technical recovery authority', 'admin', await bcrypt.hash(password, 10));
   assert.deepEqual(await db.$queryRaw`SELECT id FROM "TechnicalAssignmentAuthority"`, []);
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
-  const f = await technicalFixture(db, admin, await bcrypt.hash(password, 10));
+  const hash = await bcrypt.hash(password, 10);
+  const f = await technicalFixture(db, admin, hash);
+  const support = await syntheticPerson(db, 'Synthetic recovery technical collaborator', 'backoffice', hash);
+  const mixed = await syntheticPerson(db, 'Synthetic recovery mixed technical membership', 'amministrazione', hash);
+  await db.project.create({ data: { clientId: f.client.id, title: 'Synthetic technical membership', consultantId: mixed.user.id } });
+  for (const person of [f.techA, support, mixed]) for (const permission of ['contract.read', 'payment.read', 'document.download'])
+    await db.userPermissionOverride.create({ data: { userId: person.user.id, permission, allowed: true } });
   for (const doc of f.documents) {
-    const file = localPathFromStoragePath(doc.doc.storagePath);
-    await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, doc.bytes, { flag: 'wx', mode: 0o600 });
+    await ensureSyntheticTechnicalBytes(db, doc.doc.storagePath, doc.bytes);
   }
   const previous = process.env.PRIVILEGED_ACCESS_MODE; process.env.PRIVILEGED_ACCESS_MODE = 'enforced';
   try {
@@ -54,8 +58,9 @@ async function main() {
       { fileId: f.documents[1].version.id, allowDownload: true }], workItems: [choice] };
     await assignTechnical(db, admin, target, f.techA, options);
     await assignTechnical(db, admin, target, f.techB, options);
+    await assignTechnical(db, admin, target, support, options);
     await assignTechnical(db, admin, project, f.techA, { documents: options.documents });
-    const input = await workInput(db, f.techA, target, { clientVisibleStatus: 'RECOVERY_TECHNICAL_PROGRESS_SAVED' });
+    const input = await workInput(db, f.techA, target, { targetPortal: 'RECOVERY-TECHNICAL-PORTAL' });
     const preview = await previewTechnicalWork(db, f.techA.session, target, input);
     const receipt = await confirmTechnicalWork(db, f.techA.session, target, input, preview.token, true);
     const view = await readTechnicalWorkItem(db, f.techA.session, target, { kind: 'Task', itemId: task.id });
@@ -69,8 +74,11 @@ async function main() {
     await writeFile(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, JSON.stringify({ synthetic: true,
       clientId: f.client.id, projectId: f.project.id, practiceId: f.practice.id, otherProjectId: f.otherProject.id,
       liveEmail: f.techA.user.email, revokedEmail: f.techB.user.email, salesEmail: f.salesA.user.email,
+      clientName: f.client.displayName, adminEmail: admin.user.email, supportEmail: support.user.email, mixedEmail: mixed.user.email,
+      contractId: f.contract.id, paymentId: f.payment.id,
+      canonicalDocumentIds: f.documents.map(row => row.doc.id),
       receiptId: receipt.commandId, itemReceiptId: itemReceipt.commandId, taskId: task.id, privateChecklistId: checkCommand.itemId,
-      title: f.practice.title, progress: 'RECOVERY_TECHNICAL_PROGRESS_SAVED',
+      title: f.practice.title, progress: 'RECOVERY-TECHNICAL-PORTAL',
       documents: f.documents.map(row => ({ fileId: row.version.id, bytes: row.bytes.toString() })),
       excluded: [task.description, f.practice.internalNotes, f.project.scenarioA, f.contract.serviceName, f.payment.notes] }) + '\n');
   } finally { if (previous === undefined) delete process.env.PRIVILEGED_ACCESS_MODE; else process.env.PRIVILEGED_ACCESS_MODE = previous; }

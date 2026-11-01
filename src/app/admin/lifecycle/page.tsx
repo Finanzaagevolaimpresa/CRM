@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic='force-dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -7,7 +8,7 @@ import { prisma } from '@/lib/prisma';
 import { listAdminOperationalSources } from '@/lib/admin-operational-lifecycle';
 import { adminOperationalModels, adminOperationalModelLabels, adminOperationalStates, adminOperationalLabels } from '@/lib/admin-operational-state';
 import { PageHeader } from '@/components/ui';
-export default async function Page({searchParams}:{searchParams:Promise<Record<string,string|string[]|undefined>>}){
+  async function Page({searchParams}:{searchParams:Promise<Record<string,string|string[]|undefined>>}){
   const session=await requireSession();if(session.role!=='admin')notFound();
   const query=await searchParams;
   const parsed=z.object({model:z.enum(adminOperationalModels).default('ControlledIntake'),state:z.enum([...adminOperationalStates,'ALL']).default('ALL'),
@@ -35,3 +36,5 @@ export default async function Page({searchParams}:{searchParams:Promise<Record<s
       {data.hasMore&&<Link className="underline" href={pageHref(data.page+1)}>Pagina successiva</Link>}</nav>
   </div>;
 }
+
+export default withTechnicalPage("/admin/lifecycle", Page);

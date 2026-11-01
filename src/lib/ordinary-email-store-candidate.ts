@@ -1,3 +1,4 @@
+import type { OrdinaryObservationSink } from './ordinary-email-observation';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -22,6 +23,7 @@ import { tokenDigestFromCookie } from './internal-session-registry';
 type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
 export type OrdinaryEmailStoreRuntime = { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded;
+  observationSink?: OrdinaryObservationSink;
   /** Synchronous server configuration check; never supplied by a browser. */
   assertTransport?: (channel: OrdinaryChannel) => void;
   /** Read-only UI hint. Sending still requires assertTransport at every gate. */

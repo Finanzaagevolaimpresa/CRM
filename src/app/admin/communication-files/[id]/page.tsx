@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { randomUUID } from 'node:crypto';
 import { notFound, redirect } from 'next/navigation';
@@ -11,7 +12,7 @@ import { RecordUpdateError } from '@/lib/record-update-contract';
 import { AdminCommunicationFileEditor } from '@/components/admin-communication-file-editor';
 import { PageHeader } from '@/components/ui';
 
-export default async function Page({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}) {
+  async function Page({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}) {
   const session = await requireSession();if(session.role!=='admin')notFound();
   const {id}=await params,query=await searchParams;
   if(!z.string().uuid().safeParse(id).success)notFound();
@@ -31,3 +32,5 @@ export default async function Page({params,searchParams}:{params:Promise<{id:str
     <AdminCommunicationFileEditor key={id+':'+query.command+':'+query.version} data={data} commandId={String(query.command)}
       versionId={String(query.version)} recovering={Boolean(query.decision)}/></div>;
 }
+
+export default withTechnicalPage("/admin/communication-files/[id]", Page);

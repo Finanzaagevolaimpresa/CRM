@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader, formatDateTime } from '@/components/ui';
@@ -9,7 +10,7 @@ import { prisma } from '@/lib/prisma';
 import { UserFacingActionError } from '@/lib/action-errors';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ q?: string; after?: string; before?: string }>;
 }) {
@@ -75,3 +76,5 @@ export default async function Page({ params, searchParams }: {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/clients/[id]/commercial-origin", Page);

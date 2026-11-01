@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { notFound } from 'next/navigation';
 import { requirePermission, hasPermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -9,7 +10,7 @@ import { Card, PageHeader } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
 export const dynamic = 'force-dynamic';
 
-export default async function Page({ searchParams }: { searchParams: Promise<UploadContextQuery> }) {
+  async function Page({ searchParams }: { searchParams: Promise<UploadContextQuery> }) {
   const session = await requirePermission('document.upload'), query = await searchParams;
   const [clients, projects, services, companies] = await Promise.all([
     prisma.client.findMany({ where: { deletedAt: null } }), prisma.project.findMany({ where: { deletedAt: null } }),
@@ -44,3 +45,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<Upl
       serviceAreas={areas.filter(serviceArea => canAccessFinancialDocumentMetadata(session, { serviceArea }))}/></Card>
   </div>;
 }
+
+export default withTechnicalPage("/documents/new", Page);

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { LeadLifecycleControls } from "@/components/lead-lifecycle-controls";
@@ -24,7 +25,7 @@ const sources: LeadSource[] = ["sito","whatsapp","referral","campagna","consulen
 const priorities: LeadPriority[] = ["bassa","media","alta","urgente"];
 const label = (value: string) => value === "sito" ? "Sito web" : value.replaceAll("_", " ");
 
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
   const session = await requirePermission("lead.read");
   const params = (await searchParams) ?? {};
   const pageNumber = parseCoreQueryPage(params.page);
@@ -66,3 +67,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     <Card title="Elenco operativo">{visibleItems.length === 0 ? <EmptyState title="Nessun lead trovato">Modifica i filtri o crea un nuovo lead manuale.</EmptyState> : <><Table headers={["Lead","Fonte / priorità","Stato","Prossima azione","Cliente","Tracciabilità","Azione"]} rows={visibleItems.map((x)=>[<span className="font-semibold text-fai-navy" key="n">{x.companyName || `${x.firstName} ${x.lastName}`}<br/><span className="text-xs font-normal text-slate-500">{x.email ?? "—"} · {x.phone ?? "—"}</span></span>, <span key="fp"><StatusBadge status={label(x.leadSource)}/><span className="ml-2"><StatusBadge status={x.priority}/></span></span>, <StatusBadge status={x.status} key="s" />, x.nextActionDate ? `${x.nextActionNote ?? "Azione"} · ${x.nextActionDate.toLocaleDateString("it-IT")}` : (x.nextActionNote ?? "Da pianificare"), x.clientId ? clients.get(x.clientId) ?? "Collegato" : "—", <MetaCell key="m" createdAt={x.createdAt} updatedAt={x.updatedAt} owner={x.assignedToId ? users.get(x.assignedToId) : null} />, <div key="a" className="space-y-2"><Link className="font-bold text-fai-blue underline" href={`/leads/${x.id}`}>Apri</Link>{session.role === "admin" && hasPermission(session, "lead.write") && <LeadLifecycleControls id={x.id} title={x.companyName || `${x.firstName} ${x.lastName}`} updatedAt={x.updatedAt.toISOString()} action="trash" />}</div>])} /><PaginationNav pathname="/leads" params={params} page={page.page} hasPrevious={page.hasPrevious} hasNext={page.hasNext} /></>}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/leads", Page);

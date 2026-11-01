@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { randomUUID } from 'node:crypto';
 import { notFound, redirect } from 'next/navigation';
@@ -8,7 +9,7 @@ import { loadAdminRecord, readAdminRecordReceipt, AdminRecordError } from '@/lib
 import { adminRecordCatalogue } from '@/lib/admin-record-catalogue';
 import { AdminRecordEditor } from '@/components/admin-record-editor';
 import { PageHeader } from '@/components/ui';
-export default async function Page({ params, searchParams }: { params: Promise<{ model: string; id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ model: string; id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireSession(); if (session.role !== 'admin') notFound();
   const { model, id } = await params, query = await searchParams;
   if (!adminRecordCatalogue.some(row => row.model === model)) notFound();
@@ -43,3 +44,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   return <div className="crm-space-y-6"><PageHeader title={data.label} description={data.deleted ? 'Scheda nel cestino: dati conservati per il ripristino.' : 'Editor amministrativo con controllo delle modifiche concorrenti e cronologia delle correzioni.'} />
     <AdminRecordEditor key={`${model}:${recordId}:${query.command}:${query.restoreRevision ?? ''}`} data={data} commandId={String(query.command)} recovering={Boolean(query.decision || receipt)} /></div>;
 }
+
+export default withTechnicalPage("/admin/records/[model]/[id]", Page);

@@ -12,6 +12,7 @@ const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({ requested: pr
 const prefix = `pre-r02-${randomUUID()}`;
 const ownerId = `${prefix}-owner`;
 const foreignId = `${prefix}-foreign`;
+const editorId = `${prefix}-editor`;
 const clientId = `${prefix}-client`;
 const otherClientId = `${prefix}-other-client`;
 const projectId = `${prefix}-project`;
@@ -19,16 +20,18 @@ const otherProjectId = `${prefix}-other-project`;
 const companyId = `${prefix}-company`;
 const otherCompanyId = `${prefix}-other-company`;
 
-function actor(userId: string): AuthSession { return { userId, role: 'consulente', active: true, permissionOverrides: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 }; }
+function actor(userId: string): AuthSession { return { userId, role: userId === ownerId ? 'admin' : userId === editorId ? 'direzione' : 'consulente', active: true, permissionOverrides: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 }; }
 async function expectDenied(operation: Promise<unknown>) { await assert.rejects(operation, (error: unknown) => error instanceof ManualPreAnalysisError && error.code === 'DENIED'); }
 
 test.before(async () => {
   if (!enabled) return;
   await assertAiOrchestratorEphemeralDatabaseIdentity(prisma);
   await prisma.user.createMany({ data: [
-    { id: ownerId, email: `${ownerId}@invalid.test`, name: 'Consulente sintetico', passwordHash: 'synthetic-not-login', role: 'consulente' },
+    { id: ownerId, email: `${ownerId}@invalid.test`, name: 'Admin sintetico delle rettifiche', passwordHash: 'synthetic-not-login', role: 'admin' },
+    { id: editorId, email: `${editorId}@invalid.test`, name: 'Redattore direzione sintetico', passwordHash: 'synthetic-not-login', role: 'direzione' },
     { id: foreignId, email: `${foreignId}@invalid.test`, name: 'Estraneo sintetico', passwordHash: 'synthetic-not-login', role: 'consulente' },
   ] });
+  await prisma.userPermissionOverride.createMany({ data: ['dossier.read', 'project.write'].map(permission => ({ userId: editorId, permission, allowed: true })) });
   await prisma.client.createMany({ data: [
     { id: clientId, type: 'societa', displayName: 'Cliente sintetico', consultantId: ownerId },
     { id: otherClientId, type: 'societa', displayName: 'Altro cliente sintetico', consultantId: foreignId },
@@ -53,7 +56,7 @@ test.after(async () => {
   await prisma.$disconnect();
 });
 
-test('PostgreSQL: create/update, scope denial, no-op, state and optimistic conflict', { skip: !enabled }, async () => {
+test('PostgreSQL: Admin correction, technical denial, context coherence, no-op, state and optimistic conflict', { skip: !enabled }, async () => {
   const owner = actor(ownerId);
   const created = await createManualPreAnalysisRecord(prisma, owner, { clientId, projectId, internalSummary: 'Sintesi iniziale', scenarioA: 'A', scenarioB: 'B', blockingConditions: 'Blocco', requiredDocuments: 'Documento' });
   assert.equal((await getPreAnalysisReadAccess(owner, created.id))?.preAnalysis.id, created.id);
@@ -80,18 +83,25 @@ test('PostgreSQL: create/update, scope denial, no-op, state and optimistic confl
 
 test('PostgreSQL: permission/context revocation and linked deletion are rechecked in transaction', { skip: !enabled }, async () => {
   const record = await createManualPreAnalysisRecord(prisma, actor(ownerId), { clientId, projectId, internalSummary: 'Revoca' });
-  await prisma.userPermissionOverride.create({ data: { userId: ownerId, permission: 'dossier.read', allowed: false } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
-  await prisma.userPermissionOverride.deleteMany({ where: { userId: ownerId, permission: 'dossier.read' } });
+  assert.equal((await updateManualPreAnalysisRecord(prisma, actor(editorId), { id: record.id, version: record.updatedAt, internalSummary: 'Revoca' })).changed, false);
+  await prisma.userPermissionOverride.update({ where: { userId_permission: { userId: editorId, permission: 'dossier.read' } }, data: { allowed: false } });
+  const auditBeforeRevocation = await prisma.auditLog.count({ where: { entityId: record.id } });
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(editorId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
+  assert.equal(await prisma.auditLog.count({ where: { entityId: record.id } }), auditBeforeRevocation);
+  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: record.id } })).internalSummary, 'Revoca');
+  await prisma.userPermissionOverride.deleteMany({ where: { userId: editorId, permission: 'dossier.read' } });
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: foreignId } });
+  assert.equal((await updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Revoca' })).changed, false,
+    'The administrative author may still correct a project assigned to a different technician');
+  await prisma.project.update({ where: { id: projectId }, data: { clientId: otherClientId } });
   const auditBeforeDenied = await prisma.auditLog.count({ where: { entityId: record.id } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato già alla riassegnazione del progetto' }));
-  await prisma.client.update({ where: { id: clientId }, data: { consultantId: foreignId } });
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato per collegamento cliente incoerente' }));
+  await prisma.client.update({ where: { id: clientId }, data: { deletedAt: new Date() } });
   await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
   assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: record.id } })).internalSummary, 'Revoca');
   assert.equal(await prisma.auditLog.count({ where: { entityId: record.id } }), auditBeforeDenied);
-  await prisma.client.update({ where: { id: clientId }, data: { consultantId: ownerId } });
-  await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId } });
+  await prisma.client.update({ where: { id: clientId }, data: { deletedAt: null } });
+  await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId, clientId } });
   await prisma.company.createMany({ data: [{ id: companyId, clientId, name: 'Società sintetica' }, { id: otherCompanyId, clientId: otherClientId, name: 'Società incoerente sintetica' }] });
   await prisma.project.update({ where: { id: projectId }, data: { companyId } });
   await prisma.company.update({ where: { id: companyId }, data: { deletedAt: new Date() } });

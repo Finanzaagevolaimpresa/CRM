@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { technicalFieldAllowed, technicalFieldsFor } from './technical-confidentiality';
 import { admitsTechnicalAssignmentAction, type CurrentTechnicalAssignmentAdmission,
   type TechnicalAssignmentSelection } from './technical-assignment-contract';
 import { technicalTargetReference } from './technical-assignment-display';
@@ -60,7 +61,7 @@ export function projectTechnicalWorkItem(current: CurrentTechnicalAssignmentAdmi
   if (!admitted(current, assignment, selection, binding, now)) return null;
   const validators: Record<string, z.ZodTypeAny> = selection.kind === 'ChecklistItem' ? checklistValues : taskValues;
   const result: Record<string, string | null> = {};
-  for (const field of selection.readableFields) {
+  for (const field of technicalFieldsFor(selection.kind, selection.readableFields)) {
     if (!Object.hasOwn(row, field)) return null;
     const parsed = validators[field].safeParse(row[field]);
     if (!parsed.success) return null;
@@ -77,7 +78,7 @@ export function technicalWorkItemPatch(current: CurrentTechnicalAssignmentAdmiss
     || Array.isArray(raw) || ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) return null;
   const entries = Object.entries(raw), allowed = new Set<string>(selection.editableFields);
   if (entries.length < 1 || entries.length > 4 || Reflect.ownKeys(raw).length !== entries.length
-    || entries.some(([field]) => !allowed.has(field))) return null;
+    || entries.some(([field]) => !allowed.has(field) || !technicalFieldAllowed(selection.kind, field))) return null;
   const validators: Record<string, z.ZodTypeAny> = selection.kind === 'ChecklistItem' ? checklistValues : taskValues;
   const result: Record<string, string | null> = {};
   for (const [field, value] of entries) {

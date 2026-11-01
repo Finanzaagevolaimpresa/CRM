@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -7,6 +8,7 @@ import { prisma } from './prisma';
 import { CatalogV2PreparationError, prepareInternalServiceCatalogV2 } from './service-catalog-v2-persistence';
 
 export async function prepareInternalCatalogAction() {
+  await assertTechnicalServerAction("internal-engagement-actions:prepareInternalCatalogAction");
   const actor = await requirePermission('service.write');
   let denied = false;
   try {

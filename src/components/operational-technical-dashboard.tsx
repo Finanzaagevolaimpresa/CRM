@@ -6,14 +6,11 @@ import { prisma } from '@/lib/prisma';
 import { hasPermission } from '@/lib/permission-evaluator';
 import { loadOperationalWorkCatalogue } from '@/lib/operational-work';
 import { selectOperationalWork } from '@/lib/operational-work-projection';
-import { listDashboardTodayTasks } from '@/lib/dashboard-detail';
-export async function OperationalTechnicalDashboard({ session, view }: { session: AuthSession; view?: string }) {
-  const now = new Date();
-  const [practiceCatalogue, projectCatalogue, user, today] = await Promise.all([
+export async function OperationalTechnicalDashboard({ session }: { session: AuthSession; view?: string }) {
+  const [practiceCatalogue, projectCatalogue, user] = await Promise.all([
     hasPermission(session, 'technical.read') ? loadOperationalWorkCatalogue(prisma, session, 'TechnicalPractice').catch(() => null) : null,
     hasPermission(session, 'project.read') ? loadOperationalWorkCatalogue(prisma, session, 'Project').catch(() => null) : null,
     prisma.user.findUnique({ where: { id: session.userId }, select: { name: true } }),
-    hasPermission(session, 'service.read') ? listDashboardTodayTasks(session, now) : [],
   ]);
   const practices = practiceCatalogue ? selectOperationalWork(practiceCatalogue.records, { active: true }) : null;
   const projects = projectCatalogue ? selectOperationalWork(projectCatalogue.records, { active: true }) : null;
@@ -36,11 +33,8 @@ export async function OperationalTechnicalDashboard({ session, view }: { session
     kpis={[...(practices ? [{ id: 'pratiche' as const, label: 'Pratiche attive', value: practices.total,
       description: 'Stati operativi leggibili: escluse approvate, respinte e archiviate.',
       href: '/technical-office/practices?dashboard=attive', tone: 'green' as const }] : []),
-      ...(hasPermission(session, 'service.read') ? [{ id: 'oggi' as const, label: 'In scadenza oggi', value: today.length,
-        description: 'Attività in scadenza nel tuo perimetro.', href: '/tasks?dashboard=oggi', tone: 'orange' as const }] : [])]}
-    selectedKpiId={view === 'oggi' ? 'oggi' : 'pratiche'} detailItems={view === 'oggi'
-      ? today.slice(0, 3).map(row => ({ id: row.id, title: row.title, status: row.status, href: '/tasks?dashboard=oggi' }))
-      : practices?.records.slice(0, 3).map(row => ({
+    ]}
+    selectedKpiId="pratiche" detailItems={practices?.records.slice(0, 3).map(row => ({
       id: row.id, title: row.title ?? 'Pratica · titolo non condiviso', status: row.status!, href: row.href,
     })) ?? []}
     shortcuts={[

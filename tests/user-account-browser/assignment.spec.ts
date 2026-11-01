@@ -26,7 +26,7 @@ test.beforeAll(async () => {
   clientId = client.id;
   const project = await db.project.create({ data: { clientId, title: 'Assignment Project', consultantId: tech.id } });
   projectId = project.id;
-  await db.userPermissionOverride.createMany({ data: ['service.assign', 'technical.assign'].map(permission => ({ userId: salesId, permission, allowed: true })) });
+  await db.userPermissionOverride.createMany({ data: ['service.assign'].map(permission => ({ userId: salesId, permission, allowed: true })) });
   if (scope === 'enforced') await db.applicationKeyVersion.upsert({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: 1 } },
     create: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) }, update: {} });
 });

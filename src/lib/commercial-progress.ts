@@ -38,7 +38,7 @@ export async function readCommercialProgress(db: PrismaClient, claimed: AuthSess
     await lockCommunicationDirectory(tx);
     const live = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
     if (!live || !live.active || live.deletedAt || live.revokedAt || !live.live || live.role !== 'commerciale') deny();
-    const actor = { userId: live.userId, role: live.role, active: live.active,
+    const actor = { userId: live.userId, role: live.role, technicalRestricted: live.technicalRestricted, active: live.active,
       permissionOverrides: [...live.permissionOverrides], ...await loadSelectiveProjectScope(tx, live.userId) };
     if (!hasPermission(actor, 'client.read')) deny();
     // Search only within the current owner's admitted records; % and _ are

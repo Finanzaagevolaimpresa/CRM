@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/auth';
 import { canViewTechnicalPractice } from '@/lib/access-control';
@@ -5,6 +6,7 @@ import { loadTechnicalPracticeAccessContext } from '@/lib/technical-practice-acc
 import { prisma } from '@/lib/prisma';
 import { buildOperationalReportMarkdown, reportFileName } from '@/lib/operational-report';
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  await assertTechnicalFileRoute("/technical-office/practices/[id]/operational-report");
   const session = await requirePermission('technical.read');
   const { id } = await params;
   const practice = await prisma.technicalPractice.findUnique({ where: { id } });

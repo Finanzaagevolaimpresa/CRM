@@ -1,3 +1,4 @@
+import { technicalActionBoundary } from '../technical-action-boundary';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -26,7 +27,7 @@ const javascript = ts.transpileModule(bodies, { compilerOptions: {
 // scheduling are injectable; parsing, access, locks, writes and audit use PostgreSQL.
 export function actualClientWriteActions(db: PrismaClient, session: AuthSession, schedule: typeof withProjectResources = withProjectResources) {
   const dependencies = {
-    prisma: db, requirePermission: async () => session, companySchema, projectSchema, redactAuditPayload,
+    prisma: db, requirePermission: async () => session, assertTechnicalServerAction: technicalActionBoundary(session), companySchema, projectSchema, redactAuditPayload,
     withProjectResources: schedule, lockLeadWriteActor, assertLeadActorLive,
     requireClientContextWriteAccess: (actor: AuthSession, target: Parameters<typeof requireClientContextWriteAccess>[1], tx = db) =>
       requireClientContextWriteAccess(actor, target, tx),

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
@@ -8,7 +9,7 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { createDossierAndRedirect } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('dossier.read');
   const [items, clientRows, projectRows, preAnalyses] = await Promise.all([
     prisma.dossier.findMany(),
@@ -39,3 +40,5 @@ export default async function Page() {
     <Card title="Elenco operativo">{visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono dossier disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Titolo', 'Cliente', 'Tipo', 'Stato', 'Tracciabilità', 'Azione']} rows={visibleItems.map((item) => [<span className="font-semibold text-fai-navy" key="n">{item.title}</span>, clientById.get(item.clientId)?.displayName ?? '—', item.type, <StatusBadge status={item.status} key="s" />, <MetaCell key="m" createdAt={item.createdAt} updatedAt={item.updatedAt} owner={item.modifiedById ?? null} />, <Link className="font-bold text-fai-blue underline" href={`/dossiers/${item.id}`} key="a">Apri</Link>])} />}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/dossiers", Page);

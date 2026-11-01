@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = 'force-dynamic';
 
@@ -7,7 +8,7 @@ import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { canViewCommercialOffer } from '@/lib/access-control';
 
-export default async function Page() {
+  async function Page() {
   const session = await requirePermission('lead.read');
   const [offers, leads, clients] = await Promise.all([
     prisma.commercialOffer.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -26,3 +27,5 @@ export default async function Page() {
 
   return <div className="crm-space-y-6"><PageHeader title="Offerte" description="Vista autonoma delle offerte commerciali già registrate. Creazione e modifica restano collegate ai lead, senza automatismi verso il cliente."/><Card title="Elenco offerte">{visibleOffers.length === 0 ? <EmptyState title="Nessuna offerta presente">Non risultano offerte disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Titolo', 'Contesto', 'Totale', 'Stato', 'Tracciabilità', 'Azione']} rows={visibleOffers.map((offer) => [<span className="font-semibold text-fai-navy" key="t">{offer.title}</span>, offer.clientId ? clientNames.get(offer.clientId) ?? 'Cliente non disponibile' : offer.leadId ? leadNames.get(offer.leadId) ?? 'Lead non disponibile' : '—', `€ ${Number(offer.totalAmount).toLocaleString('it-IT')}`, <StatusBadge status={offer.status} key="s" />, <MetaCell key="m" createdAt={offer.createdAt} updatedAt={offer.updatedAt} />, <OpenLink href={`/commercial-offers/${offer.id}`} key="a">Apri</OpenLink>])} />}</Card></div>;
 }
+
+export default withTechnicalPage("/commercial-offers", Page);

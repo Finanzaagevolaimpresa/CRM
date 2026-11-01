@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -11,6 +12,7 @@ import { getEngagementDossierReadAccess, mutateInitialServiceWorkflow, reviseEng
 import { buildInitialServiceTemplate, InitialServiceError } from './initial-service-contract';
 function value(form: FormData, key: string) { return String(form.get(key) ?? ''); }
 export async function mutateInitialServiceAction(form: FormData) {
+  await assertTechnicalServerAction("initial-service-actions:mutateInitialServiceAction");
   const session = await requirePermission('dossier.read'), h = await headers();
   if (!isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new InitialServiceError('DENIED');

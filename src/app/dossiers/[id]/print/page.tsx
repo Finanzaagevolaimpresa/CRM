@@ -1,10 +1,11 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import { notFound } from 'next/navigation';
 import { requirePermission } from '@/lib/auth';
 import { getLegacyDossierReadAccess } from '@/lib/read-access';
 import { PrintDossierButton } from '@/components/print-dossier-button';
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  async function Page({ params }: { params: Promise<{ id: string }> }) {
   const actor = await requirePermission('dossier.read'), { id } = await params;
   const context = await getLegacyDossierReadAccess(actor, id);
   if (!context) notFound();
@@ -19,3 +20,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <style>{`@media print { body * { visibility: hidden; } #dossier-print, #dossier-print * { visibility: visible; } #dossier-print { position: absolute; inset: 0; width: 100%; padding: 0; } [data-print-control] { display: none !important; } }`}</style>
   </article>;
 }
+
+export default withTechnicalPage("/dossiers/[id]/print", Page);

@@ -18,11 +18,12 @@ async function main() {
   assert.ok(password?.length >= 24 && evidence && root && (process.env.PRIVILEGED_STEP_UP_SECRET?.length ?? 0) >= 32);
   const passwordHash = await bcrypt.hash(password, 10);
   const admin = await db.user.create({ data: { email: 'm4-browser-admin@invalid.test', name: 'M4 Browser Admin', role: 'admin', passwordHash, active: true } });
-  const operator = await db.user.create({ data: { email: 'm4-browser-operator@invalid.test', name: 'M4 Browser Operator', role: 'consulente', passwordHash, active: true } });
+  const operator = await db.user.create({ data: { email: 'm4-browser-operator@invalid.test', name: 'M4 Browser Commercial Operator', role: 'commerciale', passwordHash, active: true } });
+  await db.userPermissionOverride.createMany({ data: ['document.download', 'practice_communications.mark_used'].map(permission => ({ userId: operator.id, permission, allowed: true })) });
   await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) } });
-  const client = await db.client.create({ data: { type: 'societa', displayName: 'M4 Browser Synthetic Client', consultantId: operator.id } });
-  const project = await db.project.create({ data: { clientId: client.id, title: 'M4 Browser Synthetic Project', consultantId: operator.id } });
-  const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id, title: 'M4 Browser Synthetic', practiceType: 'test', targetEntity: 'Synthetic', technicalOwnerId: operator.id, createdById: admin.id } });
+  const client = await db.client.create({ data: { type: 'societa', displayName: 'M4 Browser Synthetic Client', salesOwnerId: operator.id } });
+  const project = await db.project.create({ data: { clientId: client.id, title: 'M4 Browser Synthetic Project' } });
+  const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id, title: 'M4 Browser Synthetic', practiceType: 'test', targetEntity: 'Synthetic', commercialOwnerId: operator.id, createdById: admin.id } });
   const material = Buffer.from('Synthetic actual M4 bytes for Chromium package qualification.');
   mkdirSync(join(root, client.id), { recursive: true });
   const storagePath = `${client.id}/m4-synthetic.txt`;

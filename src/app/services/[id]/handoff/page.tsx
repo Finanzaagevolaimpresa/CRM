@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { hasSelectiveContext } from '@/lib/selective-project-policy';
 import { isSelectivePractice } from '@/lib/selective-practice-policy';
@@ -15,7 +16,7 @@ import { UserFacingActionError } from '@/lib/action-errors';
 import { technicalRoles } from '@/lib/responsibility';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ q?: string; after?: string }>;
 }) {
   const session = await requirePermission('technical.read'), { id } = await params, query = await searchParams;
@@ -98,3 +99,5 @@ export default async function Page({ params, searchParams }: {
     </Card>
   </div>;
 }
+
+export default withTechnicalPage("/services/[id]/handoff", Page);

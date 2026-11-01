@@ -18,7 +18,7 @@ export function previewTechnicalUploadDeposit(key: PrivilegedStepUpKey, raw: unk
   const token = createTechnicalUploadPreview(key, command, current, now);
   return { command, token, summary: { title: command.title, fileName: command.file.fileName,
     sizeBytes: command.file.sizeBytes, contentSha256: command.file.contentSha256,
-    purpose: current.profile.purpose, visibility: current.profile.visibility,
+    purpose: 'Deposito per revisione Admin', visibility: current.profile.visibility,
     remainingFilesAfter: current.profile.maxFilesPerRevision - current.consumedFiles - 1,
     remainingBytesAfter: current.profile.maxBytesPerRevision - current.consumedBytes - command.file.sizeBytes } };
 }

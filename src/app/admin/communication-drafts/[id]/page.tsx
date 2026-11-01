@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import {randomUUID} from 'node:crypto';
 import {notFound} from 'next/navigation';
@@ -11,7 +12,7 @@ import {AdminOperationalStateError} from '@/lib/admin-operational-state';
 import {AdminDraftContextForm} from '@/components/admin-draft-context-form';
 export const dynamic='force-dynamic';
 const labels={CLIENT:'Clienti',LEAD:'Lead',READINESS:'Pratiche preventivo e avvio',TECHNICAL:'Pratiche tecniche',INTERNAL:'Conversazioni interne'};
-export default async function Page({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<{kind?:string;q?:string;page?:string;command?:string}>}){
+  async function Page({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<{kind?:string;q?:string;page?:string;command?:string}>}){
   const session=await requireSession();if(session.role!=='admin')notFound();
   const {id}=await params,q=await searchParams;if(!z.string().uuid().safeParse(id).success)notFound();
   if(q.command&&!z.string().uuid().safeParse(q.command).success)notFound();
@@ -44,3 +45,5 @@ export default async function Page({params,searchParams}:{params:Promise<{id:str
     </>}
   </main>;
 }
+
+export default withTechnicalPage("/admin/communication-drafts/[id]", Page);

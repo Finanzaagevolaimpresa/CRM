@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
@@ -10,7 +11,7 @@ import { PrivateVideoPlayer } from '@/components/private-video-player';
 import { loadActivePrivilegedStepUpKey } from '@/lib/application-key-registry';
 import { privilegedStepUpCookieName } from '@/lib/privileged-access';
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ as?: string }> }) {
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ as?: string }> }) {
   const session = await requireSession(), { id } = await params, { as } = await searchParams;
   if (!z.string().uuid().safeParse(id).success) notFound();
   const key = await loadActivePrivilegedStepUpKey(prisma), store = await cookies();
@@ -26,3 +27,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       adminPreview asRecipient={as}/> : <p role="status" className="rounded-xl border p-4">La persona non può vedere questo video con i permessi e la pubblicazione correnti. Nessun accesso è stato concesso.</p>}
   </div>;
 }
+
+export default withTechnicalPage("/videos/manage/[id]/preview", Page);

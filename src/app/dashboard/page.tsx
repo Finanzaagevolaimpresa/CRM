@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import {
   Card,
   Stat,
@@ -22,7 +23,7 @@ import { loadDashboardLeadDetail, loadDashboardReviewDetail, loadDashboardTodayD
 import { isOperationalTechnician } from '@/lib/operational-work';
 import { OperationalTechnicalDashboard } from '@/components/operational-technical-dashboard';
 export const dynamic = "force-dynamic";
-export default async function Dashboard({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
+  async function Dashboard({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams ?? {};
   const session = await requireSession();
   if (isOperationalTechnician(session.role)) return <OperationalTechnicalDashboard session={session} view={typeof params.vista === 'string' ? params.vista : undefined} />;
@@ -926,3 +927,5 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
     </div>
   );
 }
+
+export default withTechnicalPage("/dashboard", Dashboard);

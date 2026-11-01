@@ -1,6 +1,8 @@
 import { captureManual } from '../manuals-r23/capture';
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
+import { syntheticSession } from '../selective-sharing/fixtures';
 import bcrypt from 'bcryptjs';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { purchasedFixture, type PurchasedFixture } from '../purchased-service-fixture';
@@ -47,7 +49,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => db.$disconnect());
 
-test('paid service UI: admin handoff, technician acceptance, saved output, reviewed simulated delivery and access revocation', async ({ browser }) => {
+test('paid service UI: Admin handoff, individual acceptance, classified material and reassignment preserve the privacy ceiling', async ({ browser }) => {
   test.setTimeout(240_000);
   const ac = await browser.newContext({ baseURL }), tc = await browser.newContext({ baseURL }), oc = await browser.newContext({ baseURL });
   const admin = await ac.newPage(), tech = await tc.newPage(), other = await oc.newPage();
@@ -93,43 +95,32 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   await tech.goto('/assignments?kind=TechnicalPractice'); await tech.getByRole('link', { name: f.catalog.name, exact: true }).click();
   await tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true }).click();
   await expect.poll(() => db.auditLog.count({ where: { entityId: receipt.receipt.technicalPracticeId, event: 'responsibility_accepted' } })).toBe(1);
-  await tech.goto(practicePath); await expect(tech.getByText(f.documents[2].title, { exact: true }).first()).toBeVisible();
-  expect((await tech.request.get(`/documents/${f.documents[2].id}/download`)).status()).toBe(200);
-  expect((await tech.request.get(`/documents/${f.documents[0].id}/download`)).status()).toBe(403); // Sensitive evidence is not implicitly granted.
-  await tech.getByRole('link', { name: 'Servizio acquistato e passaggio', exact: true }).click();
-  await expect(tech.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toBeVisible();
-  await captureManual(tech, 'S03-passaggio-tecnico', 'consulente', 'Ricevuta del passaggio dello stesso servizio acquistato nella vista del tecnico; la conferma personale è distinta e illustrata in S02.');
-  const upload = tech.locator('form').filter({ has: tech.locator('input[type="file"]') }), bytes = Buffer.from('Elaborato sintetico manuale, consegna simulata senza invio esterno.');
-  await upload.locator('input[name="title"]').fill(`${f.tag}-output-v1`); await upload.locator('select[name="clientServiceId"]').selectOption(f.service.id);
-  await upload.locator('input[type="file"]').setInputFiles({ name: 'elaborato-v1.txt', mimeType: 'text/plain', buffer: bytes });
-  await upload.getByRole('button', { name: 'Carica in storage privato', exact: true }).click();
-  await expect.poll(() => db.document.count({ where: { clientServiceId: f.service.id, title: `${f.tag}-output-v1` } })).toBe(1);
-  const output = await db.document.findFirstOrThrow({ where: { clientServiceId: f.service.id, title: `${f.tag}-output-v1` } });
-  expect(await db.documentVersion.count({ where: { documentId: output.id } })).toBe(1);
-  await tech.goto(practicePath); const downloaded = await tech.request.get(`/documents/${output.id}/download`); expect(downloaded.status()).toBe(200); expect(await downloaded.body()).toEqual(bytes);
-  const communication = tech.locator('form').filter({ has: tech.locator('button', { hasText: 'Crea nota per commerciale' }) });
-  await communication.locator('input[name="title"]').fill(`${f.tag}-simulated-delivery`);
-  await communication.locator('textarea[name="content"]').fill(`Consegna simulata interna dell’elaborato ${output.id}. Nessun invio reale. Elaborato manuale da verificare.`);
-  await communication.getByRole('button', { name: 'Crea nota per commerciale', exact: true }).click();
-  await expect.poll(() => db.practiceCommunication.count({ where: { technicalPracticeId: receipt.receipt.technicalPracticeId } })).toBe(1);
-  const note = await db.practiceCommunication.findFirstOrThrow({ where: { technicalPracticeId: receipt.receipt.technicalPracticeId } });
-  await admin.goto(practicePath); await admin.getByRole('button', { name: 'Approva', exact: true }).click();
-  await expect.poll(async () => (await db.practiceCommunication.findUniqueOrThrow({ where: { id: note.id } })).status).toBe('approvata');
-  await tech.goto(practicePath); await tech.getByRole('button', { name: 'Segna usata/inviata', exact: true }).click();
-  await expect.poll(async () => (await db.practiceCommunication.findUniqueOrThrow({ where: { id: note.id } })).status).toBe('usata_inviata');
-  await tech.reload();
-  const deliveredRow = tech.getByRole('row').filter({ hasText: `${f.tag}-simulated-delivery` });
-  await expect(deliveredRow).toHaveCount(1); await expect(deliveredRow).toBeVisible();
-  await expect(deliveredRow.getByRole('cell').first()).toContainText(`${f.tag}-simulated-delivery`);
-  await captureManual(tech, 'S08-pratica-tecnica', 'consulente', 'Nota interna simulata della pratica tecnica; la nota usata/inviata non è una prova di recapito email né del completamento del servizio.', deliveredRow.getByRole('cell').first());
+  await tech.goto(practicePath);
+  expect((await tech.request.get('/documents/' + f.documents[2].id + '/download')).status()).toBe(404);
+  const adminUser = await db.user.findUniqueOrThrow({ where: { id: f.admin.id } });
+  await classifySyntheticTechnicalVersion(db, { user: adminUser, ...await syntheticSession(db, adminUser) }, f.documents[2].version.id);
+  await tech.reload(); await expect(tech.getByText(f.documents[2].title, { exact: true })).toBeVisible();
+  const material = await tech.request.get('/documents/' + f.documents[2].id + '/download');
+  expect(material.status()).toBe(200); expect((await material.body()).toString()).toBe('Synthetic material ' + f.tag);
+  for (const document of f.documents.slice(0, 2)) {
+    expect((await tech.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
+    expect((await tech.request.get('/documents/' + document.id + '/view?versionId=' + document.version.id)).status()).toBe(403);
+  }
+  const safeHtml = await tech.locator('body').innerText();
+  for (const value of [f.contract.id, f.payment.id, f.documents[0].title, f.documents[1].title]) expect(safeHtml).not.toContain(value);
+  expect((await tech.request.get(path)).status()).toBe(404);
+  await expect(tech.locator('input[type="file"]')).toHaveCount(0);
+  await expect(tech.getByRole('button', { name: 'Crea nota per commerciale', exact: true })).toHaveCount(0);
+  expect(await db.practiceCommunication.count({ where: { technicalPracticeId: receipt.receipt.technicalPracticeId } })).toBe(0);
+  await captureManual(tech, 'S03-passaggio-tecnico', 'consulente', 'Responsabilità personale e materiale tecnico classificato; contratto, pagamento e note restano riservati.');
   await stepUp(admin); await admin.goto(`${assignmentPath}?q=${encodeURIComponent(f.tag)}`);
   const assignment = admin.getByRole('form', { name: 'Decisione responsabilità', exact: true });
   await assignment.getByLabel('Referente tecnico', { exact: true }).selectOption(f.other.id);
-  await assignment.getByLabel('Motivazione', { exact: true }).fill('Reassignment after synthetic delivery, preserving original evidence');
+  await assignment.getByLabel('Motivazione', { exact: true }).fill('Reassignment of technical scope, preserving original evidence');
   await assignment.getByRole('button', { name: 'Registra decisione', exact: true }).click();
   await expect.poll(async () => (await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId).toBe(f.other.id);
-  expect((await tech.request.get(`/documents/${output.id}/download`)).status()).toBe(403);
-  expect((await other.request.get(`/documents/${output.id}/download`)).status()).toBe(200);
+  expect((await tech.request.get(`/documents/${f.documents[2].id}/download`)).status()).toBe(403);
+  expect((await other.request.get(`/documents/${f.documents[2].id}/download`)).status()).toBe(200);
   await replay(admin, committedRequest); expect((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId).toBe(f.other.id);
   expect(await getHandoffReceipt(db, f.service.id)).toEqual(receipt);
   await ac.close(); await tc.close(); await oc.close();

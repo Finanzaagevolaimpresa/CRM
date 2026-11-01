@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, PageHeader } from '@/components/ui';
@@ -15,7 +16,7 @@ function StatusBadge({ status }: { status: ReadinessStatus }) {
   return <Badge tone={statusTone[status]}>{status}</Badge>;
 }
 
-export default async function Page() {
+  async function Page() {
   await requirePermission('settings.manage');
   const checks = await getSystemReadinessChecks();
   const hasBlockingErrors = checks.some((check) => check.status === 'Errore');
@@ -68,3 +69,5 @@ export default async function Page() {
     </div>
   );
 }
+
+export default withTechnicalPage("/settings/system", Page);

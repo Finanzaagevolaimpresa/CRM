@@ -1,7 +1,6 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { headers } from 'next/headers';
-import { redirect } from 'next/navigation';
-import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { SerializableConflictError } from './serializable';
 import { requireSession } from './auth';
@@ -12,10 +11,12 @@ import { submitAdminRequest, changeAdminRequest, isRequestUnavailable } from './
 
 const value = (form: FormData, key: string) => String(form.get(key) ?? '');
 export async function mutateAdminRequest(form: FormData) {
+  await assertTechnicalServerAction("admin-request-actions:mutateAdminRequest");
   const session = await requireSession(), h = await headers();
   if (!isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) requestDenied();
-  const action = value(form, 'action'); let target = '/admin-requests', result = 'RECORDED';
+  const action = value(form, 'action'); let target = '/admin-requests';
+  let result: 'RECORDED' | 'UNAVAILABLE' | 'INVALID' = 'RECORDED';
   try {
     const receipt = action === 'SUBMIT' ? await submitAdminRequest(prisma, session, {
       commandId: value(form, 'commandId'), subject: { kind: value(form, 'subjectKind'), targetId: value(form, 'targetId') },
@@ -34,6 +35,7 @@ export async function mutateAdminRequest(form: FormData) {
     else if (error instanceof z.ZodError) result = 'INVALID';
     else throw error;
   }
-  revalidatePath('/admin-requests');
-  redirect(`${target}?result=${result}`);
+  // Request pages are dynamic. Return the durable receipt to the form;
+  // opening the recorded request is a separate, explicit read-only GET.
+  return { status: result, target };
 }

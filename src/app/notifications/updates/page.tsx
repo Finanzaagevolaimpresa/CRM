@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from 'next/link';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
@@ -6,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { listSelectedRecordNotices } from '@/lib/record-reminder-notifications';
 import { loadActivePrivilegedStepUpKey } from '@/lib/application-key-registry';
 export const dynamic = 'force-dynamic';
-export default async function Page() {
+  async function Page() {
   const rows = await listSelectedRecordNotices(prisma, await requireSession(), await loadActivePrivilegedStepUpKey(prisma), 100, false);
   return <div className="crm-space-y-6"><PageHeader title="Aggiornamenti selezionati" description="Aggiornamenti e promemoria CRM disponibili, destinati a te e ammessi dai permessi correnti. La lettura non rappresenta un invio email. Orari Europe/Rome." />
     <Link href="/notifications" className="font-bold underline">← Notifiche</Link>
@@ -18,3 +19,5 @@ export default async function Page() {
     </article>)}</div> : <EmptyState title="Nessun aggiornamento disponibile">Sono mostrati solo gli avvisi destinati a te che puoi ancora consultare.</EmptyState>}</Card>
     {rows.length === 100 && <p className="text-sm">Sono mostrati i 100 avvisi disponibili più recenti.</p>}</div>;
 }
+
+export default withTechnicalPage("/notifications/updates", Page);

@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { filterFinancialDocuments } from './financial-document-access';
 import { listTechnicalDocumentCandidates } from './selective-client-documents';
 import { snapshotTechnicalAssignmentDocuments } from './technical-assignment-documents';
 import type { lockTechnicalAssignmentContext } from './technical-assignment-context';
@@ -20,7 +21,16 @@ export async function readAdmittedTechnicalDocumentOptions(tx: Prisma.Transactio
   state: TechnicalAssignmentTransaction, context: Context) {
   const candidates = await listTechnicalDocumentCandidates(tx, state.actor, context.clientId);
   if (candidates.documentsLimited) throw new TechnicalAssignmentError('UNAVAILABLE');
-  const ids = candidates.documentOptions.map(row => row.versionId).sort();
+  if (!state.recipient) throw new TechnicalAssignmentError('DENIED');
+  // Only remove already-forbidden financial sources before expensive locked
+  // admission. A signed contract among otherwise valid versions must not force
+  // every allowed version through repeated recursive snapshots. This is never
+  // an authorization: each remaining version is still locked and fully reread.
+  const documentIds = [...new Set(candidates.documentOptions.map(row => row.documentId))];
+  const documents = await tx.document.findMany({ where: { id: { in: documentIds } } });
+  if (documents.length !== documentIds.length) throw new TechnicalAssignmentError('UNAVAILABLE');
+  const allowed = new Set((await filterFinancialDocuments(tx, state.recipient, documents)).map(row => row.id));
+  const ids = candidates.documentOptions.filter(row => allowed.has(row.documentId)).map(row => row.versionId).sort();
   const admitted: TechnicalDocumentOption[] = [];
   let validUntil = Number.MAX_SAFE_INTEGER;
   async function admit(batch: string[]): Promise<void> {
@@ -30,6 +40,7 @@ export async function readAdmittedTechnicalDocumentOptions(tx: Prisma.Transactio
       validUntil = Math.min(validUntil, result.validUntil);
       for (const snapshot of result.documents) {
         const metadata = result.metadata.find(row => row.fileId === snapshot.fileId);
+        if (result.excludedVersionIds?.has(snapshot.fileId)) continue;
         if (!metadata) throw new TechnicalAssignmentError('UNAVAILABLE');
         admitted.push({ ...snapshot, ...metadata });
       }

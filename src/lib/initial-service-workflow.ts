@@ -1,3 +1,4 @@
+import { currentTechnicalRestriction } from './technical-account-membership';
 import { filterFinancialDocuments, canAccessFinancialDocument } from './financial-document-access';
 import { randomUUID, createHash } from 'node:crypto';
 import { Prisma, type ClientDossier, type Client, type Project, type ClientService, type EngagementDossierVersion } from '@prisma/client';
@@ -115,8 +116,10 @@ export async function hasInitialServiceReviewAssignment(tx: Tx, current: AuthSes
 async function livePerson(tx: Tx, context: InitialServiceContext, userId: string, approve: boolean) {
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR SHARE`;
   const row = await tx.user.findUnique({ where: { id: userId }, include: { permissionOverrides: true } });
-  if (!row?.active || row.deletedAt || !hasPermission(row, approve ? 'dossier.approve' : 'dossier.write')) denied();
-  const current = { userId, role: row.role, active: row.active, permissionOverrides: row.permissionOverrides,
+  if (!row?.active || row.deletedAt) denied();
+  const technicalRestricted = await currentTechnicalRestriction(tx, userId, row);
+  if (!hasPermission({ ...row, technicalRestricted }, approve ? 'dossier.approve' : 'dossier.write')) denied();
+  const current = { userId, role: row.role, technicalRestricted, active: row.active, permissionOverrides: row.permissionOverrides,
     expiresAt: Math.floor(Date.now() / 1000) + 60, clientReadScope: await loadClientReadScope(tx, userId), ...await loadSelectiveProjectScope(tx, userId) } satisfies AuthSession;
   if (isSelectiveProject(current, context.project.id)) denied();
   if (approve ? !canViewClient(current, context.client) || !hasPermission(current, 'dossier.read')

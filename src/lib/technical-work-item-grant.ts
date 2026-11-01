@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { technicalFieldAllowed } from './technical-confidentiality';
 
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const generation = z.number().int().positive().max(2_147_483_647);
@@ -25,9 +26,9 @@ export const technicalWorkItemGrants = z.array(technicalWorkItemGrant).max(20).r
   new Set(items.map(item => `${item.kind}:${item.itemId}`)).size === items.length, 'Duplicate item selection');
 
 export const technicalItemFieldLabels: Record<string, string> = {
-  title: 'Titolo', notes: 'Note tecniche', description: 'Descrizione', status: 'Stato', priority: 'Priorità', dueAt: 'Scadenza',
+  title: 'Titolo', notes: 'Note riservate', description: 'Descrizione', status: 'Stato', priority: 'Priorità', dueAt: 'Scadenza',
 };
 export function technicalItemFields(kind: TechnicalWorkItemGrant['kind']) {
   const all = kind === 'Task' ? ['title', 'description', 'status', 'priority', 'dueAt'] : ['title', 'notes', 'status'];
-  return all.map(key => ({ key, label: technicalItemFieldLabels[key], editable: key !== 'status' }));
+  return all.filter(key => technicalFieldAllowed(kind, key)).map(key => ({ key, label: technicalItemFieldLabels[key], editable: key !== 'status' }));
 }

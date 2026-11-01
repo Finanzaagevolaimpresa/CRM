@@ -14,9 +14,9 @@ export function clientProof(person: ClientPerson, nowSeconds?: number) {
 export async function selectiveClientFixture(db: PrismaClient, admin: ClientPerson, role: RoleCode = 'admin', passwordHash?: string) {
   const reader = await syntheticPerson(db, 'Destinatario cliente sintetico', role, passwordHash);
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Cliente sintetico ' + randomUUID(),
-    salesOwnerId: reader.user.id, consultantId: reader.user.id, notes: 'NOTA_PRIVATA_SINTETICA_' + randomUUID() } });
+    salesOwnerId: reader.user.id, consultantId: ['admin', 'consulente', 'backoffice'].includes(role) ? reader.user.id : null, notes: 'NOTA_PRIVATA_SINTETICA_' + randomUUID() } });
   const other = await db.client.create({ data: { type: 'societa', displayName: 'Altro cliente sintetico ' + randomUUID(),
-    salesOwnerId: reader.user.id, consultantId: reader.user.id } });
+    salesOwnerId: reader.user.id, consultantId: ['admin', 'consulente', 'backoffice'].includes(role) ? reader.user.id : null } });
   const company = await db.company.create({ data: { clientId: client.id, name: 'AZIENDA_SINTETICA_ESCLUSA_' + randomUUID(), vatNumber: 'SYNTHETIC_VAT' } });
   const project = await db.project.create({ data: { clientId: client.id, companyId: company.id, title: 'PROGETTO_SINTETICO_ESCLUSO_' + randomUUID() } });
   const lead = await db.lead.create({ data: { firstName: 'Sintetico', lastName: 'Cliente', clientId: client.id, assignedToId: reader.user.id } });

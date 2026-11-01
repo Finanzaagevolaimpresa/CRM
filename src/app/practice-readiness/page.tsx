@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminOperationalShortcut } from '@/components/admin-operational-shortcut';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ import {
   startPracticeAction,
 } from "@/lib/practice-readiness-actions";
 const field = "w-full rounded-xl border p-2";
-export default async function Page({
+  async function Page({
   searchParams,
 }: {
   searchParams: Promise<{
@@ -698,3 +699,5 @@ export default async function Page({
     </div>
   );
 }
+
+export default withTechnicalPage("/practice-readiness", Page);

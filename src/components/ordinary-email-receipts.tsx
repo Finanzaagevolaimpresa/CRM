@@ -8,6 +8,7 @@ export function OrdinaryEmailReceipts({ receipts }: { receipts: OrdinaryEmailRec
     <ol className="mt-3 space-y-3">{receipts.map(receipt => <li key={receipt.id}>
       <p className="font-bold">Versione {receipt.revision} · {ordinaryReceiptLabels[receipt.state]}</p>
       <p className="text-sm">{(receipt.recordedAt ?? receipt.createdAt).toISOString()}</p>
+      {receipt.reconciliation && <p className="break-all text-sm">Riconciliazione Admin {receipt.reconciliation.id} · prova SHA256 {receipt.reconciliation.sourceHash}. Ricevuta originale conservata: {receipt.reconciliation.originalOutcome ?? 'assente prima del recupero'}.</p>}
       {['RESERVED','CLAIMED','UNCERTAIN'].includes(receipt.state)
         ? <p className="text-sm">Il tentativo resta bloccato. Verifica l’esito prima di qualsiasi altro invio.</p> : null}
     </li>)}</ol>

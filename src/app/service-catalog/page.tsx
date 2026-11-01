@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +13,7 @@ import { definitionForStoredCatalogRevision, validateStoredCatalogSelection } fr
 
 function priceLabel(mode: string, cents: number | null) { return mode === 'QUOTE_ONLY' ? 'Su preventivo' : `€ ${((cents ?? 0) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2 })} + IVA`; }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ serviceCode?: string; digitalProjectType?: string; preparation?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ serviceCode?: string; digitalProjectType?: string; preparation?: string }> }) {
   const session = await requirePermission('service.read');
   const params = await searchParams;
   const histories = await prisma.serviceCatalogRevision.findMany({ include: { serviceCatalog: { select: { code: true, active: true } } }, orderBy: [{ serviceCatalogId: 'asc' }, { version: 'desc' }] });
@@ -53,3 +54,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
     })}</div>
   </div>;
 }
+
+export default withTechnicalPage("/service-catalog", Page);

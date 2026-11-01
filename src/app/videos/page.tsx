@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { PageHeader, EmptyState } from '@/components/ui';
 import { requireSession } from '@/lib/auth';
@@ -5,7 +6,7 @@ import { prisma } from '@/lib/prisma';
 import { listVideos } from '@/lib/video-library';
 import { recordUpdatePermission } from '@/lib/record-update-context';
 export const dynamic = 'force-dynamic';
-export default async function Page({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const session = await requireSession(), { q = '' } = await searchParams;
   const rows = await listVideos(prisma, session, q.slice(0, 160));
   return <div className="crm-space-y-6 min-w-0"><PageHeader title="Video" description="Formazione e istruzioni operative condivise con il tuo profilo."/>
@@ -17,3 +18,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ q
     </article>)}</div> : <EmptyState title="Nessun video disponibile">Qui compaiono soltanto i video pubblicati per te e ancora accessibili.</EmptyState>}
   </div>;
 }
+
+export default withTechnicalPage("/videos", Page);

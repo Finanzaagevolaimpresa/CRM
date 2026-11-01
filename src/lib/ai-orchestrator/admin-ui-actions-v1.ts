@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -84,6 +85,7 @@ function mutationResultCode(
 }
 
 export async function updateAiOrchestratorGlobalPolicyAction(formData: FormData) {
+  await assertTechnicalServerAction("admin-ui-actions-v1:updateAiOrchestratorGlobalPolicyAction");
   const session = await requirePermission('ai.orchestrator.read');
   const requestId = safeRequestId(formData);
   const globalTarget = getAiOrchestratorAdminControlTarget('GLOBAL', 'global');
@@ -142,6 +144,7 @@ export async function updateAiOrchestratorGlobalPolicyAction(formData: FormData)
 }
 
 export async function updateAiOrchestratorScopePolicyAction(formData: FormData) {
+  await assertTechnicalServerAction("admin-ui-actions-v1:updateAiOrchestratorScopePolicyAction");
   const session = await requirePermission('ai.orchestrator.read');
   const requestId = safeRequestId(formData);
   const safeTarget = safeScopeTarget(formData);
@@ -204,6 +207,7 @@ export async function updateAiOrchestratorScopePolicyAction(formData: FormData) 
 }
 
 export async function engageAiOrchestratorEmergencyStopAction(formData: FormData) {
+  await assertTechnicalServerAction("admin-ui-actions-v1:engageAiOrchestratorEmergencyStopAction");
   const session = await requirePermission('ai.orchestrator.read');
   const requestId = safeRequestId(formData);
 

@@ -12,7 +12,7 @@ function Confirm({ preview, file, action, recovery, edit }: { preview: NonNullab
   return <section className="min-w-0 space-y-3 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo deposito privato">
     <h2 className="text-xl font-bold">Conferma il deposito privato</h2><p className="break-words">{s.title} · {s.fileName} · {s.sizeBytes} byte</p>
     <p className="break-words">Scopo: {s.purpose}</p><p className="break-all text-sm">Impronta del file: {s.contentSha256}</p>
-    <p>Il file sarà disponibile nell’incarico a te e all’Admin personale autorizzato, finché i permessi restano validi. Nessun invio o condivisione con altri account.</p>
+    <p>L’Admin personale autorizzato riceverà il deposito privato. La consultazione tecnica richiede classificazione della versione e concessione esplicita; il deposito non concede accesso. Nessun invio esterno.</p>
     <button type="button" className="font-semibold underline" disabled={locked} onClick={edit}>Rivedi il file</button>
     <form action={submit} className="space-y-3" onSubmit={event => { event.preventDefault(); if (locked) return;
       const form = new FormData(event.currentTarget); form.set('file', file); rememberUpload('uploadDecision', preview.command.commandId);

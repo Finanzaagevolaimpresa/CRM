@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { randomUUID } from 'node:crypto';
@@ -9,7 +10,7 @@ import { prisma } from '@/lib/prisma';
 import { getAiAgentCategory, isPrimaryOperationalAiAgent, sortAiAgentsByCategory } from '@/lib/ai-agent-catalog';
 import { hasPermission, requirePermission } from '@/lib/auth';
 
-export default async function Page({ searchParams }: { searchParams?: Promise<{ supersedesRequestId?: string }> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<{ supersedesRequestId?: string }> }) {
   const session = await requirePermission('ai.review');
   const params = await searchParams;
   const agents = sortAiAgentsByCategory(await prisma.aiAgent.findMany({ orderBy: { name: 'asc' } }));
@@ -72,3 +73,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     </div>
   );
 }
+
+export default withTechnicalPage("/ai", Page);

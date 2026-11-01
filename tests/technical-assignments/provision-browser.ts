@@ -1,3 +1,4 @@
+import { ensureSyntheticTechnicalBytes } from '../technical-confidentiality-fixtures';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +8,6 @@ import { syntheticAuthority } from '../selective-sharing/fixtures';
 import { technicalFixture } from './fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
-import { localPathFromStoragePath } from '../../src/lib/storage';
 const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.TECHNICAL_BROWSER_CONFIRMED, '1');
@@ -17,11 +17,10 @@ async function main() {
   assert.deepEqual(await db.$queryRaw`SELECT id FROM "TechnicalAssignmentAuthority"`, []);
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash), rows = [];
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
-  for (let index = 0; index < 9; index++) {
+  for (let index = 0; index < 10; index++) {
     const f = await technicalFixture(db, admin, hash, index >= 3 ? 'consulente' : 'backoffice');
     for (const doc of f.documents) {
-      const dest = localPathFromStoragePath(doc.doc.storagePath);
-      await mkdir(path.dirname(dest), { recursive: true }); await writeFile(dest, doc.bytes, { flag: 'wx', mode: 0o600 });
+      await ensureSyntheticTechnicalBytes(db, doc.doc.storagePath, doc.bytes);
     }
     rows.push({ clientId: f.client.id, projectId: f.project.id, practiceId: f.practice.id, otherProjectId: f.otherProject.id,
       techA: { id: f.techA.user.id, email: f.techA.user.email }, techB: { id: f.techB.user.id, email: f.techB.user.email },

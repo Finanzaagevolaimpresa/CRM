@@ -237,19 +237,19 @@ test('technical updates are exact, audited and visible only in the original comm
   const receipt = await confirmTechnicalWork(db, f.techA.session, target, preview.command, preview.token, true);
   assert.equal(receipt.fieldCount, 1);
   const row = await db.technicalPractice.findUniqueOrThrow({ where: { id: f.practice.id } });
-  assert.equal(row.clientVisibleStatus, input.patch.clientVisibleStatus); assert.equal(row.internalNotes, f.practice.internalNotes);
+  assert.equal(row.targetPortal, input.patch.targetPortal); assert.equal(row.clientVisibleStatus, f.practice.clientVisibleStatus); assert.equal(row.internalNotes, f.practice.internalNotes);
   assert.equal(row.commercialOwnerId, f.salesA.user.id); assert.equal(row.technicalOwnerId, f.techA.user.id);
   const a = await readCommercialProgress(db, f.salesA.session, { client: f.client.id });
   assert.equal(a.items.length, 1);
   // The commercial projection exposes canonical progress, never technical free text.
-  assert.equal(JSON.stringify(a).includes(String(input.patch.clientVisibleStatus)), false);
+  assert.equal(JSON.stringify(a).includes(f.practice.clientVisibleStatus!), false);
   const statusInput = await workInput(db, f.techA, target, { status: 'in_progettazione' });
   const statusPreview = await previewTechnicalWork(db, f.techA.session, target, statusInput);
   const statusReceipt = await confirmTechnicalWork(db, f.techA.session, target, statusPreview.command, statusPreview.token, true);
   const progressed = await readCommercialProgress(db, f.salesA.session, { client: f.client.id });
   assert.equal(progressed.items[0].status, 'in_progettazione');
   assert.equal(progressed.items[0].statusLabel, 'In lavorazione');
-  assert.equal(JSON.stringify(progressed).includes(String(input.patch.clientVisibleStatus)), false);
+  assert.equal(JSON.stringify(progressed).includes(f.practice.clientVisibleStatus!), false);
   assert.deepEqual((await db.auditLog.findUniqueOrThrow({ where: { id: statusReceipt.commandId } })).after,
     { action: 'update_status', fieldCount: 1 });
   assert.equal(await workCount(target.targetId), 2n);
@@ -259,7 +259,7 @@ test('technical updates are exact, audited and visible only in the original comm
   assert.equal(JSON.stringify(bOwn).includes(f.practice.id), false);
   const audit = await db.auditLog.findUniqueOrThrow({ where: { id: receipt.commandId } });
   assert.deepEqual(audit.before, {}); assert.deepEqual(audit.after, { action: 'update_fields', fieldCount: 1 });
-  assert.equal(JSON.stringify(audit).includes(String(input.patch.clientVisibleStatus)), false);
+  assert.equal(JSON.stringify(audit).includes(f.practice.clientVisibleStatus!), false);
 });
 
 test('field allowlists and status operation cannot change owners, private notes, lifecycle or the exact preview', options, async () => {
@@ -293,14 +293,14 @@ test('concurrent exact double click commits once; retained outcome survives resp
 test('two technicians with previews of one version cannot overwrite each other; the second reload is explicit', options, async () => {
   const f = await fixture(), target = technicalTarget(f);
   await assignTechnical(db, admin, target, f.techA); await assignTechnical(db, admin, target, f.techB);
-  const ia = await workInput(db, f.techA, target, { clientVisibleStatus: 'Lavoro tecnico A' });
-  const ib = await workInput(db, f.techB, target, { clientVisibleStatus: 'Lavoro tecnico B' });
+  const ia = await workInput(db, f.techA, target, { protocolNumber: 'PROTOCOLLO-A' });
+  const ib = await workInput(db, f.techB, target, { protocolNumber: 'PROTOCOLLO-B' });
   const pa = await previewTechnicalWork(db, f.techA.session, target, ia), pb = await previewTechnicalWork(db, f.techB.session, target, ib);
   const settled = await Promise.allSettled([confirmTechnicalWork(db, f.techA.session, target, pa.command, pa.token, true),
     confirmTechnicalWork(db, f.techB.session, target, pb.command, pb.token, true)]);
   assert.equal(settled.filter(row => row.status === 'fulfilled').length, 1); assert.equal(await workCount(target.targetId), 1n);
   const row = await db.technicalPractice.findUniqueOrThrow({ where: { id: f.practice.id } });
-  assert(['Lavoro tecnico A', 'Lavoro tecnico B'].includes(row.clientVisibleStatus!));
+  assert(['PROTOCOLLO-A', 'PROTOCOLLO-B'].includes(row.protocolNumber!));
 });
 
 test('revocation blocks an already open mutation and exact document; retained minimal receipt does not restore access', options, async () => {
@@ -308,7 +308,7 @@ test('revocation blocks an already open mutation and exact document; retained mi
   await assignTechnical(db, admin, target, f.techA, { documents: [{ fileId: doc.version.id, allowDownload: true }] });
   const first = await workInput(db, f.techA, target), p = await previewTechnicalWork(db, f.techA.session, target, first);
   await confirmTechnicalWork(db, f.techA.session, target, p.command, p.token, true);
-  const next = await workInput(db, f.techA, target, { clientVisibleStatus: 'Stale future update' });
+  const next = await workInput(db, f.techA, target, { targetPortal: 'PORTALE-FUTURO' });
   const pending = await previewTechnicalWork(db, f.techA.session, target, next);
   await revokeTechnical(db, admin, target, f.techA);
   await assert.rejects(confirmTechnicalWork(db, f.techA.session, target, pending.command, pending.token, true));
@@ -396,14 +396,14 @@ test('project assignments are independent of practice grants and cannot open fin
   await assert.rejects(assignTechnical(db, admin, target, backoffice));
   await assignTechnical(db, admin, target, f.techA); await assignTechnical(db, admin, target, f.techB);
   const view = await readTechnicalWork(db, f.techB.session, target);
-  assert.deepEqual(view.fields.map(row => row.key), ['title', 'description', 'status']);
+  assert.deepEqual(view.fields.map(row => row.key), ['title', 'priority', 'status']);
   assert.equal(JSON.stringify(view).includes('SCENARIO_PRIVATO_NON_SELEZIONATO'), false);
   await assert.rejects(readTechnicalWork(db, f.techB.session, technicalTarget(f)));
-  const input = await workInput(db, f.techB, target, { description: 'Relazione tecnica sintetica aggiornata' });
+  const input = await workInput(db, f.techB, target, { title: 'Progetto sintetico aggiornato' });
   const p = await previewTechnicalWork(db, f.techB.session, target, input);
   await confirmTechnicalWork(db, f.techB.session, target, p.command, p.token, true);
   const row = await db.project.findUniqueOrThrow({ where: { id: f.project.id } });
-  assert.equal(row.description, input.patch.description); assert.equal(row.scenarioA, f.project.scenarioA);
+  assert.equal(row.title, input.patch.title); assert.equal(row.description, f.project.description); assert.equal(row.scenarioA, f.project.scenarioA);
   assert.equal(row.consultantId, f.techA.user.id); assert.equal(row.clientId, f.client.id);
 });
 

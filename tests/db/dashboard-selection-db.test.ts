@@ -32,23 +32,27 @@ test('lead preview narrows the count predicate and excludes deleted, different-s
   } finally { await prisma.lead.deleteMany({ where: { id: { startsWith: prefix + 'lead-' } } }); }
 });
 
-test('review preview scans beyond an inaccessible page and matches complete count and parent coherence', { skip: !run }, async () => {
+test('authorized commercial review scans beyond an inaccessible page; technical profiles remain denied', { skip: !run }, async () => {
   const client = prefix + 'client', project = prefix + 'project', other = prefix + 'project-other';
+  const reviewer: AuthSession = { ...actor, role: 'commerciale', permissionOverrides: [{ permission: 'dossier.read', allowed: true }] };
   try {
-    await prisma.client.create({ data: { id: client, type: 'societa', displayName: 'Synthetic review parent', consultantId: actor.userId } });
-    await prisma.project.createMany({ data: [{ id: project, clientId: client, title: 'Visible synthetic project', consultantId: actor.userId }, { id: other, clientId: client, title: 'Excluded synthetic project', consultantId: prefix + 'other' }] });
+    await prisma.client.create({ data: { id: client, type: 'societa', displayName: 'Synthetic review parent', salesOwnerId: reviewer.userId } });
+    await prisma.project.createMany({ data: [{ id: project, clientId: client, title: 'Visible synthetic project', consultantId: null }, { id: other, clientId: client, title: 'Excluded synthetic project', consultantId: prefix + 'other' }] });
     const base = { clientId: client, status: 'da_revisionare' as const };
     await prisma.preAnalysis.createMany({ data: [
       ...Array.from({ length: 101 }, (_, i) => ({ ...base, id: `${prefix}analysis-a${String(i).padStart(3, '0')}`, projectId: other })),
       ...[1, 2, 3].map(i => ({ ...base, id: `${prefix}analysis-z${i}`, projectId: project })),
       { ...base, id: prefix + 'analysis-dangling', projectId: prefix + 'absent' },
     ] });
-    assert.equal((await countAccessibleDashboardDossiers(actor)).preReview, 3);
-    const preview = await loadDashboardReviewDetail(actor);
+    const technician = { ...reviewer, role: 'consulente' as const };
+    assert.equal((await countAccessibleDashboardDossiers(technician)).preReview, 0);
+    assert.deepEqual(await loadDashboardReviewDetail(technician), []);
+    assert.equal((await countAccessibleDashboardDossiers(reviewer)).preReview, 3);
+    const preview = await loadDashboardReviewDetail(reviewer);
     assert.equal(preview.length, 3); assert(preview.every(row => row.title === 'Visible synthetic project'));
     await prisma.project.update({ where: { id: project }, data: { consultantId: prefix + 'other' } });
-    assert.deepEqual(await loadDashboardReviewDetail(actor), []);
-    assert.equal((await countAccessibleDashboardDossiers(actor)).preReview, 0);
+    assert.deepEqual(await loadDashboardReviewDetail(reviewer), []);
+    assert.equal((await countAccessibleDashboardDossiers(reviewer)).preReview, 0);
   } finally {
     await prisma.preAnalysis.deleteMany({ where: { id: { startsWith: prefix + 'analysis-' } } });
     await prisma.project.deleteMany({ where: { id: { in: [project, other] } } });

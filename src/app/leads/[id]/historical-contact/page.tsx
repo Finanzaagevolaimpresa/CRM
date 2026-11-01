@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requirePermission } from '@/lib/auth';
@@ -9,7 +10,7 @@ import { readHistoricalLeadContactManagement } from '@/lib/commercial-lead-histo
 import { prepareHistoricalContactAction, saveHistoricalContactAction, checkHistoricalContactAction } from '@/lib/commercial-lead-historical-actions';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ historicalContactCommand?: string | string[] }>;
 }) {
   const session = await requirePermission('lead.read'), { id } = await params, query = await searchParams;
@@ -34,3 +35,5 @@ export default async function Page({ params, searchParams }: {
       previewAction={prepareHistoricalContactAction} confirmAction={saveHistoricalContactAction} outcomeAction={checkHistoricalContactAction} />
   </div>;
 }
+
+export default withTechnicalPage("/leads/[id]/historical-contact", Page);

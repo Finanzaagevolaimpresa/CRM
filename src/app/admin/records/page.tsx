@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -5,7 +6,7 @@ import { requireSession } from '@/lib/auth';
 import { recordUpdatePermission } from '@/lib/record-update-context';
 import { adminRecordCatalogue } from '@/lib/admin-record-catalogue';
 import { Card, PageHeader } from '@/components/ui';
-export default async function Page() {
+  async function Page() {
   const session = await requireSession(); if (session.role !== 'admin') notFound();
   const policies = adminRecordCatalogue.filter(policy => recordUpdatePermission(session, policy.permission));
   return <div className="crm-space-y-6"><PageHeader title="Controllo Admin" description="Correggi i dati operativi, gestisci i collegamenti e ritrova le rettifiche conservate per ogni scheda." />
@@ -18,3 +19,5 @@ export default async function Page() {
     </Card>)}
   </div>;
 }
+
+export default withTechnicalPage("/admin/records", Page);

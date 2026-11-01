@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { randomUUID } from 'node:crypto';
@@ -10,7 +11,7 @@ import { prisma } from '@/lib/prisma';
 import { readLeadEditingManagement } from '@/lib/selective-lead-edit-management';
 import { prepareLeadEditingAccess, confirmLeadEditingAccess, revokeLeadEditingAccess, checkLeadEditingDecision } from '@/lib/selective-lead-edit-actions';
 
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ editDecisionId?: string }>;
 }) {
   const session = await requirePermission('lead.read'), { id } = await params;
@@ -24,3 +25,5 @@ export default async function Page({ params, searchParams }: {
       confirmAction={confirmLeadEditingAccess} revokeAction={revokeLeadEditingAccess} receiptAction={checkLeadEditingDecision} /></Card>
   </div>;
 }
+
+export default withTechnicalPage("/leads/[id]/sharing/editing", Page);

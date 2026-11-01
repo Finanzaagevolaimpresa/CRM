@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
@@ -7,11 +8,13 @@ import type { OrdinaryEmailPreviewResult, OrdinaryEmailRefusalResult, OrdinaryEm
 
 // No action creates authority or qualifies transport. M4 and preview do not send.
 export async function previewOrdinaryEmailAction(input: unknown): Promise<OrdinaryEmailPreviewResult> {
+  await assertTechnicalServerAction("ordinary-email-actions:previewOrdinaryEmailAction");
   try { return { status: 'READY', preview: await previewOrdinaryEmailFromRequest(input) }; }
   catch (error) { unstable_rethrow(error); return { status: 'UNAVAILABLE' }; }
 }
 
 export async function rejectOrdinaryEmailAction(input: unknown): Promise<OrdinaryEmailRefusalResult> {
+  await assertTechnicalServerAction("ordinary-email-actions:rejectOrdinaryEmailAction");
   try {
     const result = await rejectOrdinaryEmailFromRequest(input);
     revalidatePath('/communications');
@@ -25,6 +28,7 @@ export async function rejectOrdinaryEmailAction(input: unknown): Promise<Ordinar
 }
 
 export async function confirmOrdinaryEmailAction(input: unknown): Promise<OrdinaryEmailSendResult> {
+  await assertTechnicalServerAction("ordinary-email-actions:confirmOrdinaryEmailAction");
   try {
     const result = await confirmOrdinaryEmailFromRequest(input);
     revalidatePath('/communications');

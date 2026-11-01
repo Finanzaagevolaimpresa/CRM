@@ -1,4 +1,5 @@
 'use server';
+import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
@@ -10,6 +11,7 @@ import { clientProfileFields, companyProfileFields, leadProfileFields, personPro
 
 export type ProfileFormState = { error: string | null };
 export async function saveRecordProfileAction(_previous: ProfileFormState, form: FormData): Promise<ProfileFormState> {
+  await assertTechnicalServerAction("record-profile-actions:saveRecordProfileAction");
   const session = await requireSession();
   const kind = String(form.get('kind') ?? '');
   const fields = kind === 'lead' ? leadProfileFields : kind === 'client' ? clientProfileFields : kind.endsWith('company') ? companyProfileFields : personProfileFields;

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { notFound } from 'next/navigation';
@@ -9,7 +10,7 @@ import { prisma } from '@/lib/prisma';
 import { listTrashedLeads } from '@/lib/lead-lifecycle';
 import { parseCoreQueryPage } from '@/lib/core-query-policy';
 
-export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
   const session = await requirePermission('lead.read');
   if (session.role !== 'admin') notFound();
   const params = await searchParams ?? {};
@@ -36,3 +37,5 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     </nav>
   </div>;
 }
+
+export default withTechnicalPage("/leads/trash", Page);

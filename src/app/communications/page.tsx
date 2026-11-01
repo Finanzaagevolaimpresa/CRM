@@ -1,3 +1,5 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { OrdinaryEmailRecovery } from '@/components/ordinary-email-recovery';
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { z } from 'zod';
@@ -89,7 +91,7 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
     :<PreservedWorkflowForm action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>{fields}</PreservedWorkflowForm>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string; replaceDraft?: string; draftCommand?: string }> }) {
+  async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string; focus?: string; archived?: string; fileCommand?: string; fileId?: string; fileOperation?: string; replaceDraft?: string; draftCommand?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const pendingFile = query.fileCommand || query.fileId || query.fileOperation
     ? z.object({commandId:z.string().uuid(),id:z.string().uuid(),operation:z.enum(['UPLOAD','REVOKE'])}).strict()
@@ -180,6 +182,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <div role="region" aria-label="Testo del messaggio conservato" className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
+      {data.isAdmin && message.ordinaryReceipts.filter(receipt => ['RESERVED','CLAIMED','UNCERTAIN'].includes(receipt.state) || receipt.reconciliation).map(receipt =>
+        <OrdinaryEmailRecovery key={receipt.id} messageId={message.id} attemptId={receipt.id} />)}
       <div className="my-4 grid gap-4">
         {data.canWrite && message.operational && (!message.updateDeliveryId || message.updateDraft) && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
           key={`${message.id}-${message.currentRevision}-${message.snapshotHash}`} messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash}
@@ -222,3 +226,5 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     <p className="text-xs text-slate-500">Fino a 100 comunicazioni per pagina, filtrate per accesso. L’invio dal CRM richiede la conferma personale della versione esatta. L’accettazione SMTP non attesta consegna o lettura.</p>
   </div>;
 }
+
+export default withTechnicalPage("/communications", Page);

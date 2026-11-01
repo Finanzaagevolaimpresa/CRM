@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient, type RoleCode } from '@prisma/client';
+import { classifySyntheticTechnicalVersion } from '../technical-confidentiality-fixtures';
+import { syntheticSession } from '../selective-sharing/fixtures';
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -101,9 +103,67 @@ async function replayUpload(page: Page, request: CapturedUpload, fromId: string,
   }, data: data.replaceAll(fromId, toId) });
 }
 
-for (const role of roles) test(`${role}: foreign HTTP access is denied; enforced reassignment revokes old uploader in an open session`, async ({ browser }) => {
+async function technicalIsolation(browser: import('@playwright/test').Browser, f: Fixture) {
+  const ac = await browser.newContext({ baseURL: origin }), oc = await browser.newContext({ baseURL: origin });
+  const rc = await browser.newContext({ baseURL: origin });
+  const admin = await ac.newPage(), owner = await oc.newPage(), replacement = await rc.newPage();
+  // The synthetic fixture has an explicit project owner; no client-wide grant.
+  await db.project.update({ where: { id: f.projectId }, data: { consultantId: f.ownerId } });
+  await login(admin, 'admin'); await login(owner, f.role); await login(replacement, f.role + '-replacement');
+  expect((await owner.request.get('/clients/' + f.clientId)).status()).toBe(404);
+  await owner.goto('/projects/' + f.projectId); await expect(owner.getByText(f.tag + '-project', { exact: true })).toBeVisible();
+  await replacement.goto('/projects/' + f.projectId); await expect(replacement.getByText(f.tag + '-project', { exact: true })).toHaveCount(0);
+  await admin.goto('/documents');
+  const upload = admin.locator('form').filter({ has: admin.locator('input[type="file"]') });
+  await upload.locator('select[name="clientId"]').selectOption(f.clientId);
+  await upload.locator('select[name="projectId"]').selectOption(f.projectId);
+  await upload.locator('input[name="title"]').fill(f.tag + '-document');
+  const bytes = Buffer.from('Synthetic classified material for ' + f.tag);
+  await upload.locator('input[type="file"]').setInputFiles({ name: 'material.txt', mimeType: 'text/plain', buffer: bytes });
+  await upload.getByRole('checkbox').check(); await captureUpload(admin);
+  await upload.getByRole('button', { name: 'Carica in storage privato' }).click();
+  await expect.poll(() => db.document.count({ where: { title: f.tag + '-document' } })).toBe(1);
+  const document = await db.document.findFirstOrThrow({ where: { title: f.tag + '-document' } });
+  const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: document.id } });
+  await expect.poll(() => admin.evaluate(() => Boolean((window as Window & { isolationUpload?: CapturedUpload }).isolationUpload))).toBe(true);
+  const captured = await admin.evaluate(() => (window as Window & { isolationUpload?: CapturedUpload }).isolationUpload!);
+  expect((await owner.request.get('/documents/' + document.id + '/download')).status()).toBe(404);
+  if (mode === 'enforced') {
+    const user = await db.user.findUniqueOrThrow({ where: { id: adminId } });
+    await classifySyntheticTechnicalVersion(db, { user, ...await syntheticSession(db, user) }, version.id);
+    const admitted = await owner.request.get('/documents/' + document.id + '/download?versionId=' + version.id);
+    expect(admitted.status()).toBe(200); expect(await admitted.body()).toEqual(bytes);
+  }
+  expect((await replacement.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
+  const before = await db.document.count();
+  await replayUpload(owner, captured, f.clientId, f.clientId); expect(await db.document.count()).toBe(before);
+  for (const page of [owner, replacement]) {
+    for (const route of ['/notifications', '/documents', '/search?q=' + encodeURIComponent(f.tag)]) {
+      const response = await page.goto(route);
+      const html = await response!.text();
+      for (const suffix of ['offer', 'communication']) expect(html).not.toContain(f.tag + '-' + suffix);
+    }
+    for (const route of ['/clients/' + f.clientId + '/operational-report',
+      '/technical-office/practices/' + f.practiceId + '/operational-report',
+      '/commercial-offers/' + f.offerId]) expect((await page.request.get(route)).status()).toBe(404);
+  }
+  await admin.goto('/projects/' + f.projectId);
+  const assignment = admin.getByRole('form', { name: 'Assegna responsabili' });
+  await assignment.getByLabel('Responsabile tecnico').selectOption(f.replacementId);
+  await assignment.getByRole('button', { name: 'Salva responsabili' }).click();
+  await expect(assignment.getByRole('status')).toHaveText('Responsabili aggiornati.');
+  expect((await owner.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
+  expect((await replacement.request.get('/documents/' + document.id + '/download')).status()).toBe(mode === 'enforced' ? 200 : 404);
+  expect((await db.document.findUniqueOrThrow({ where: { id: document.id } })).uploadedById).toBe(adminId);
+  expect((await db.task.findUniqueOrThrow({ where: { id: f.taskId } })).createdById).toBe(f.ownerId);
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: f.checklistId } })).updatedById).toBe(f.ownerId);
+  await ac.close(); await oc.close(); await rc.close();
+}
+
+for (const role of roles) test(`${role}: foreign HTTP access is denied; reassignment and technical classification constrain the open session`, async ({ browser }) => {
   test.setTimeout(180_000);
   const f = fixtures.find(row => row.role === role)!;
+  if (role !== 'commerciale') { await technicalIsolation(browser, f); return; }
   const foreign = fixtures.find(row => row.role !== role)!;
   const ownerContext = await browser.newContext({ baseURL: origin }), replacementContext = await browser.newContext({ baseURL: origin });
   const owner = await ownerContext.newPage(), replacement = await replacementContext.newPage();

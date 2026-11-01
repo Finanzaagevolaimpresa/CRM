@@ -1,3 +1,5 @@
+import { isTechnicalAccount } from '@/lib/technical-confidentiality';
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -12,7 +14,7 @@ import { responsibilityAcceptance, responsibilityDecision, responsibilityKind } 
 import { UserFacingActionError } from '@/lib/action-errors';
 
 export const dynamic = 'force-dynamic';
-export default async function Page({ params, searchParams }: {
+  async function Page({ params, searchParams }: {
   params: Promise<{ kind: string; id: string }>; searchParams: Promise<{ before?: string; q?: string; after?: string }>;
 }) {
   const { kind: rawKind, id } = await params, query = await searchParams;
@@ -69,8 +71,10 @@ export default async function Page({ params, searchParams }: {
     </Card>}
     <Card title="Storico delle decisioni e conferme"><ol className="crm-space-y-3">{snapshots.map(({ row, decision, acceptance }) => <li key={row.id} className="rounded-xl border p-3">
       <p>{decision.success ? (decision.data.allowed ? 'Decisione amministrativa' : 'Variazione da riconfermare') : acceptance.success ? `Presa in carico ${acceptance.data.role}` : 'Registrazione da verificare'} · {nameOf(row.actorId)} · {formatDateTime(row.createdAt)}</p>
-      {decision.success && <><p>Commerciale: {nameOf(decision.data.state.commercialOwnerId)} · tecnico: {nameOf(decision.data.state.technicalOwnerId)} · reparto: {decision.data.departmentCode ?? 'Non indicato'}</p><p>{decision.data.reason}</p></>}
+      {decision.success && <><p>Commerciale: {nameOf(decision.data.state.commercialOwnerId)} · tecnico: {nameOf(decision.data.state.technicalOwnerId)} · reparto: {decision.data.departmentCode ?? 'Non indicato'}</p>{!isTechnicalAccount(session) && <p>{decision.data.reason}</p>}</>}
       {acceptance.success && <p>Conferma riferita alla decisione {acceptance.data.decisionId}</p>}
     </li>)}</ol>{data.next && <Link href={`${path}?${new URLSearchParams({ before: data.next })}`}>Eventi precedenti</Link>}</Card>
   </div>;
 }
+
+export default withTechnicalPage("/assignments/[kind]/[id]", Page);

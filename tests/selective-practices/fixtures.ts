@@ -14,16 +14,16 @@ export function practiceProof(person: PracticePerson, nowSeconds?: number) {
 export async function selectivePracticeFixture(db: PrismaClient, admin: PracticePerson, role: RoleCode = 'admin', passwordHash?: string) {
   const reader = await syntheticPerson(db, 'Destinatario pratica sintetico', role, passwordHash);
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Cliente sintetico ' + randomUUID(),
-    salesOwnerId: reader.user.id, consultantId: reader.user.id, notes: 'CLIENTE_PRIVATO_' + randomUUID() } });
+    salesOwnerId: reader.user.id, consultantId: ['admin', 'consulente', 'backoffice'].includes(role) ? reader.user.id : null, notes: 'CLIENTE_PRIVATO_' + randomUUID() } });
   const project = await db.project.create({ data: { clientId: client.id, title: 'Progetto sintetico ' + randomUUID() } });
   const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id,
     title: 'Pratica sintetica ' + randomUUID(), practiceType: 'Sintetica', targetEntity: 'Ente sintetico',
-    technicalOwnerId: reader.user.id, commercialOwnerId: reader.user.id, createdById: admin.user.id,
+    technicalOwnerId: ['admin', 'consulente', 'backoffice'].includes(role) ? reader.user.id : null, commercialOwnerId: reader.user.id, createdById: admin.user.id,
     dueDate: new Date('2026-12-01T12:00:00Z'), clientVisibleStatus: 'Stato sintetico',
     internalNotes: 'NOTA_PRIVATA_SINTETICA_' + randomUUID() } });
   const other = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id,
     title: 'Altra pratica sintetica ' + randomUUID(), practiceType: 'Sintetica', targetEntity: 'Ente sintetico',
-    technicalOwnerId: reader.user.id, createdById: admin.user.id } });
+    technicalOwnerId: ['admin', 'consulente', 'backoffice'].includes(role) ? reader.user.id : null, createdById: admin.user.id } });
   const input = { practiceId: practice.id, recipientId: reader.user.id, revision: 0, commandId: randomUUID(),
     fields: ['title','status'], expiresAt: null as string | null };
   return { admin, reader, client, project, practice, other, input };

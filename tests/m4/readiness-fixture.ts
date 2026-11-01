@@ -6,7 +6,7 @@ import { prepareServiceCatalogV2 } from '../../src/lib/service-catalog-v2-persis
 export async function readinessCommunicationFixture(db: PrismaClient, clientOwnerId: string, leadOwnerId: string) {
   await prepareServiceCatalogV2(db);
   const catalog = await db.serviceCatalogRevision.findFirstOrThrow({ where: { serviceCatalog: { code: 'dossier_preanalisi' }, status: 'PUBLISHED' }, orderBy: { version: 'desc' } });
-  const client = await db.client.create({ data: { type: 'societa', displayName: 'M4 shared client', consultantId: clientOwnerId } });
+  const client = await db.client.create({ data: { type: 'societa', displayName: 'M4 shared client', salesOwnerId: clientOwnerId } });
   const lead = await db.lead.create({ data: { firstName: 'Test', lastName: 'M4 lead', clientId: client.id, assignedToId: leadOwnerId } });
   const intake = await db.controlledIntake.create({ data: { channel: 'EMAIL', sourceId: randomUUID(), sourceOccurredAt: new Date(),
     acquisitionMode: 'MANUAL_CONTROLLED', mappingVersion: 'm4-synthetic-v1', payloadHash: randomBytes(32).toString('hex'), leadId: lead.id,

@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -13,7 +14,7 @@ export const dynamic = 'force-dynamic';
 const states = { SCHEDULED: 'Programmato', AVAILABLE: 'Disponibile nel CRM', READ: 'Letto nel CRM',
   SUPPRESSED: 'Sospeso: attività, destinatari o permessi non più conformi', CANCELED: 'Annullato' } as const;
 const time = (value: string) => new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'long', timeStyle: 'short' }).format(new Date(value));
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>;
+  async function Page({ params, searchParams }: { params: Promise<{ id: string }>;
   searchParams: Promise<{ cancelDecision?: string }> }) {
   const session = await requireSession(), ref = z.object({ id: z.string().uuid() }).safeParse(await params);
   const query = z.object({ cancelDecision: z.string().uuid().optional() }).safeParse(await searchParams);
@@ -42,3 +43,5 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <CancelRecordReminder reminderCommandId={row.commandId} resumeCommandId={query.data.cancelDecision}/></>}
   </div>;
 }
+
+export default withTechnicalPage("/notifications/reminders/[id]", Page);

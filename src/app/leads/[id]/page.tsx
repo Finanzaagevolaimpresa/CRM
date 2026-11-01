@@ -1,3 +1,4 @@
+import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { mayManageLeadSharing } from '@/lib/selective-lead-access';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { LeadLifecycleControls } from "@/components/lead-lifecycle-controls";
@@ -19,7 +20,7 @@ const label = (value: string) => value === 'sito' ? 'Sito web' : value.replaceAl
 const noteValue = (notes: string | null, label: string) => notes?.split('\n').find((row) => row.startsWith(`${label}: `))?.slice(label.length + 2);
 const money = (value: unknown) => `€ ${Number(value).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default async function Page({params}:{params:Promise<{id:string}>}){
+  async function Page({params}:{params:Promise<{id:string}>}){
   const session = await requirePermission('lead.read');
   const {id}=await params;
   const lead = await prisma.lead.findFirst({where:{id,deletedAt:null,AND:[leadVisibilityWhere(session)]}});
@@ -66,3 +67,5 @@ export default async function Page({params}:{params:Promise<{id:string}>}){
     <Card title="Note interne"><p className="whitespace-pre-wrap text-sm text-fai-gray">{lead.notes??'Nessun dato presente'}</p></Card>
   </div>;
 }
+
+export default withTechnicalPage("/leads/[id]", Page);

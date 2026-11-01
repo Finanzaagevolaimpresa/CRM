@@ -1,3 +1,4 @@
+import { assertTechnicalFileRoute } from '@/lib/technical-server-guards';
 import { NextResponse } from 'next/server';
 import { unstable_rethrow } from 'next/navigation';
 import { requireAnyPermission } from '@/lib/auth';
@@ -7,6 +8,7 @@ import { readStoredOrdinaryAttachment } from '@/lib/ordinary-email-attachment';
 
 export const dynamic = 'force-dynamic';
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; ordinal: string }> }) {
+  await assertTechnicalFileRoute("/communications/replies/[id]/attachments/[ordinal]");
   try {
     const session = await requireAnyPermission(['practice_communications.read','communications.internal.read']);
     assertOrdinaryEmailRequestOrigin({ origin: request.headers.get('origin'), secFetchSite: request.headers.get('sec-fetch-site') }, process.env);
