@@ -483,7 +483,8 @@ test('Admin reopens the exact retained grant and replaces only chosen fields whi
   const admin = await ac.newPage(), tech = await tc.newPage();
   await login(admin, f.adminEmail, true); await assign(admin, row, row.techA);
   await admin.goto(management(row) + '?recipient=' + row.techA.id);
-  const saved = JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).selection;
+  const opened = JSON.parse(await admin.locator('input[name="command"]').first().inputValue());
+  const saved = opened.selection;
   const n = await assignments(row);
   await expect(admin.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
   await expect(admin.getByLabel('Titolo', { exact: true })).toBeChecked();
@@ -504,6 +505,8 @@ test('Admin reopens the exact retained grant and replaces only chosen fields whi
   await admin.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
   await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
   await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+  expect(JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).expectedRevision).toBe(opened.expectedRevision);
+  await expect(admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
   await admin.goto(management(row) + '?recipient=' + row.techA.id);
   const after = JSON.parse(await admin.locator('input[name="command"]').first().inputValue()).selection;
   expect(after.documents).toEqual(saved.documents); expect(after.expiresAt).toBe(saved.expiresAt);

@@ -130,6 +130,10 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const [original] = useState(() => retainedTechnicalAssignmentEditor({ kind: data.target.kind,
     recipientId: data.recipient?.id ?? null, assignmentId: data.currentAssignmentId,
     assignments: data.assignments, documents: data.documentOptions, workItems: data.workItemOptions }));
+  // Keep the draft bound to the revision it was opened from. Revalidation after
+  // saving must preserve the action receipt, never silently rebase old choices.
+  const [openedRevision] = useState(data.revision);
+  const revisionChanged = openedRevision !== data.revision;
   const [responsibility, setResponsibility] = useState<TechnicalAssignmentSelection['responsibility']>(original.responsibility);
   const [readable, setReadable] = useState<string[]>(original.readable), [editable, setEditable] = useState<string[]>(original.editable);
   const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>(original.actions);
@@ -148,7 +152,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const [revokeGeneration, setRevokeGeneration] = useState(0), [preparedRevokeGeneration, setPreparedRevokeGeneration] = useState(-1);
   const reference = data.recipient ? { ...data.target, recipientId: data.recipient.id } : null;
   const expiry = expires ? new Date(expires).getTime() : NaN;
-  const command = data.recipient ? { commandId, targetId: data.target.targetId, expectedRevision: data.revision,
+  const command = data.recipient ? { commandId, targetId: data.target.targetId, expectedRevision: openedRevision,
     expectedContextSha256: data.contextSha256, expectedRecipientEpoch: data.recipient.epoch,
     selection: { kind: data.target.kind, userId: data.recipient.id, responsibility, actions: chosenActions,
       ...(chosenActions.includes('upload_document') ? { uploadProfile: uploadProfileFromChoices(uploadChoices) } : {}),
@@ -157,7 +161,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       workItems: selectedTechnicalWorkItemGrants(chosenItems, chosenActions) }, reason } : null;
   const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible
     && chosenActions.every(action => data.allowedActions.includes(action)) && technicalAssignmentCommand.safeParse(command).success;
-  const blocked = !ready || submitted || !!recoverCommandId;
+  const blocked = !ready || submitted || !!recoverCommandId || revisionChanged;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   // useActionState retains its previous response while preparing the next one.
   // Never render that old decision as the new preview, even for one frame.
@@ -175,6 +179,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       Catalogo non disponibile. Puoi consultare gli incarichi registrati e revocarli; ricarica per preparare un nuovo incarico.
     </p>}
     <p>Scegli una persona e il lavoro che potrà svolgere su questo record. Gli incarichi di altri tecnici e il referente commerciale restano distinti.</p>
+    {revisionChanged && !submitted && <p role="status">Gli incarichi sono cambiati mentre il modulo era aperto. Le scelte restano visibili, ma non possono sostituire la nuova revisione. <a className="font-semibold underline" href={`${technicalManagementPath(data.target)}?recipient=${encodeURIComponent(data.recipient?.id ?? '')}`}>Riapri gli incarichi correnti</a>.</p>}
     {resumption && <div className="space-y-3"><p role="status">{resumption.message}</p>
       {resumption.needsConfirmation && <InlinePrivilegedConfirmation />}</div>}
     <form method="get" action={technicalManagementPath(data.target)} className="space-y-3">
@@ -233,7 +238,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
           <label className="block font-semibold">Motivo della revoca<textarea className={control} required minLength={3} maxLength={500} value={revokeReason} onChange={event => { setRevokeReason(event.target.value); setRevokeGeneration(old => old + 1); }} /></label>
           <input type="hidden" name="operation" value="REVOKE" /><input type="hidden" name="reference" value={JSON.stringify(reference)} />
           <input type="hidden" name="command" value={JSON.stringify({ commandId: revokeCommandId, assignmentId: data.currentAssignmentId,
-            expectedRevision: data.revision, expectedContextSha256: data.contextSha256, reason: revokeReason })} />
+            expectedRevision: openedRevision, expectedContextSha256: data.contextSha256, reason: revokeReason })} />
           <button className={button}>Anteprima della revoca</button>
         </fieldset><p role="status">{revocation.message}</p>
       </form>}
