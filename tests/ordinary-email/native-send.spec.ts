@@ -157,7 +157,18 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
   expect(await panel(uncertain.id).count()).toBe(0);
   expect(await attempts(uncertain.id)).toBe(1);
 
-  const waitingRecovery = page.locator('[data-recovery-attempt]').filter({ hasText: 'Verifica e riconcilia' }).first();
+  // A missing observation is meaningful only after the exact claim expires.
+  // Poll the authoritative DB clock; no sleep assumption, state rewrite or send.
+  const [uncertainClaim] = await db.$queryRaw<Array<{ id: string }>>`SELECT a."id"
+    FROM "OrdinaryEmailAttempt" a JOIN "OrdinaryEmailClaim" c ON c."attemptId"=a."id"
+    WHERE a."messageId"=${uncertain.id}::uuid`;
+  expect(uncertainClaim?.id).toBeTruthy();
+  await expect.poll(async () => {
+    const [claim] = await db.$queryRaw<Array<{ expired: boolean }>>`SELECT "expiresAt"<=clock_timestamp() AS expired
+      FROM "OrdinaryEmailClaim" WHERE "attemptId"=${uncertainClaim.id}::uuid`;
+    return claim?.expired;
+  }, { timeout: 20_000, intervals: [100, 250, 500] }).toBe(true);
+  const waitingRecovery = page.locator('[data-recovery-attempt="'+uncertainClaim.id+'"]');
   await waitingRecovery.getByRole('button', { name: 'Verifica prova ed esito dello stesso tentativo' }).click();
   await expect(waitingRecovery).toContainText('Nessuna prova autorevole disponibile');
   expect(await state(uncertain.id)).toBe('UNCERTAIN');
