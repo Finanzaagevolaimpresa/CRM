@@ -164,16 +164,26 @@ test('a stale conversion form and a new conversion do not expose a client to a w
       db.client.update({ where: { id: f.client.id }, data: { leadId: lead.id, salesOwnerId: sales.id } }),
       db.lead.update({ where: { id: lead.id }, data: { clientId: f.client.id, status: 'vinto' } }),
     ]);
-    const response = page.waitForResponse(res => res.request().method() === 'POST' && res.url().endsWith(`/leads/${lead.id}`));
-    await convert.click();
-    const post = await response;
-    await expect(page.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
-    await expect(page).toHaveURL(new RegExp(`/leads/${lead.id}$`));
-    const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
-    expect((await post.text()) + JSON.stringify(post.headers())).not.toContain(client.id);
-    await expect(page.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
-    await expect(convert).toHaveCount(0);
-    expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
+    const captured: { post?: { body: string; headers: Record<string, string> } } = {};
+    const matchesLead = (url: URL) => url.pathname === `/leads/${lead.id}`;
+    await page.route(matchesLead, async route => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      // Read the actual server response before navigation releases Chromium's body buffer.
+      const post = await route.fetch({ maxRedirects: 0 });
+      const body = await post.text(); captured.post = { body, headers: post.headers() };
+      await route.fulfill({ response: post, body });
+    });
+    try {
+      await convert.click();
+      await expect(page.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`/leads/${lead.id}$`));
+      const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
+      expect(captured.post).toBeDefined();
+      expect(captured.post!.body + JSON.stringify(captured.post!.headers)).not.toContain(client.id);
+      await expect(page.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
+      await expect(convert).toHaveCount(0);
+      expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
+    } finally { await page.unroute(matchesLead); }
   }
 });
 
