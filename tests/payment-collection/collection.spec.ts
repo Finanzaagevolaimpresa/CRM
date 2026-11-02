@@ -62,7 +62,7 @@ test('Admin Incassato choice preserves its draft, opens the guarded flow and reo
   await page.goto(`/admin/records/Payment/${f.payment.id}`);
   const status = page.getByRole('combobox', { name: 'Stato', exact: true });
   await expect(status).toBeEnabled();
-  const notes = page.getByLabel('Note', { exact: true }), reason = page.getByLabel('Motivazione della correzione', { exact: true });
+  const notes = page.getByLabel('Note', { exact: true }), reason = page.getByRole('textbox', { name: 'Motivazione della correzione', exact: true });
   await notes.fill('Bozza sintetica non salvata'); await reason.fill('Motivo della bozza sintetica');
   await status.selectOption({ label: 'Incassato · Conferma pagamento' });
   await expect(page.getByRole('heading', { name: 'Conferma il pagamento per registrare Incassato', exact: true })).toBeVisible();
@@ -90,6 +90,7 @@ test('Admin Incassato choice preserves its draft, opens the guarded flow and reo
     expect(stored.status).toBe('incassato'); expect(stored.notes).not.toBe('Bozza sintetica non salvata');
     expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(1);
     await expect(notes).toHaveValue('Bozza sintetica non salvata');
+    await expect(reason).toHaveValue('Motivo della bozza sintetica');
   } finally { await collection.close(); }
 });
 
