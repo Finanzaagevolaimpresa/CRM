@@ -24,13 +24,14 @@ async function actor() {
 function failure(error: unknown) {
   const certain = error instanceof ZodError || error instanceof PaymentCollectionError || error instanceof RecordUpdateError
     || error instanceof SerializableConflictError || error instanceof ProjectUnavailableError;
+  const block = error instanceof PaymentCollectionError && error.code === 'CLOSED' ? error.block : null;
   const message = error instanceof PaymentCollectionError && error.code === 'CLOSED'
-    ? 'Il pagamento è già registrato, collegato o non disponibile per una nuova conferma. Verifica l’esito precedente; non creare una rata duplicata.'
+    ? block?.message ?? 'La rata non è disponibile per una nuova conferma. Verifica un eventuale comando in sospeso.'
     : error instanceof PaymentCollectionError && error.code === 'DOCUMENT'
       ? 'La prova non è disponibile nella versione verificata e nel contesto richiesti. Controlla il documento nel fascicolo.'
       : certain ? 'Dati o autorizzazioni cambiati. Riapri il modulo e verifica la data effettiva, il contratto e il documento.'
         : 'Esito non confermato. Usa «Verifica esito» prima di ripetere la registrazione.';
-  return { ok: false as const, uncertain: !certain, message };
+  return { ok: false as const, uncertain: !certain, message, block };
 }
 export async function previewPaymentCollectionAction(raw: unknown) {
   await assertTechnicalServerAction("payment-collection-actions:previewPaymentCollectionAction");

@@ -3,11 +3,11 @@
 import Link from 'next/link';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { previewPaymentCollectionAction, confirmPaymentCollectionAction, verifyPaymentCollectionAction } from '@/lib/payment-collection-actions';
-import type { PaymentCollectionCommand, PaymentCollectionPreview } from '@/lib/payment-collection-contract';
+import type { PaymentCollectionBlock, PaymentCollectionCommand, PaymentCollectionPreview } from '@/lib/payment-collection-contract';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
 
 type Setup = { clientId: string; paymentId: string; client: string; contract: string; amount: string;
-  reconciliationOnly: boolean; documents: Array<{ id: string; title: string; version: number }> };
+  reconciliationOnly: boolean; block: PaymentCollectionBlock | null; documents: Array<{ id: string; title: string; version: number }> };
 const field = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-fai-blue px-5 py-3 font-semibold text-white disabled:opacity-50';
 const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
@@ -24,6 +24,9 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
   const [uncertainResponse, setUncertain] = useState(false), [message, setMessage] = useState('');
   const [result, setResult] = useState<{ clientId: string; paymentId: string } | null>(null);
   const [needsStepUp, setNeedsStepUp] = useState(false);
+  const [responseBlock, setResponseBlock] = useState<PaymentCollectionBlock | null>(null);
+  const block = responseBlock ?? setup.block;
+  const closed = setup.reconciliationOnly || block !== null;
   const busy = useRef(false), commandId = useRef<string | null>(null);
   const key = `fai-payment-collection:${setup.clientId}:${setup.paymentId}`;
   const saved = useSyncExternalStore(subscribe, () => {
@@ -34,7 +37,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
   function clear() { try { sessionStorage.removeItem(key); window.dispatchEvent(new Event('fai-payment-collection')); } catch { /* Keep in-memory outcome. */ } }
   function changed() { setPreview(null); setCommand(null); setConfirmed(false); setMessage(''); }
   async function prepare(event: React.FormEvent) {
-    event.preventDefault(); if (!ready || busy.current || uncertain || setup.reconciliationOnly) return;
+    event.preventDefault(); if (!ready || busy.current || uncertain || closed) return;
     const timestamp = new Date(date);
     if (!Number.isFinite(timestamp.getTime())) { setMessage('Inserisci la data e l’ora effettive dell’incasso.'); return; }
     busy.current = true; setPending(true); setConfirmed(false); setMessage('');
@@ -44,12 +47,12 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     try {
       const response = await previewPaymentCollectionAction(input);
       if (response.ok) { setCommand(input); setPreview(response.preview); }
-      else { setPreview(null); setMessage(response.message); }
+      else { setPreview(null); setResponseBlock(response.block); setMessage(response.block ? '' : response.message); }
     } catch { setMessage('Riepilogo non disponibile. Nessuna conferma di incasso è stata richiesta.'); }
     finally { busy.current = false; setPending(false); }
   }
   async function save() {
-    if (!ready || busy.current || uncertain || setup.reconciliationOnly || !preview || !command || !confirmed) return;
+    if (!ready || busy.current || uncertain || closed || !preview || !command || !confirmed) return;
     busy.current = true; setPending(true); setMessage('');
     try { sessionStorage.setItem(key, command.commandId); window.dispatchEvent(new Event('fai-payment-collection')); }
     catch {
@@ -60,7 +63,13 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
       const response = await confirmPaymentCollectionAction(command, preview.digest);
       if (response.ok) { setResult(response.result); clear(); }
       else if ('stepUpRequired' in response && response.stepUpRequired) { clear(); setNeedsStepUp(true); setMessage(response.message); }
-      else { setMessage(response.message); setUncertain(response.uncertain); if (!response.uncertain) { clear(); changed(); setMessage(response.message); } }
+      else {
+        setUncertain(response.uncertain);
+        if (!response.uncertain) { clear(); changed(); }
+        const rejection = 'block' in response ? response.block : null;
+        setResponseBlock(rejection);
+        setMessage(rejection ? '' : response.message);
+      }
     } catch { setUncertain(true); setMessage('La risposta non è arrivata. Verifica l’esito prima di ripetere la conferma.'); }
     finally { busy.current = false; setPending(false); }
   }
@@ -85,8 +94,11 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     {needsStepUp && <InlinePrivilegedConfirmation />}
     {message && <p role="status" className="rounded-xl bg-amber-50 p-4">{message}</p>}
     {uncertain && <div className="grid gap-3"><p>Una conferma precedente è da verificare.</p><button className={button} disabled={pending} onClick={verify}>Verifica esito</button></div>}
-    {setup.reconciliationOnly && <p className="rounded-xl bg-blue-50 p-4">Questa rata non è disponibile per una nuova conferma. Puoi verificare l’esito di una richiesta in sospeso oppure tornare all’elenco dei pagamenti.</p>}
-    {!setup.reconciliationOnly && !uncertain && <form onSubmit={prepare} aria-label="Conferma incasso" className="grid gap-4">
+    {block && <div role="status" className="grid gap-2 rounded-xl bg-blue-50 p-4">
+      <p>{block.message}</p>
+      <Link className="w-fit font-semibold text-fai-blue underline" href={block.href}>{block.linkLabel}</Link>
+    </div>}
+    {!closed && !uncertain && <form onSubmit={prepare} aria-label="Conferma incasso" className="grid gap-4">
       <fieldset disabled={!ready || pending || uncertain} className="grid min-w-0 gap-4">
         <label className="grid gap-1 font-semibold">Data e ora effettive dell’incasso<input className={field} type="datetime-local" value={date} required onChange={e => { setDate(e.target.value); changed(); }} /></label>
         <div className="grid gap-1 font-semibold"><label htmlFor="collection-proof">Prova dell’incasso</label>
@@ -95,7 +107,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
         <button className={button} type="submit" disabled={!setup.documents.length}>Controlla riepilogo</button>
       </fieldset>
     </form>}
-    {!setup.reconciliationOnly && !uncertain && preview && <section aria-label="Riepilogo incasso" className="grid gap-4 rounded-2xl border border-fai-blue/30 bg-blue-50 p-5">
+    {!closed && !uncertain && preview && <section aria-label="Riepilogo incasso" className="grid gap-4 rounded-2xl border border-fai-blue/30 bg-blue-50 p-5">
       <h2 className="text-xl font-bold">Riepilogo prima della conferma</h2>
       <dl className="grid gap-2 break-words"><div><dt className="font-semibold">Cliente</dt><dd>{preview.client}</dd></div>
         <div><dt className="font-semibold">Incarico</dt><dd>{preview.contract}</dd></div><div><dt className="font-semibold">Rata</dt><dd>€ {preview.amount}</dd></div>

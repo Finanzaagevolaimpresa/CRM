@@ -52,6 +52,51 @@ async function unpaid() {
   expect(p.status).toBe('da_incassare'); expect(p.collectedAt).toBeNull(); expect(p.accountingDocumentId).toBeNull();
   expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(0);
 }
+test('a linked lead opens its existing dossier only when that dossier is readable', async ({ page, browser }) => {
+  const sales = await db.user.create({ data: { role: 'commerciale', name: 'Commerciale sintetico', email: `lead-${f.tag}@example.test`.toLowerCase(), passwordHash: await bcrypt.hash(password, 4) } });
+  const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico', assignedToId: sales.id, status: 'vinto', clientId: f.client.id } });
+  await db.client.update({ where: { id: f.client.id }, data: { leadId: lead.id } });
+  await login(page, f.admin.email, false);
+  await page.goto(`/leads/${lead.id}`);
+  const dossier = page.getByRole('link', { name: 'Apri fascicolo cliente', exact: true });
+  await expect(dossier).toHaveAttribute('href', `/clients/${f.client.id}`);
+  await expect(page.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
+  await dossier.click(); await expect(page).toHaveURL(new RegExp(`/clients/${f.client.id}$`));
+  await expect(page.getByRole('heading', { name: `Fascicolo Cliente Interno - ${f.client.displayName}`, exact: true })).toBeVisible();
+  const salesContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3047' });
+  try {
+    const salesPage = await salesContext.newPage();
+    await login(salesPage, sales.email, false); await salesPage.goto(`/leads/${lead.id}`);
+    await expect(salesPage.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
+    await expect(salesPage.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
+    await expect(salesPage.getByText(f.client.displayName, { exact: true })).toHaveCount(0);
+    await expect(salesPage.locator('input[name="clientId"]')).toHaveCount(0);
+    await expect(salesPage.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
+  } finally { await salesContext.close(); }
+  await db.client.update({ where: { id: f.client.id }, data: { deletedAt: new Date() } });
+  await page.goto(`/leads/${lead.id}`); await expect(dossier).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
+  expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
+});
+
+test('the same contract explains a closed setup and a closure between preview and confirmation', async ({ page }) => {
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'da_preparare', signedAt: null, signedDocumentId: null } });
+  await login(page); await page.goto(`/payments/${f.payment.id}/collection`);
+  const link = page.getByRole('link', { name: 'Apri il contratto collegato', exact: true });
+  await expect(page.getByRole('status')).toContainText('Il contratto collegato risulta «da preparare»');
+  await expect(link).toHaveAttribute('href', `/contracts/${f.contract.id}`);
+  await expect(page.getByRole('form', { name: 'Conferma incasso' })).toHaveCount(0);
+  await link.click(); await expect(page.getByRole('heading', { name: 'Dati contratto', exact: true })).toBeVisible();
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'firmato', signedAt: new Date(Date.now() - 60_000), signedDocumentId: f.documents[0].id } });
+  await page.goto(`/payments/${f.payment.id}/collection`); await prepare(page);
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'non_firmato', signedAt: null, signedDocumentId: null } });
+  await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Il contratto collegato risulta «non firmato»');
+  await expect(link).toHaveAttribute('href', `/contracts/${f.contract.id}`);
+  await expect(page.getByRole('form', { name: 'Conferma incasso' })).toHaveCount(0);
+  await unpaid();
+});
+
 test('desktop payment entry to exact collection preview; double click commits once', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 }); await login(page);
   await page.goto('/payments'); await page.locator(`a[href="/payments/${f.payment.id}/collection"]`).click();
@@ -123,6 +168,7 @@ test('lost response and reload reconcile the collected payment without another w
   await expect(page.getByRole('button', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
   await page.reload(); await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await expect(page.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Questa rata risulta già incassata.', { exact: true })).toBeVisible();
   await screenshot(page, 'mobile-reconciliation');
   await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Incasso registrato', exact: true })).toBeVisible();
@@ -135,8 +181,13 @@ test('permission revocation after preview and direct technician URL deny collect
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Dati o autorizzazioni cambiati'); await unpaid();
   const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3047' }), other = await context.newPage();
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'da_preparare', signedAt: null, signedDocumentId: null } });
   await login(other, f.tech.email, false); await other.goto(`/payments/${f.payment.id}/collection`);
-  await expect(other.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0); await context.close();
+  await expect(other.getByText('404', { exact: true })).toBeVisible();
+  await expect(other.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
+  await expect(other.getByRole('link', { name: 'Apri il contratto collegato' })).toHaveCount(0);
+  await expect(other.getByText(/Il contratto collegato risulta/)).toHaveCount(0);
+  await context.close();
 });
 test('new proof version after preview is rejected with no financial update', async ({ page }) => {
   await login(page); await prepare(page);

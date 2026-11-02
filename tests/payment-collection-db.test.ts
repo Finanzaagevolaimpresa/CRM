@@ -5,6 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { collectionFixture, collectionKey } from './payment-collection/fixture';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
+import { PaymentCollectionError, type PaymentCollectionBlock } from '../src/lib/payment-collection-contract';
 import { previewPaymentCollection, confirmPaymentCollection, paymentCollectionSetup, readPaymentCollectionReceipt } from '../src/lib/payment-collection';
 import { previewServiceRegistration, confirmServiceRegistration } from '../src/lib/client-service-registration';
 import { previewPurchasedServiceHandoff, handoffPurchasedService } from '../src/lib/purchased-service-handoff';
@@ -134,19 +135,53 @@ test('a collected payment is not overwritten and remains available only for reco
   const before = await db.payment.findUnique({ where: { id: f.payment.id } });
   const setup = await paymentCollectionSetup(db, f.session, f.payment.id);
   assert.equal(setup.reconciliationOnly, true); assert.deepEqual(setup.documents, []);
+  assert.equal(setup.block?.reason, 'RECORDED');
+  assert.equal((await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId))?.paymentId, f.payment.id);
   await assert.rejects(previewPaymentCollection(db, f.session, { ...f.command, commandId: randomUUID() }));
   assert.deepEqual(await db.payment.findUnique({ where: { id: f.payment.id } }), before);
 });
 test('a payment already linked to a service cannot be rewritten behind the handoff', options, async () => {
   const f = await fixture();
   await db.clientService.create({ data: { clientId: f.client.id, serviceCatalogId: f.catalog.id, contractId: f.contract.id, paymentId: f.payment.id } });
+  const setup = () => paymentCollectionSetup(db, f.session, f.payment.id);
+  assert.equal((await setup()).block?.reason, 'LINKED_SERVICE');
+  await db.userPermissionOverride.create({ data: { userId: f.admin.id, permission: 'service.read', allowed: false } });
+  const { block } = await setup();
+  assert.equal(block?.reason, 'UNAVAILABLE');
+  assert.ok(!block?.message.includes('servizio')); assert.equal(block?.href, `/clients/${f.client.id}#pagamenti`);
   await assert.rejects(preview(f)); await unchanged(f);
+});
+test('closed setup and write validation report the same first authorized reason on the original installment', options, async () => {
+  const f = await fixture(), originalPreview = await preview(f);
+  async function expectClosed(reason: PaymentCollectionBlock['reason']) {
+    const { block, reconciliationOnly, documents } = await paymentCollectionSetup(db, f.session, f.payment.id);
+    assert.equal(reconciliationOnly, true); assert.deepEqual(documents, []); assert.equal(block?.reason, reason);
+    const sameReason = (error: unknown) => error instanceof PaymentCollectionError && error.code === 'CLOSED'
+      && error.block?.reason === reason && error.block.href === block?.href;
+    await assert.rejects(preview(f), sameReason);
+    await assert.rejects(confirmPaymentCollection(db, f.session, f.command, originalPreview.digest, f.proof), sameReason);
+    assert.equal(await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId), null);
+    return block!;
+  }
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'da_preparare', signedAt: null, signedDocumentId: null } });
+  const unsigned = await expectClosed('CONTRACT_UNSIGNED');
+  assert.equal(unsigned.href, `/contracts/${f.contract.id}`); assert.match(unsigned.message, /da preparare/);
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'firmato' } });
+  assert.match((await expectClosed('SIGNATURE_DATE')).message, /manca la data/);
+  await db.contract.update({ where: { id: f.contract.id }, data: { signedAt: new Date(Date.now() + 86_400_000) } });
+  assert.match((await expectClosed('SIGNATURE_DATE')).message, /futura/);
+  await db.payment.update({ where: { id: f.payment.id }, data: { status: 'parziale' } });
+  assert.match((await expectClosed('PAYMENT_STATUS')).message, /parziale/);
+  await db.payment.update({ where: { id: f.payment.id }, data: { status: 'da_incassare', accountingDocumentId: f.documents[1].id } });
+  await expectClosed('EXISTING_EVIDENCE');
+  assert.equal(await db.payment.count({ where: { clientId: f.client.id } }), 1);
 });
 test('future date and invalid payment amount fail without any financial change', options, async () => {
   const f = await fixture();
   await assert.rejects(previewPaymentCollection(db, f.session, { ...f.command, collectedAt: new Date(Date.now() + 86400_000).toISOString() }));
   for (const amount of [0, -1, 123]) {
     await db.payment.update({ where: { id: f.payment.id }, data: { totalAmount: amount } });
+    assert.equal((await paymentCollectionSetup(db, f.session, f.payment.id)).block?.reason, 'AMOUNT');
     await assert.rejects(preview(f)); await unchanged(f);
   }
 });
