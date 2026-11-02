@@ -4,6 +4,8 @@ Da **Lead**, aprire la scheda. Se il lead è già collegato, il riquadro **Clien
 
 Se il collegamento è stato creato mentre il modulo di conversione era aperto, il CRM ricontrolla i permessi. Chi può convertire un lead ma non leggere il cliente torna al lead. Il comando non restituisce i dati del fascicolo.
 
+Se nel frattempo l’account ha assunto una funzione tecnica, il controllo sul suo ruolo, sui permessi e sugli incarichi correnti blocca la conversione prima della creazione del cliente.
+
 Da **Pagamenti**, scegliere **Conferma incasso** sulla rata esistente. Se il server trova un impedimento, il modulo mostra il primo requisito che manca e un link alla scheda pertinente. Ad esempio, un contratto in stato **da preparare** rimanda al contratto collegato. **Registra il contratto firmato** richiede la versione pertinente e il giorno di firma verificato. Una dichiarazione della firma e la registrazione della fonte firmata sono operazioni distinte.
 
 Per una rata ammissibile servono la data e l’ora effettive dell’accredito, la versione verificata della relativa prova nel fascicolo e la conferma personale dell’Admin. Il contratto firmato, le coordinate per il bonifico e una nota commerciale hanno funzioni diverse dalla prova dell’accredito. La registrazione nel CRM conserva la dichiarazione e la versione scelta.

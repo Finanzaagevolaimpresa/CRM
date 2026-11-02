@@ -6,7 +6,10 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { collectionFixture, collectionKey } from './payment-collection/fixture';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { PaymentCollectionError, type PaymentCollectionBlock } from '../src/lib/payment-collection-contract';
-import { convertedClientReference } from '../src/lib/lead-client-access';
+import { convertedClientReference, convertUnlinkedLeadToClient } from '../src/lib/lead-client-access';
+import { LeadLifecycleError } from '../src/lib/lead-lifecycle-lock';
+import { convertCommercialLeadInboxItem, initializeCommercialLeadInboxItem, recordCommercialLeadFirstResponse } from '../src/lib/commercial-lead-inbox';
+import { CommercialLeadInboxError } from '../src/lib/commercial-lead-inbox-contract';
 import { previewPaymentCollection, confirmPaymentCollection, paymentCollectionSetup, readPaymentCollectionReceipt } from '../src/lib/payment-collection';
 import { previewServiceRegistration, confirmServiceRegistration } from '../src/lib/client-service-registration';
 import { previewPurchasedServiceHandoff, handoffPurchasedService } from '../src/lib/purchased-service-handoff';
@@ -213,6 +216,59 @@ test('an archived service binding still blocks setup, preview and confirmation w
   await unchanged(f);
   await db.clientService.update({ where: { id: service.id }, data: { deletedAt: null } });
   assert.equal((await setup()).block?.reason, 'LINKED_SERVICE');
+});
+
+test('a newly technical actor cannot create or retrieve a client with the earlier sales session', options, async () => {
+  const f = await fixture(), sales = await syntheticPerson(db, 'Commerciale sintetico con funzione variabile', 'commerciale');
+  const lead = await db.lead.create({ data: { firstName: 'Cambio', lastName: 'Funzione', assignedToId: sales.user.id } });
+  const input = { id: lead.id, expectedVersion: lead.updatedAt.toISOString(), type: 'societa' as const };
+  const convert = () => convertUnlinkedLeadToClient(db, sales.session, input);
+  const actor = { userId: sales.user.id, sessionId: sales.session.sessionId! };
+  const inboxLead = await db.lead.create({ data: { firstName: 'Inbox', lastName: 'Sintetica',
+    assignedToId: sales.user.id, source: 'CRM', leadSource: 'manuale' } });
+  const inboxState = () => db.commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: inboxLead.id }, include: { slaCycles: true } });
+  let before: Awaited<ReturnType<typeof inboxState>>;
+  const inbox = () => convertCommercialLeadInboxItem(db, { leadId: inboxLead.id, expectedInboxVersion: before.version, clientType: input.type, actor });
+  const priorMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
+  process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+  async function deniedWithoutWriting() {
+    await assert.rejects(convert, (error: unknown) => error instanceof LeadLifecycleError && error.code === 'DENIED');
+    await assert.rejects(inbox, (error: unknown) => error instanceof CommercialLeadInboxError && error.code === 'N14_PERMISSION_DENIED');
+    assert.equal(await db.client.count({ where: { leadId: lead.id } }), 0);
+    assert.equal((await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).clientId, null);
+    assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } }), 0);
+    assert.equal(await db.client.count({ where: { leadId: inboxLead.id } }), 0);
+    assert.equal((await db.lead.findUniqueOrThrow({ where: { id: inboxLead.id } })).clientId, null);
+    assert.deepEqual(await inboxState(), before);
+  }
+  try {
+    const policy = await db.commercialLeadSlaPolicyVersion.findFirst({ where: { status: 'ACTIVE', policyCode: 'COMMERCIAL_FIRST_RESPONSE' } });
+    if (!policy) await db.commercialLeadSlaPolicyVersion.create({ data: { id: randomUUID(), policyCode: 'COMMERCIAL_FIRST_RESPONSE',
+      version: 1, status: 'ACTIVE', calendarCode: 'CONTINUOUS_24X7', timezoneCode: 'UTC', responseTargetSeconds: 3600, createdById: sales.user.id } });
+    const item = await initializeCommercialLeadInboxItem(db, { leadId: inboxLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE' });
+    await recordCommercialLeadFirstResponse(db, { leadId: inboxLead.id, actor, expectedInboxVersion: item.version });
+    before = await inboxState();
+    assert.equal(before.state, 'OPEN'); assert.ok(before.slaCycles[0].firstResponseAt); assert.equal(before.closedAt, null);
+    const override = await db.userPermissionOverride.create({ data: { userId: sales.user.id, permission: 'technical.write', allowed: true } });
+    await deniedWithoutWriting();
+    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: false } });
+    await db.user.update({ where: { id: sales.user.id }, data: { role: 'consulente' } });
+    await deniedWithoutWriting();
+    await db.user.update({ where: { id: sales.user.id }, data: { role: 'commerciale' } });
+    await db.client.update({ where: { id: f.client.id }, data: { consultantId: sales.user.id } });
+    await deniedWithoutWriting();
+    await db.client.update({ where: { id: f.client.id }, data: { consultantId: null } });
+    const result = await convert();
+    const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
+    assert.deepEqual(result, { id: client.id });
+    assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } }), 1);
+    const fromInbox = await inbox();
+    assert.equal((await db.client.findUniqueOrThrow({ where: { leadId: inboxLead.id } })).id, fromInbox.id);
+    assert.ok((await inboxState()).closedAt);
+  } finally {
+    if (priorMode === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE;
+    else process.env.COMMERCIAL_LEAD_INBOX_MODE = priorMode;
+  }
 });
 
 test('future date and invalid payment amount fail without any financial change', options, async () => {

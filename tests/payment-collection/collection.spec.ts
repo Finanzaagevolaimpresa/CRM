@@ -112,6 +112,24 @@ test('a stale conversion form and a new conversion do not expose a client to a w
   }
 });
 
+test('a sales form opened before acquisition of a technical function cannot convert the lead', async ({ page }) => {
+  const sales = await db.user.create({ data: { role: 'commerciale', name: 'Commerciale sintetico con nuova funzione',
+    email: `scope-${f.tag}@example.test`.toLowerCase(), passwordHash: await bcrypt.hash(password, 4) } });
+  const lead = await db.lead.create({ data: { firstName: 'Cambio', lastName: 'Perimetro', assignedToId: sales.id } });
+  await login(page, sales.email, false); await page.goto(`/leads/${lead.id}`);
+  const convert = page.getByRole('button', { name: 'Converti in cliente', exact: true });
+  await expect(convert).toBeVisible();
+  await db.userPermissionOverride.create({ data: { userId: sales.id, permission: 'technical.write', allowed: true } });
+  const pending = page.waitForResponse(res => res.request().method() === 'POST' && res.url().endsWith(`/leads/${lead.id}`));
+  await convert.click();
+  const response = await pending; await response.finished();
+  expect(response.headers()['x-action-redirect'] ?? '').not.toContain('/clients/');
+  expect(page.url()).not.toMatch(/\/clients\//);
+  expect(await db.client.count({ where: { leadId: lead.id } })).toBe(0);
+  expect((await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).clientId).toBeNull();
+  expect(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } })).toBe(0);
+});
+
 test('an archived service keeps the installment closed and points only to visible payments', async ({ page }) => {
   await db.clientService.create({ data: { clientId: f.client.id, contractId: f.contract.id, serviceCatalogId: f.catalog.id,
     paymentId: f.payment.id, deletedAt: new Date() } });
