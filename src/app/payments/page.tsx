@@ -41,18 +41,30 @@ import { prisma } from '@/lib/prisma';
   return <div className="crm-space-y-6">
     <PageHeader title="Pagamenti" description="Scadenze, incassi e note amministrative collegate ai contratti accessibili." />
     <AdminRecordShortcut session={session} model="Payment" />
-    {canWrite ? <Card title="Registra pagamento">
+    {session.role === 'admin' && canWrite && <Card title="Conferma pagamento">
+      <p>Per registrare <strong>Incassato</strong>, scegli <strong>Conferma pagamento · Incassato</strong> accanto alla rata già presente nell’elenco.</p>
+      <p className="mt-2">Il percorso richiede data e ora effettive, prova verificata e conferma personale. Se manca un requisito, indica il motivo e la scheda da aprire. Da incassare, scaduto e stornato non attestano un accredito.</p>
+    </Card>}
+    {canWrite ? <Card title="Crea rata da incassare">
       <form action={registerPaymentAndRefresh} className="grid gap-3 md:grid-cols-5">
         <select className="rounded-xl border p-3" name="contractId" required>{visibleContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.contractNumber}</option>)}</select>
         <select className="rounded-xl border p-3" name="clientId" required>{visibleClients.map((client) => <option key={client.id} value={client.id}>{client.displayName}</option>)}</select>
         <input className="rounded-xl border p-3" name="taxableAmount" type="number" min="0" step="0.01" placeholder="Imponibile" required />
         <input className="rounded-xl border p-3" name="vatAmount" type="number" min="0" step="0.01" placeholder="IVA" required />
         <input className="rounded-xl border p-3" name="totalAmount" type="number" min="0" step="0.01" placeholder="Totale" required />
-        <PrimaryButton type="submit" className="md:col-span-5">Registra pagamento</PrimaryButton>
+        <PrimaryButton type="submit" className="md:col-span-5">Crea rata da incassare</PrimaryButton>
       </form>
     </Card> : null}
     <Card title="Elenco operativo">
-      {visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pagamenti disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Totale', 'Metodo', 'Scadenza', 'Stato', 'Tracciabilità', 'Incasso']} rows={visibleItems.map((payment) => [clientById.get(payment.clientId)?.displayName ?? '—', `€ ${Number(payment.totalAmount).toLocaleString('it-IT')}`, payment.method ?? '—', formatDateTime(payment.dueDate), <StatusBadge status={payment.status} key="s" />, <MetaCell key="m" createdAt={payment.createdAt} updatedAt={payment.updatedAt} />, session.role === 'admin' && canWrite ? <Link key="collection" className="font-semibold text-fai-blue underline" href={`/payments/${payment.id}/collection`}>{payment.status === 'da_incassare' ? 'Conferma incasso' : 'Apri incasso'}</Link> : '—'])} />}
+      {visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pagamenti disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Conferma pagamento', 'Stato', 'Totale', 'Metodo', 'Scadenza', 'Tracciabilità']} rows={visibleItems.map((payment) => [
+        clientById.get(payment.clientId)?.displayName ?? '—',
+        session.role === 'admin' && canWrite ? <Link key="collection" className="font-semibold text-fai-blue underline" href={`/payments/${payment.id}/collection`}>
+          {['da_incassare', 'scaduto'].includes(payment.status) ? 'Conferma pagamento · Incassato' : 'Apri incasso e verifiche'}
+        </Link> : '—',
+        <StatusBadge status={payment.status} key="s" />, `€ ${Number(payment.totalAmount).toLocaleString('it-IT')}`,
+        payment.method ?? '—', formatDateTime(payment.dueDate),
+        <MetaCell key="m" createdAt={payment.createdAt} updatedAt={payment.updatedAt} />,
+      ])} />}
     </Card>
   </div>;
 }

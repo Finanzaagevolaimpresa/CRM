@@ -90,7 +90,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$PAYMENT_COLLECTION_EVIDENCE/playwright.json" npx playwright test --config tests/payment-collection/playwright.config.ts --reporter=line,json | tee "$PAYMENT_COLLECTION_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.PAYMENT_COLLECTION_EVIDENCE+"/playwright.json"); if(r.stats.expected!==12 || r.stats.unexpected!==0 || r.stats.flaky!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.PAYMENT_COLLECTION_EVIDENCE+"/playwright.json"); if(r.stats.expected!==14 || r.stats.unexpected!==0 || r.stats.flaky!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$PAYMENT_COLLECTION_EVIDENCE/source.txt"

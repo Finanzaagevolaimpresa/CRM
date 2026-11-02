@@ -88,6 +88,8 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
   if (result) return <section role="status" className="grid gap-4 rounded-2xl border border-green-300 bg-green-50 p-5">
     <h2 className="text-xl font-bold">Incasso registrato</h2>
     <p>La tua dichiarazione e la versione della prova sono registrate. Puoi ora collegare questa rata al servizio acquistato nel fascicolo.</p>
+    <p>Questa conferma ha registrato lo stato <strong>Incassato</strong>. Nell’elenco Pagamenti puoi verificare lo stato attuale, comprese eventuali rettifiche successive.</p>
+    <Link className="font-semibold underline" href="/payments">Apri pagamenti e verifica lo stato</Link>
     <Link className={button} href={`/clients/${result.clientId}#servizi-acquistati`}>Apri servizi acquistati</Link>
   </section>;
   return <div className="grid min-w-0 gap-5" data-testid="payment-collection-form" data-interactive-ready={ready}>

@@ -186,6 +186,7 @@ export type AdminRecordForm = { model: string; id: string; version: string; labe
   values: Record<string, string>; create: boolean; trash: boolean; deleted: boolean; guidance: string | null; href: string;
   relationships: { label: string; href: string }[]; restoringRevision: string | null;
   paymentCorrection?: boolean;
+  paymentCollection?: { href: string; recordedStatus: string };
   revokeDelivery?: boolean;
   noticeLifecycle?: { status: string; action: 'ACTIVATE' | 'RETIRE' | null; contentHash: string; effectiveFrom: string | null; retiredAt: string | null };
   history: { id: string; action: string; at: string; reason: string; actor: string; canRestore: boolean }[] };

@@ -11,9 +11,11 @@ import { operationalRomeTime } from '@/lib/operational-time';
 import { AdminReferenceSelect } from './admin-reference-select';
 
 const subscribe = () => () => {}, hydrated = () => true, server = () => false;
+const collectionChoice = '__confirm_payment_collection__';
 export function AdminRecordEditor({ data, commandId, recovering = false }: { data: AdminRecordForm; commandId: string; recovering?: boolean }) {
   const ready = useSyncExternalStore(subscribe, hydrated, server);
   const [values, setValues] = useState(data.values), [reason, setReason] = useState('');
+  const [collectionRequested, setCollectionRequested] = useState(false);
   const [evidenceVersionId, setEvidenceVersionId] = useState(''), [effectiveAt, setEffectiveAt] = useState(''), [declared, setDeclared] = useState(false);
   const [noticeReviewed, setNoticeReviewed] = useState(false);
   const [catalogBinding, setCatalogBinding] = useState<{ serviceId: string; serviceCode: string; hash: string; name: string; digitalProjectTypes: unknown; activeVersions: { version: number; name: string; contentHash: string }[] } | null>(null);
@@ -32,7 +34,9 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
     ? { ok: false, uncertain: true, message: 'Questo riferimento contiene un tentativo da verificare. Nessun salvataggio viene ripetuto automaticamente.' } : null);
   const [confirmedClose, setConfirmedClose] = useState(false);
   const [submitted, setSubmitted] = useState<AdminRecordCommand | null>(null);
-  const correctingPayment = data.paymentCorrection && operation === 'UPDATE' && values.status !== data.values.status;
+  const canRequestCollection = Boolean(data.paymentCollection && operation === 'UPDATE');
+  const routingToCollection = canRequestCollection && collectionRequested;
+  const correctingPayment = data.paymentCorrection && operation === 'UPDATE' && !routingToCollection && values.status !== data.values.status;
   const frozen = !ready || pending || Boolean(result?.uncertain || result?.ok || result?.closed);
   const fieldClass = 'block w-full rounded-xl border border-slate-300 bg-white p-3';
   const href = `/admin/records/${data.model}/${data.id}`;
@@ -42,7 +46,7 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
     window.history.replaceState(window.history.state, '', url);
   }
   async function submit(replay = false) {
-    if (!ready || pending || (result?.uncertain && !replay)) return;
+    if (!ready || pending || routingToCollection || (result?.uncertain && !replay)) return;
     if (!replay && needsContextMove && (!boundGraph || boundGraph.blocked.length || !graphConfirmed)) return;
     const command = replay && submitted ? submitted : { commandId, model: data.model, id: data.id, operation,
       expectedVersion: data.version, reason, values: operation === 'CREATE' || operation === 'UPDATE' ? values : {},
@@ -59,10 +63,16 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
   }
   return <div className="space-y-6">
     <nav className="flex flex-wrap gap-4"><Link className="underline" href={`/admin/records/${data.model}`}>Elenco</Link>
-      {data.href && !data.create && <Link className="underline" href={data.href}>Apri percorso operativo</Link>}
+      {data.href && !data.create && (data.model !== 'Payment' || !frozen) && <Link className="underline" href={data.href}
+        target={data.model === 'Payment' ? '_blank' : undefined} rel={data.model === 'Payment' ? 'noopener' : undefined}>
+        {data.model === 'Payment' ? data.paymentCollection ? 'Conferma pagamento · Incassato' : 'Apri incasso e verifiche' : 'Apri percorso operativo'}
+      </Link>}
       {!data.create && <Link className="underline" target="_blank" rel="noopener" href={href}>Confronta la scheda attuale in una nuova scheda</Link>}</nav>
     {data.model === 'ServiceCatalogRevision' && !data.create && <Link className="font-bold underline" href={`/admin/records/ServiceCatalogRevision/new?copyFrom=${data.id}`}>Prepara una nuova revisione da questi contenuti</Link>}
     {data.guidance && <p className="rounded-xl bg-slate-100 p-4">{data.guidance}</p>}
+    {data.model === 'Payment' && data.create && <p className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+      La nuova rata viene creata Da incassare. Dopo il salvataggio, riapri la scheda e scegli Incassato · Conferma pagamento per registrare l’accredito effettivo.
+    </p>}
     {data.noticeLifecycle && <p>Stato informativa: {data.noticeLifecycle.status}.
       {data.noticeLifecycle.effectiveFrom && ' Attiva dal ' + operationalRomeTime(data.noticeLifecycle.effectiveFrom) + '.'}
       {data.noticeLifecycle.retiredAt && ' Ritirata il ' + operationalRomeTime(data.noticeLifecycle.retiredAt) + '.'}</p>}
@@ -71,13 +81,14 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
     <form onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-5">
       <fieldset disabled={frozen} className="space-y-5">
         {!data.create && <label className="block font-semibold">Operazione<select aria-label="Operazione" className={fieldClass} value={operation}
-          onChange={event => setOperation(event.target.value as AdminRecordCommand['operation'])}>
+          onChange={event => { setCollectionRequested(false); setOperation(event.target.value as AdminRecordCommand['operation']); }}>
           {data.deleted ? <option value="RESTORE">Ripristina la scheda conservata</option> : <>
             {canUpdate && <option value="UPDATE">Correggi i dati operativi</option>}{data.revokeDelivery && <option value="UPDATE">Revoca questa autorizzazione di consegna</option>}
             {data.noticeLifecycle?.action && <option value="UPDATE">{data.noticeLifecycle.action === 'ACTIVATE' ? 'Attiva questa versione verificata' : 'Ritira questa versione'}</option>}<option value="RECTIFY">Registra una rettifica motivata nelle evidenze</option>
             {data.trash && <option value="TRASH">Sposta nel cestino recuperabile</option>}</>}
         </select></label>}
         {(operation === 'CREATE' || operation === 'UPDATE' || !canUpdate) && <div className="grid gap-4 md:grid-cols-2">{data.fields.filter(field => !publishingCatalog || !['operationalConditions','checklist'].includes(field.name)).map(field => {
+          const collectionField = field.name === 'status' && canRequestCollection;
           const change = (value: string) => setValues(current => ({ ...current, [field.name]: value,
             ...Object.fromEntries(data.fields.filter(other => other.dependsOn === field.name).map(other => [other.name, ''])) }));
           return <fieldset key={field.name} disabled={field.readOnly} className={['longtext', 'json'].includes(field.type) ? 'min-w-0 md:col-span-2' : 'min-w-0'}>
@@ -86,9 +97,16 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
               : field.type === 'date' ? <RomeDateTimeInput label={field.label} value={values[field.name]} onChange={change} required={field.required} className={fieldClass} />
               : <label className="block font-semibold">{field.label}
                 {field.type === 'boolean' ? <select aria-label={field.label} className={fieldClass} value={values[field.name]} onChange={event => change(event.target.value)}><option value="true">Sì</option><option value="false">No</option></select>
-                  : field.type === 'select' ? <select aria-label={field.label} className={fieldClass} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)}>
+                  : field.type === 'select' ? <select aria-label={field.label} className={fieldClass} required={field.required}
+                    value={collectionField && routingToCollection ? collectionChoice : values[field.name]} onChange={event => {
+                      if (collectionField && event.target.value === collectionChoice) { setCollectionRequested(true); return; }
+                      if (collectionField) setCollectionRequested(false);
+                      change(event.target.value);
+                    }}>
                     <option value="">Nessuna selezione</option>{field.options?.filter(option => !field.dependsOn || option.group === values[field.dependsOn])
-                      .map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+                      .map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    {collectionField && <option value={collectionChoice}>Incassato · Conferma pagamento</option>}
+                  </select>
                   : ['longtext', 'json'].includes(field.type) ? <textarea aria-label={field.label} className={fieldClass} rows={5} required={field.required} value={values[field.name]} onChange={event => change(event.target.value)} />
                     : <input aria-label={field.label} className={fieldClass} required={field.required} type={field.type === 'number' ? 'number' : 'text'}
                       step={field.type === 'number' ? 'any' : undefined} value={values[field.name]} onChange={event => change(event.target.value)} />}
@@ -97,6 +115,15 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
             {field.readOnly && <p className="text-sm">Valore storico conservato. Usa la rettifica o il percorso di nuova bozza indicato sopra.</p>}
           </fieldset>;
         })}</div>}
+
+        {routingToCollection && data.paymentCollection && <section aria-label="Conferma pagamento" className="space-y-3 rounded-xl border border-blue-300 bg-blue-50 p-4">
+          <h2 className="text-xl font-bold">Conferma il pagamento per registrare Incassato</h2>
+          <p>Stato all’apertura della scheda: <strong>{data.paymentCollection.recordedStatus.replaceAll('_', ' ')}</strong>. Questa scelta non ha ancora registrato un incasso.</p>
+          <p>Apri la conferma con i dati già salvati della rata, indica data e ora effettive, scegli la prova e controlla il riepilogo. Se manca un requisito, il CRM indica cosa verificare.</p>
+          <p>La conferma si apre in una nuova scheda. Le modifiche non salvate restano qui e non vengono usate per confermare l’incasso. Dopo la conferma, riapri i pagamenti per leggere lo stato aggiornato.</p>
+          {!frozen && <Link className="inline-block rounded-xl bg-blue-900 px-4 py-3 font-bold text-white" target="_blank" rel="noopener"
+            href={data.paymentCollection.href}>Apri conferma pagamento</Link>}
+        </section>}
 
         {needsContextMove && <section aria-label="Riepilogo del nuovo contesto" className="space-y-3 rounded-xl border border-amber-400 p-4">
           <h2 className="font-bold">Schede interessate dal cambio di contesto</h2>
@@ -152,7 +179,7 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
         {operation === 'TRASH' && <p>Il record e il suo contenuto vengono conservati per il ripristino. I collegamenti e le prove storiche non vengono ricreati.</p>}
         <label className="block font-semibold">Motivazione della correzione<textarea required minLength={3} maxLength={2000} className={fieldClass}
           value={reason} onChange={event => setReason(event.target.value)} /></label>
-        <button type="submit" disabled={(publishingCatalog && (!boundCatalog || !catalogConfirmed || !catalogContentReady)) || (needsContextMove && (!boundGraph || boundGraph.blocked.length > 0 || !graphConfirmed))} className="rounded-xl bg-blue-900 px-5 py-3 font-bold text-white disabled:opacity-50">{pending ? 'Registrazione…' : 'Salva operazione'}</button>
+        <button type="submit" disabled={routingToCollection || (publishingCatalog && (!boundCatalog || !catalogConfirmed || !catalogContentReady)) || (needsContextMove && (!boundGraph || boundGraph.blocked.length > 0 || !graphConfirmed))} className="rounded-xl bg-blue-900 px-5 py-3 font-bold text-white disabled:opacity-50">{pending ? 'Registrazione…' : 'Salva operazione'}</button>
       </fieldset>
     </form>
     {result && <p role="status" className="rounded-xl border p-4">{result.message}</p>}
