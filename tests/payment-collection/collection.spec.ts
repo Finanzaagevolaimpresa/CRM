@@ -122,7 +122,8 @@ test('a sales form opened before acquisition of a technical function cannot conv
   await db.userPermissionOverride.create({ data: { userId: sales.id, permission: 'technical.write', allowed: true } });
   const pending = page.waitForResponse(res => res.request().method() === 'POST' && res.url().endsWith(`/leads/${lead.id}`));
   await convert.click();
-  const response = await pending; await response.finished();
+  const response = await pending;
+  expect(response.status()).toBe(404);
   expect(response.headers()['x-action-redirect'] ?? '').not.toContain('/clients/');
   expect(page.url()).not.toMatch(/\/clients\//);
   expect(await db.client.count({ where: { leadId: lead.id } })).toBe(0);
