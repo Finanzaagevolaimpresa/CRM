@@ -67,7 +67,7 @@ test('Admin Incassato choice preserves its draft, opens the guarded flow and reo
   await status.selectOption({ label: 'Incassato · Conferma pagamento' });
   await expect(page.getByRole('heading', { name: 'Conferma il pagamento per registrare Incassato', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Salva operazione', exact: true })).toBeDisabled();
-  await page.locator('form').first().evaluate(form => (form as HTMLFormElement).requestSubmit());
+  await page.locator('form').filter({ has: status }).evaluate(form => (form as HTMLFormElement).requestSubmit());
   await unpaid();
   expect(await db.adminRecordRevision.count({ where: { model: 'Payment', recordId: f.payment.id } })).toBe(0);
   const open = page.waitForEvent('popup');
