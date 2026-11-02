@@ -81,6 +81,49 @@ test('a linked lead opens its existing dossier only when that dossier is readabl
   expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
 });
 
+test('a stale conversion form and a new conversion do not expose a client to a write-only sales actor', async ({ page }) => {
+  const sales = await db.user.create({ data: { role: 'commerciale', name: 'Commerciale sintetico senza lettura',
+    email: `write-${f.tag}@example.test`.toLowerCase(), passwordHash: await bcrypt.hash(password, 4) } });
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: sales.id, permission: 'client.read', allowed: false },
+    { userId: sales.id, permission: 'client.write', allowed: true },
+    { userId: sales.id, permission: 'lead.write', allowed: true },
+  ] });
+  await login(page, sales.email, false);
+  for (const raced of [true, false]) {
+    const lead = await db.lead.create({ data: { firstName: 'Conversione', lastName: 'Sintetica', assignedToId: sales.id } });
+    await page.goto(`/leads/${lead.id}`);
+    const convert = page.getByRole('button', { name: 'Converti in cliente', exact: true });
+    await expect(convert).toBeVisible();
+    if (raced) await db.$transaction([
+      db.client.update({ where: { id: f.client.id }, data: { leadId: lead.id, salesOwnerId: sales.id } }),
+      db.lead.update({ where: { id: lead.id }, data: { clientId: f.client.id, status: 'vinto' } }),
+    ]);
+    const response = page.waitForResponse(res => res.request().method() === 'POST' && res.url().endsWith(`/leads/${lead.id}`));
+    await convert.click();
+    const post = await response;
+    await expect(page.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/leads/${lead.id}$`));
+    const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
+    expect((await post.text()) + JSON.stringify(post.headers())).not.toContain(client.id);
+    await expect(page.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
+    await expect(convert).toHaveCount(0);
+    expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
+  }
+});
+
+test('an archived service keeps the installment closed and points only to visible payments', async ({ page }) => {
+  await db.clientService.create({ data: { clientId: f.client.id, contractId: f.contract.id, serviceCatalogId: f.catalog.id,
+    paymentId: f.payment.id, deletedAt: new Date() } });
+  await login(page); await page.goto(`/payments/${f.payment.id}/collection`);
+  await expect(page.getByRole('status')).toContainText('La rata non è disponibile');
+  await expect(page.getByRole('link', { name: 'Apri i servizi acquistati' })).toHaveCount(0);
+  const payments = page.getByRole('link', { name: 'Apri i pagamenti del cliente' });
+  await expect(payments).toHaveAttribute('href', `/clients/${f.client.id}#pagamenti`);
+  await payments.click(); await expect(page).toHaveURL(new RegExp(`/clients/${f.client.id}#pagamenti$`));
+  await unpaid();
+});
+
 test('the same contract explains a closed setup and a closure between preview and confirmation', async ({ page }) => {
   await db.contract.update({ where: { id: f.contract.id }, data: { status: 'da_preparare', signedAt: null, signedDocumentId: null } });
   await login(page); await page.goto(`/payments/${f.payment.id}/collection`);

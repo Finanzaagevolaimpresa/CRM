@@ -6,6 +6,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { collectionFixture, collectionKey } from './payment-collection/fixture';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { PaymentCollectionError, type PaymentCollectionBlock } from '../src/lib/payment-collection-contract';
+import { convertedClientReference } from '../src/lib/lead-client-access';
 import { previewPaymentCollection, confirmPaymentCollection, paymentCollectionSetup, readPaymentCollectionReceipt } from '../src/lib/payment-collection';
 import { previewServiceRegistration, confirmServiceRegistration } from '../src/lib/client-service-registration';
 import { previewPurchasedServiceHandoff, handoffPurchasedService } from '../src/lib/purchased-service-handoff';
@@ -176,6 +177,44 @@ test('closed setup and write validation report the same first authorized reason 
   await expectClosed('EXISTING_EVIDENCE');
   assert.equal(await db.payment.count({ where: { clientId: f.client.id } }), 1);
 });
+test('replaying a conversion reads current client permission and returns only a readable destination', options, async () => {
+  const f = await fixture(), sales = await syntheticPerson(db, 'Commerciale sintetico del lead', 'commerciale');
+  const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico', status: 'vinto', clientId: f.client.id, assignedToId: sales.user.id } });
+  await db.client.update({ where: { id: f.client.id }, data: { leadId: lead.id, salesOwnerId: sales.user.id, notes: 'Nota riservata sintetica' } });
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: sales.user.id, permission: 'lead.write', allowed: true },
+    { userId: sales.user.id, permission: 'client.write', allowed: true },
+    { userId: sales.user.id, permission: 'client.read', allowed: false },
+  ] });
+  const reference = () => convertedClientReference(db, sales.session, lead.id, f.client.id, 'existing');
+  assert.equal(await reference(), null);
+  await db.userPermissionOverride.updateMany({ where: { userId: sales.user.id, permission: 'client.read' }, data: { allowed: true } });
+  assert.deepEqual(await reference(), { id: f.client.id });
+  await db.userPermissionOverride.updateMany({ where: { userId: sales.user.id, permission: 'client.read' }, data: { allowed: false } });
+  assert.equal(await reference(), null);
+  await db.client.update({ where: { id: f.client.id }, data: { deletedAt: new Date() } });
+  await assert.rejects(reference);
+  assert.equal(await db.client.count({ where: { leadId: lead.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } }), 0);
+});
+
+test('an archived service binding still blocks setup, preview and confirmation without an unreachable service link', options, async () => {
+  const f = await fixture(), initial = await preview(f);
+  const service = await db.clientService.create({ data: { clientId: f.client.id, contractId: f.contract.id,
+    serviceCatalogId: f.catalog.id, paymentId: f.payment.id, deletedAt: new Date() } });
+  const setup = () => paymentCollectionSetup(db, f.session, f.payment.id);
+  const { block } = await setup();
+  assert.equal(block?.reason, 'UNAVAILABLE'); assert.equal(block.href, `/clients/${f.client.id}#pagamenti`);
+  assert.doesNotMatch(block.message, /servizio/i);
+  const unavailable = (e: unknown) => e instanceof PaymentCollectionError && e.code === 'CLOSED' && e.block?.reason === 'UNAVAILABLE';
+  await assert.rejects(preview(f), unavailable);
+  await assert.rejects(confirmPaymentCollection(db, f.session, f.command, initial.digest, f.proof), unavailable);
+  assert.equal(await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId), null);
+  await unchanged(f);
+  await db.clientService.update({ where: { id: service.id }, data: { deletedAt: null } });
+  assert.equal((await setup()).block?.reason, 'LINKED_SERVICE');
+});
+
 test('future date and invalid payment amount fail without any financial change', options, async () => {
   const f = await fixture();
   await assert.rejects(previewPaymentCollection(db, f.session, { ...f.command, collectedAt: new Date(Date.now() + 86400_000).toISOString() }));

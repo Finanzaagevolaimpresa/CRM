@@ -15,7 +15,7 @@ export async function updateLeadCommercialAndRedirect(form: FormData) {
 export async function resolveLeadDuplicateCaseAndRefresh(form: FormData) {
   await assertTechnicalServerAction("form-actions:resolveLeadDuplicateCaseAndRefresh"); await resolveLeadDuplicateCaseAction(form); revalidatePath('/leads/duplicates'); revalidatePath('/leads'); revalidatePath('/leads/inbox'); }
 export async function convertLeadToClientAndRedirect(form: FormData) {
-  await assertTechnicalServerAction("form-actions:convertLeadToClientAndRedirect"); const client = await convertLeadToClient(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/leads/inbox'); revalidatePath('/clients'); revalidatePath('/dashboard'); redirect(`/clients/${client.id}`); }
+  await assertTechnicalServerAction("form-actions:convertLeadToClientAndRedirect"); const client = await convertLeadToClient(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/leads/inbox'); revalidatePath('/clients'); revalidatePath('/dashboard'); redirect(client ? `/clients/${client.id}` : `/leads/${id}`); }
 async function revalidateCommercialLeadInbox(form: FormData) { const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/leads/inbox'); }
 export async function initializeCommercialLeadInbox(form: FormData) {
   await assertTechnicalServerAction("form-actions:initializeCommercialLeadInbox"); await initializeCommercialLeadInboxAction(form); await revalidateCommercialLeadInbox(form); }

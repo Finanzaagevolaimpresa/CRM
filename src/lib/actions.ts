@@ -52,6 +52,7 @@ import {
   requireAiOutputReadAccess,
   requireClientContextReadAccess,
 } from './read-access';
+import { convertedClientReference, readableLeadClient } from './lead-client-access';
 import {
   denyWriteAccess,
   requireActiveUser,
@@ -710,10 +711,7 @@ export async function convertLeadToClient(form: FormData) {
   const data = leadConvertSchema.parse(clean(form));
   const lead = await requireLeadEditAccess(s, data.id);
   if (lead.clientId) {
-    await requireCommercialOfferTargetAccess(s, { clientId: lead.clientId });
-    const existingClient = await prisma.client.findFirst({ where: { id: lead.clientId, deletedAt: null } });
-    if (!existingClient) denyWriteAccess();
-    return existingClient;
+    return convertedClientReference(prisma, s, lead.id, lead.clientId, 'existing');
   }
   const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
     where: { leadId: data.id }, select: { id: true },
@@ -723,12 +721,13 @@ export async function convertLeadToClient(form: FormData) {
       throw new UserFacingActionError('Versione Commercial Lead Inbox obbligatoria per la conversione.');
     }
     try {
-      return await convertCommercialLeadInboxItem(prisma, {
+      const client = await convertCommercialLeadInboxItem(prisma, {
         leadId: data.id,
         actor: commercialLeadActor(s),
         expectedInboxVersion: data.expectedInboxVersion,
         clientType: data.type,
       });
+      return await convertedClientReference(prisma, s, lead.id, client.id, 'created');
     } catch (error) { return mapCommercialLeadInboxError(error); }
   }
   return withSerializableTransaction(prisma, async tx => {
@@ -741,8 +740,9 @@ export async function convertLeadToClient(form: FormData) {
       data: { clientId: client.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(lead.updatedAt) } });
     await tx.auditLog.create({ data: { actorId: current.userId, event: 'lead_convert_to_client', entityType: 'Lead', entityId: lead.id,
       after: { leadId: lead.id, clientId: client.id, fromStatus: lead.status, toStatus: 'vinto', salesOwnerId: client.salesOwnerId } } });
+    const visible = await readableLeadClient(tx, current, client.id);
     await assertLeadActorLive(tx, current);
-    return client;
+    return visible ? { id: visible.id } : null;
   });
 }
 

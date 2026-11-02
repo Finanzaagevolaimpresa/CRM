@@ -1,12 +1,13 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { mayManageLeadSharing } from '@/lib/selective-lead-access';
-import { clientVisibilityWhere, leadVisibilityWhere } from '@/lib/core-query-policy';
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
+import { readableLeadClient } from '@/lib/lead-client-access';
 import { LeadLifecycleControls } from "@/components/lead-lifecycle-controls";
 import { OpenLink, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { hasPermission, requirePermission } from '@/lib/auth';
-import { canEditLead, canViewClient, canViewLead } from '@/lib/access-control';
+import { canEditLead, canViewLead } from '@/lib/access-control';
 import { updateLeadCommercialAndRedirect, convertLeadToClientAndRedirect, createCommercialOfferAndRedirect, recordCommercialLeadFirstResponse, closeCommercialLeadInbox } from '@/lib/form-actions';
 import { commercialLeadInboxMode, commercialLeadSlaLabel } from '@/lib/commercial-lead-inbox-contract';
 import { canConsultN15Assignments, listN15SyntheticAssignmentsForLead } from '@/lib/n15-assignment-consultation';
@@ -26,18 +27,13 @@ const money = (value: unknown) => `€ ${Number(value).toLocaleString('it-IT', {
   const lead = await prisma.lead.findFirst({where:{id,deletedAt:null,AND:[leadVisibilityWhere(session)]}});
   if(!lead || !canViewLead(session, lead)) return <PageHeader title="Lead non trovato" description="Il record richiesto non esiste o non è accessibile."/>;
   const mayShare = await mayManageLeadSharing(prisma, session);
-  const [users, linkedClient, offers, inboxItem] = await Promise.all([
+  const [users, client, offers, inboxItem] = await Promise.all([
     prisma.user.findMany({where:{active:true}, select:{id:true,name:true,role:true}}),
-    lead.clientId && hasPermission(session, 'client.read')
-      ? prisma.client.findFirst({
-        where: { id: lead.clientId, deletedAt: null, AND: [clientVisibilityWhere(session)] },
-        select: { id: true, displayName: true, salesOwnerId: true, consultantId: true },
-      }) : null,
+    readableLeadClient(prisma, session, lead.clientId),
     prisma.commercialOffer.findMany({where:{leadId:id,deletedAt:null,id:{notIn:[...(session.selectiveOfferIds ?? [])]}}, orderBy:{updatedAt:'desc'}}),
     prisma.commercialLeadInboxItem.findUnique({where:{leadId:id}, include:{slaCycles:{orderBy:{sequence:'desc'},take:1}}}),
   ]);
   const owner=lead.assignedToId ? users.find((u)=>u.id===lead.assignedToId) : null;
-  const client = linkedClient && canViewClient(session, linkedClient) ? linkedClient : null;
   const canWrite = hasPermission(session, 'lead.write') && canEditLead(session, lead);
   const canConvert = canWrite && hasPermission(session, 'client.write');
   const now = new Date();

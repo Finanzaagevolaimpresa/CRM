@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
-import { canViewClient, canViewDocument, canViewProject } from './access-control';
+import { canViewClient, canViewDocument, canViewProject, canViewService } from './access-control';
+import { dossierServiceContexts } from './client-dossier-service-context';
 import { canonicalSha256 } from './canonical-json';
 import { updateActor, type UpdateCredentials } from './record-updates';
 import { recordUpdatePermission } from './record-update-context';
@@ -46,6 +47,22 @@ async function context(tx: Tx, claimed: AuthSession, clientId: string, paymentId
   return { ...auth, client, payment, contract, project };
 }
 type Context = Awaited<ReturnType<typeof context>>;
+
+async function linkedServiceVisibleInDossier(tx: Tx, c: Context) {
+  if (!recordUpdatePermission(c.actor, 'service.read')) return false;
+  const rows = await tx.clientService.findMany({ where: { paymentId: c.payment.id, clientId: c.client.id, deletedAt: null } });
+  if (!rows.length) return false;
+  const projectIds = rows.flatMap(row => row.projectId ? [row.projectId] : []);
+  const [companies, projects] = await Promise.all([
+    tx.company.findMany({ where: { clientId: c.client.id, deletedAt: null }, select: { id: true } }),
+    projectIds.length && recordUpdatePermission(c.actor, 'project.read')
+      ? tx.project.findMany({ where: { id: { in: projectIds }, clientId: c.client.id, deletedAt: null } }) : [],
+  ]);
+  const projectById = new Map(projects.map(project => [project.id, { ...project, client: c.client }]));
+  return dossierServiceContexts(c.client, rows, projectById, new Set(companies.map(company => company.id)))
+    .some(service => canViewService(c.actor, service));
+}
+
 /** Called only after the transaction has admitted the actor and locked this payment and its contract. */
 async function collectionBlock(tx: Tx, c: Context): Promise<PaymentCollectionBlock | null> {
   const dossier = `/clients/${encodeURIComponent(c.client.id)}`;
@@ -72,7 +89,7 @@ async function collectionBlock(tx: Tx, c: Context): Promise<PaymentCollectionBlo
     return { ...paymentLink, reason: 'AMOUNT', message: 'L’importo della rata deve essere positivo e non può superare il totale del contratto. Verifica gli importi registrati.' };
   }
   if (await tx.clientService.count({ where: { paymentId: c.payment.id } })) {
-    if (!recordUpdatePermission(c.actor, 'service.read')) {
+    if (!await linkedServiceVisibleInDossier(tx, c)) {
       return { ...paymentLink, reason: 'UNAVAILABLE', message: 'La rata non è disponibile per una nuova conferma. Consulta i pagamenti nel fascicolo.' };
     }
     return { reason: 'LINKED_SERVICE', href: `${dossier}#servizi-acquistati`, linkLabel: 'Apri i servizi acquistati',
