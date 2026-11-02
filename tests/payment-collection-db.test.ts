@@ -5,6 +5,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { collectionFixture, collectionKey } from './payment-collection/fixture';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
+import { PaymentCollectionError, type PaymentCollectionBlock } from '../src/lib/payment-collection-contract';
+import { convertedClientReference, convertUnlinkedLeadToClient } from '../src/lib/lead-client-access';
+import { LeadLifecycleError } from '../src/lib/lead-lifecycle-lock';
+import { convertCommercialLeadInboxItem, initializeCommercialLeadInboxItem, recordCommercialLeadFirstResponse } from '../src/lib/commercial-lead-inbox';
+import { CommercialLeadInboxError } from '../src/lib/commercial-lead-inbox-contract';
 import { previewPaymentCollection, confirmPaymentCollection, paymentCollectionSetup, readPaymentCollectionReceipt } from '../src/lib/payment-collection';
 import { previewServiceRegistration, confirmServiceRegistration } from '../src/lib/client-service-registration';
 import { previewPurchasedServiceHandoff, handoffPurchasedService } from '../src/lib/purchased-service-handoff';
@@ -134,19 +139,144 @@ test('a collected payment is not overwritten and remains available only for reco
   const before = await db.payment.findUnique({ where: { id: f.payment.id } });
   const setup = await paymentCollectionSetup(db, f.session, f.payment.id);
   assert.equal(setup.reconciliationOnly, true); assert.deepEqual(setup.documents, []);
+  assert.equal(setup.block?.reason, 'RECORDED');
+  assert.equal((await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId))?.paymentId, f.payment.id);
   await assert.rejects(previewPaymentCollection(db, f.session, { ...f.command, commandId: randomUUID() }));
   assert.deepEqual(await db.payment.findUnique({ where: { id: f.payment.id } }), before);
 });
 test('a payment already linked to a service cannot be rewritten behind the handoff', options, async () => {
   const f = await fixture();
   await db.clientService.create({ data: { clientId: f.client.id, serviceCatalogId: f.catalog.id, contractId: f.contract.id, paymentId: f.payment.id } });
+  const setup = () => paymentCollectionSetup(db, f.session, f.payment.id);
+  assert.equal((await setup()).block?.reason, 'LINKED_SERVICE');
+  await db.userPermissionOverride.create({ data: { userId: f.admin.id, permission: 'service.read', allowed: false } });
+  const { block } = await setup();
+  assert.equal(block?.reason, 'UNAVAILABLE');
+  assert.ok(!block?.message.includes('servizio')); assert.equal(block?.href, `/clients/${f.client.id}#pagamenti`);
   await assert.rejects(preview(f)); await unchanged(f);
 });
+test('closed setup and write validation report the same first authorized reason on the original installment', options, async () => {
+  const f = await fixture(), originalPreview = await preview(f);
+  async function expectClosed(reason: PaymentCollectionBlock['reason']) {
+    const { block, reconciliationOnly, documents } = await paymentCollectionSetup(db, f.session, f.payment.id);
+    assert.equal(reconciliationOnly, true); assert.deepEqual(documents, []); assert.equal(block?.reason, reason);
+    const sameReason = (error: unknown) => error instanceof PaymentCollectionError && error.code === 'CLOSED'
+      && error.block?.reason === reason && error.block.href === block?.href;
+    await assert.rejects(preview(f), sameReason);
+    await assert.rejects(confirmPaymentCollection(db, f.session, f.command, originalPreview.digest, f.proof), sameReason);
+    assert.equal(await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId), null);
+    return block!;
+  }
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'da_preparare', signedAt: null, signedDocumentId: null } });
+  const unsigned = await expectClosed('CONTRACT_UNSIGNED');
+  assert.equal(unsigned.href, `/contracts/${f.contract.id}`); assert.match(unsigned.message, /da preparare/);
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'firmato' } });
+  assert.match((await expectClosed('SIGNATURE_DATE')).message, /manca la data/);
+  await db.contract.update({ where: { id: f.contract.id }, data: { signedAt: new Date(Date.now() + 86_400_000) } });
+  assert.match((await expectClosed('SIGNATURE_DATE')).message, /futura/);
+  await db.payment.update({ where: { id: f.payment.id }, data: { status: 'parziale' } });
+  assert.match((await expectClosed('PAYMENT_STATUS')).message, /parziale/);
+  await db.payment.update({ where: { id: f.payment.id }, data: { status: 'da_incassare', accountingDocumentId: f.documents[1].id } });
+  await expectClosed('EXISTING_EVIDENCE');
+  assert.equal(await db.payment.count({ where: { clientId: f.client.id } }), 1);
+});
+test('replaying a conversion reads current client permission and returns only a readable destination', options, async () => {
+  const f = await fixture(), sales = await syntheticPerson(db, 'Commerciale sintetico del lead', 'commerciale');
+  const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico', status: 'vinto', clientId: f.client.id, assignedToId: sales.user.id } });
+  await db.client.update({ where: { id: f.client.id }, data: { leadId: lead.id, salesOwnerId: sales.user.id, notes: 'Nota riservata sintetica' } });
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: sales.user.id, permission: 'lead.write', allowed: true },
+    { userId: sales.user.id, permission: 'client.write', allowed: true },
+    { userId: sales.user.id, permission: 'client.read', allowed: false },
+  ] });
+  const reference = () => convertedClientReference(db, sales.session, lead.id, f.client.id, 'existing');
+  assert.equal(await reference(), null);
+  await db.userPermissionOverride.updateMany({ where: { userId: sales.user.id, permission: 'client.read' }, data: { allowed: true } });
+  assert.deepEqual(await reference(), { id: f.client.id });
+  await db.userPermissionOverride.updateMany({ where: { userId: sales.user.id, permission: 'client.read' }, data: { allowed: false } });
+  assert.equal(await reference(), null);
+  await db.client.update({ where: { id: f.client.id }, data: { deletedAt: new Date() } });
+  await assert.rejects(reference);
+  assert.equal(await db.client.count({ where: { leadId: lead.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } }), 0);
+});
+
+test('an archived service binding still blocks setup, preview and confirmation without an unreachable service link', options, async () => {
+  const f = await fixture(), initial = await preview(f);
+  const service = await db.clientService.create({ data: { clientId: f.client.id, contractId: f.contract.id,
+    serviceCatalogId: f.catalog.id, paymentId: f.payment.id, deletedAt: new Date() } });
+  const setup = () => paymentCollectionSetup(db, f.session, f.payment.id);
+  const { block } = await setup();
+  assert.equal(block?.reason, 'UNAVAILABLE'); assert.equal(block.href, `/clients/${f.client.id}#pagamenti`);
+  assert.doesNotMatch(block.message, /servizio/i);
+  const unavailable = (e: unknown) => e instanceof PaymentCollectionError && e.code === 'CLOSED' && e.block?.reason === 'UNAVAILABLE';
+  await assert.rejects(preview(f), unavailable);
+  await assert.rejects(confirmPaymentCollection(db, f.session, f.command, initial.digest, f.proof), unavailable);
+  assert.equal(await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId), null);
+  await unchanged(f);
+  await db.clientService.update({ where: { id: service.id }, data: { deletedAt: null } });
+  assert.equal((await setup()).block?.reason, 'LINKED_SERVICE');
+});
+
+test('a newly technical actor cannot create or retrieve a client with the earlier sales session', options, async () => {
+  const f = await fixture(), sales = await syntheticPerson(db, 'Commerciale sintetico con funzione variabile', 'commerciale');
+  const lead = await db.lead.create({ data: { firstName: 'Cambio', lastName: 'Funzione', assignedToId: sales.user.id } });
+  const input = { id: lead.id, expectedVersion: lead.updatedAt.toISOString(), type: 'societa' as const };
+  const convert = () => convertUnlinkedLeadToClient(db, sales.session, input);
+  const actor = { userId: sales.user.id, sessionId: sales.session.sessionId! };
+  const inboxLead = await db.lead.create({ data: { firstName: 'Inbox', lastName: 'Sintetica',
+    assignedToId: sales.user.id, source: 'CRM', leadSource: 'manuale' } });
+  const inboxState = () => db.commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: inboxLead.id }, include: { slaCycles: true } });
+  let before: Awaited<ReturnType<typeof inboxState>>;
+  const inbox = () => convertCommercialLeadInboxItem(db, { leadId: inboxLead.id, expectedInboxVersion: before.version, clientType: input.type, actor });
+  const priorMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
+  process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+  async function deniedWithoutWriting() {
+    await assert.rejects(convert, (error: unknown) => error instanceof LeadLifecycleError && error.code === 'DENIED');
+    await assert.rejects(inbox, (error: unknown) => error instanceof CommercialLeadInboxError && error.code === 'N14_PERMISSION_DENIED');
+    assert.equal(await db.client.count({ where: { leadId: lead.id } }), 0);
+    assert.equal((await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).clientId, null);
+    assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } }), 0);
+    assert.equal(await db.client.count({ where: { leadId: inboxLead.id } }), 0);
+    assert.equal((await db.lead.findUniqueOrThrow({ where: { id: inboxLead.id } })).clientId, null);
+    assert.deepEqual(await inboxState(), before);
+  }
+  try {
+    const policy = await db.commercialLeadSlaPolicyVersion.findFirst({ where: { status: 'ACTIVE', policyCode: 'COMMERCIAL_FIRST_RESPONSE' } });
+    if (!policy) await db.commercialLeadSlaPolicyVersion.create({ data: { id: randomUUID(), policyCode: 'COMMERCIAL_FIRST_RESPONSE',
+      version: 1, status: 'ACTIVE', calendarCode: 'CONTINUOUS_24X7', timezoneCode: 'UTC', responseTargetSeconds: 3600, createdById: sales.user.id } });
+    const item = await initializeCommercialLeadInboxItem(db, { leadId: inboxLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE' });
+    await recordCommercialLeadFirstResponse(db, { leadId: inboxLead.id, actor, expectedInboxVersion: item.version });
+    before = await inboxState();
+    assert.equal(before.state, 'OPEN'); assert.ok(before.slaCycles[0].firstResponseAt); assert.equal(before.closedAt, null);
+    const override = await db.userPermissionOverride.create({ data: { userId: sales.user.id, permission: 'technical.write', allowed: true } });
+    await deniedWithoutWriting();
+    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: false } });
+    await db.user.update({ where: { id: sales.user.id }, data: { role: 'consulente' } });
+    await deniedWithoutWriting();
+    await db.user.update({ where: { id: sales.user.id }, data: { role: 'commerciale' } });
+    await db.client.update({ where: { id: f.client.id }, data: { consultantId: sales.user.id } });
+    await deniedWithoutWriting();
+    await db.client.update({ where: { id: f.client.id }, data: { consultantId: null } });
+    const result = await convert();
+    const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
+    assert.deepEqual(result, { id: client.id });
+    assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'lead_convert_to_client' } }), 1);
+    const fromInbox = await inbox();
+    assert.equal((await db.client.findUniqueOrThrow({ where: { leadId: inboxLead.id } })).id, fromInbox.id);
+    assert.ok((await inboxState()).closedAt);
+  } finally {
+    if (priorMode === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE;
+    else process.env.COMMERCIAL_LEAD_INBOX_MODE = priorMode;
+  }
+});
+
 test('future date and invalid payment amount fail without any financial change', options, async () => {
   const f = await fixture();
   await assert.rejects(previewPaymentCollection(db, f.session, { ...f.command, collectedAt: new Date(Date.now() + 86400_000).toISOString() }));
   for (const amount of [0, -1, 123]) {
     await db.payment.update({ where: { id: f.payment.id }, data: { totalAmount: amount } });
+    assert.equal((await paymentCollectionSetup(db, f.session, f.payment.id)).block?.reason, 'AMOUNT');
     await assert.rejects(preview(f)); await unchanged(f);
   }
 });

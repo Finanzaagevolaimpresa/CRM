@@ -3,6 +3,7 @@ import { DocumentFileLinks } from '@/components/document-file-links';
 export const dynamic = 'force-dynamic';
 
 import { DocumentBatchUpload } from '@/components/document-batch-upload';
+import { dossierServiceContexts } from '@/lib/client-dossier-service-context';
 import { selectiveAuditAllowed, contextOutsideSelection } from '@/lib/selective-project-policy';
 import { canAccessFinancialDocumentMetadata, operationalServiceStatus } from '@/lib/financial-access';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
@@ -152,13 +153,7 @@ const isRedundantOperationalAudit = (event: { category: string; type: string; en
     && canViewProject(session, { ...project, client })
   ));
   const projectById = new Map(projectRows.filter((project) => !project.companyId || companyContextById.has(project.companyId)).map((project) => [project.id, { ...project, client }]));
-  const serviceContexts = clientServiceRows.map((service) => ({ ...service, client, project: service.projectId ? projectById.get(service.projectId) ?? null : null })).filter((service) => {
-    const project = service.projectId ? projectById.get(service.projectId) ?? null : null;
-    if (service.companyId && !companyContextById.has(service.companyId)) return false;
-    if (service.projectId && !project) return false;
-    if (service.companyId && project?.companyId && service.companyId !== project.companyId) return false;
-    return true;
-  });
+  const serviceContexts = dossierServiceContexts(client, clientServiceRows, projectById, companyContextById);
   const clientServices = serviceContexts.filter((service) => canViewService(session, service));
   const serviceById = new Map(serviceContexts.map((service) => [service.id, service]));
   const uploadProjects = projects.filter(project => canEditProject(session, { ...project, client }));

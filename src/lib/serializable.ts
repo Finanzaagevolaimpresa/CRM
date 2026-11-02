@@ -1,5 +1,9 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
 
+export function nextConcurrencyTimestamp(previous: Date) {
+  return new Date(Math.max(Date.now(), previous.getTime() + 1));
+}
+
 export const serializableOptions = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } as const;
 
 export class SerializableConflictError extends Error {

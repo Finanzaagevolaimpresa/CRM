@@ -148,7 +148,18 @@ function assertGuardsBeforeMutation(
 
 test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', () => {
   assertGuardsBeforeMutation('updateLeadCommercial', ['requireLeadEditAccess', 'withAssignmentGuard'], 'tx.lead.update');
-  assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'tx.client.create');
+  assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'convertUnlinkedLeadToClient');
+  assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'convertCommercialLeadInboxItem');
+  const conversionPath = resolve(process.cwd(), 'src/lib/lead-client-access.ts');
+  const conversion = ts.createSourceFile(conversionPath, readFileSync(conversionPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  for (const write of ['tx.client.create', 'tx.lead.update', 'tx.auditLog.create']) {
+    assertGuardsBeforeMutation('convertUnlinkedLeadToClient', ['lockLeadForMutation', 'currentConversionActor'], write, conversion);
+  }
+  const inboxPath = resolve(process.cwd(), 'src/lib/commercial-lead-inbox.ts');
+  const inbox = ts.createSourceFile(inboxPath, readFileSync(inboxPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  assertGuardsBeforeMutation('convertCommercialLeadInboxItem', ['authorizeActor', 'assertNoSelectiveLeadMutation'], 'tx.client.create', inbox);
+  const inboxBody = functionBody('convertCommercialLeadInboxItem', inbox);
+  assert.match(inboxBody, /if \(registered\.technicalRestricted[\s\S]*?fail\('N14_PERMISSION_DENIED'\)[\s\S]*?tx\.client\.create/);
   assertGuardsBeforeMutation('createCommercialOffer', ['requireCommercialOfferTargetAccess', 'assertLeadOperational'], 'tx.commercialOffer.create');
   assertGuardsBeforeMutation(
     'updateCommercialOffer',

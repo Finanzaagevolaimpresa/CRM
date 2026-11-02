@@ -1,3 +1,4 @@
+import { recordUpdatePermission } from './record-update-context';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { historicalConversionInput } from './commercial-lead-historical-contact-contract';
 import { appendHistoricalLeadConversion, prepareHistoricalLeadConversion,
@@ -696,7 +697,9 @@ export async function convertCommercialLeadInboxItem(
   if (input.historicalPreview && !historical) fail('N14_VERSION_CONFLICT');
   return transaction(db, async (tx, commandNow) => {
     if (input.historicalPreview && !await lockRegisteredPrivilegedStepUpKey(tx, input.historicalPreview.key)) fail('N14_PERMISSION_DENIED');
-    await authorizeActor(tx, input.actor, 'WORK');
+    const registered = await authorizeActor(tx, input.actor, 'WORK');
+    if (registered.technicalRestricted
+      || (!historical && !recordUpdatePermission(registered, 'client.write'))) fail('N14_PERMISSION_DENIED');
     await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     if (historical) {
       const replay = await readHistoricalConversionInTransaction(tx, input.actor,

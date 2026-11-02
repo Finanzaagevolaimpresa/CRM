@@ -2,8 +2,8 @@
 import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
-import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
-import { withSerializableTransaction } from './serializable';
+import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive } from './lead-lifecycle-lock';
+import { nextConcurrencyTimestamp } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';
@@ -52,6 +52,7 @@ import {
   requireAiOutputReadAccess,
   requireClientContextReadAccess,
 } from './read-access';
+import { convertedClientReference, convertUnlinkedLeadToClient } from './lead-client-access';
 import {
   denyWriteAccess,
   requireActiveUser,
@@ -121,10 +122,6 @@ async function withSerializableAiTransaction<T>(operation: (tx: Prisma.Transacti
     }
   }
   throw new UserFacingActionError('Controllo AI non completato. Riprova.');
-}
-
-function nextConcurrencyTimestamp(previous: Date) {
-  return new Date(Math.max(Date.now(), previous.getTime() + 1));
 }
 
 function dossierAuditSnapshot(dossier: {
@@ -710,10 +707,7 @@ export async function convertLeadToClient(form: FormData) {
   const data = leadConvertSchema.parse(clean(form));
   const lead = await requireLeadEditAccess(s, data.id);
   if (lead.clientId) {
-    await requireCommercialOfferTargetAccess(s, { clientId: lead.clientId });
-    const existingClient = await prisma.client.findFirst({ where: { id: lead.clientId, deletedAt: null } });
-    if (!existingClient) denyWriteAccess();
-    return existingClient;
+    return convertedClientReference(prisma, s, lead.id, lead.clientId, 'existing');
   }
   const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
     where: { leadId: data.id }, select: { id: true },
@@ -723,27 +717,16 @@ export async function convertLeadToClient(form: FormData) {
       throw new UserFacingActionError('Versione Commercial Lead Inbox obbligatoria per la conversione.');
     }
     try {
-      return await convertCommercialLeadInboxItem(prisma, {
+      const client = await convertCommercialLeadInboxItem(prisma, {
         leadId: data.id,
         actor: commercialLeadActor(s),
         expectedInboxVersion: data.expectedInboxVersion,
         clientType: data.type,
       });
+      return await convertedClientReference(prisma, s, lead.id, client.id, 'created');
     } catch (error) { return mapCommercialLeadInboxError(error); }
   }
-  return withSerializableTransaction(prisma, async tx => {
-    const { current, lead } = await lockLeadForMutation(tx, s, data.id, data.expectedVersion);
-    if (!hasPermission(current, 'client.write') || lead.clientId
-      || await tx.commercialLeadInboxItem.findUnique({ where: { leadId: lead.id } })) throw new LeadLifecycleError('STALE');
-    const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
-    const client = await tx.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId, notes: lead.notes } });
-    await tx.lead.update({ where: { id: lead.id, clientId: null, updatedAt: lead.updatedAt, deletedAt: null },
-      data: { clientId: client.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(lead.updatedAt) } });
-    await tx.auditLog.create({ data: { actorId: current.userId, event: 'lead_convert_to_client', entityType: 'Lead', entityId: lead.id,
-      after: { leadId: lead.id, clientId: client.id, fromStatus: lead.status, toStatus: 'vinto', salesOwnerId: client.salesOwnerId } } });
-    await assertLeadActorLive(tx, current);
-    return client;
-  });
+  return convertUnlinkedLeadToClient(prisma, s, data);
 }
 
 export async function createCommercialOffer(form: FormData) {

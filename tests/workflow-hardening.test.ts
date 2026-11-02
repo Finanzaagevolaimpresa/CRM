@@ -9,27 +9,31 @@ const actionsPath = resolve(root, 'src/lib/actions.ts');
 const actionsText = readFileSync(actionsPath, 'utf8');
 const actionsSource = ts.createSourceFile(actionsPath, actionsText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
-function functionBody(name: string) {
+function functionBody(name: string, source = actionsSource) {
   let declaration: ts.FunctionDeclaration | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
     if (!declaration) ts.forEachChild(node, visit);
   };
-  visit(actionsSource);
+  visit(source);
   assert.ok(declaration?.body, `Funzione ${name} non trovata`);
-  return declaration.body.getText(actionsSource);
+  return declaration.body.getText(source);
 }
 
 test('la conversione lead è idempotente e protetta da vincolo DB e compare-and-swap', () => {
   const schema = readFileSync(resolve(root, 'prisma/schema.prisma'), 'utf8');
   const migration = readFileSync(resolve(root, 'prisma/migrations/20260714123000_harden_ai_runs_and_lead_conversion/migration.sql'), 'utf8');
-  const body = functionBody('convertLeadToClient');
+  const path = resolve(root, 'src/lib/lead-client-access.ts');
+  const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  assert.match(functionBody('convertLeadToClient'), /return convertUnlinkedLeadToClient\(prisma, s, data\)/);
+  const body = functionBody('convertUnlinkedLeadToClient', source);
 
   assert.match(schema, /leadId\s+String\?\s+@unique/);
   assert.match(migration, /GROUP BY "leadId"[\s\S]*HAVING COUNT\(\*\) > 1/);
   assert.match(migration, /CREATE UNIQUE INDEX "Client_leadId_key"/);
-  assert.match(body, /withSerializableTransaction\(prisma/);
-  assert.match(body, /lockLeadForMutation\(tx, s, data\.id, data\.expectedVersion\)/);
+  assert.match(body, /withSerializableTransaction\(db/);
+  assert.match(body, /lockLeadForMutation\(tx, session, data\.id, data\.expectedVersion\)/);
+  assert.match(body, /currentConversionActor\(tx, locked\)/);
   assert.match(body, /tx\.client\.create/);
   assert.match(body, /tx\.lead\.update/);
   assert.match(body, /clientId: null, updatedAt: lead\.updatedAt, deletedAt: null/);

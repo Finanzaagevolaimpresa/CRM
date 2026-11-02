@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
-import { canViewClient, canViewDocument, canViewProject } from './access-control';
+import { canViewClient, canViewDocument, canViewProject, canViewService } from './access-control';
+import { dossierServiceContexts } from './client-dossier-service-context';
 import { canonicalSha256 } from './canonical-json';
 import { updateActor, type UpdateCredentials } from './record-updates';
 import { recordUpdatePermission } from './record-update-context';
@@ -11,7 +12,7 @@ import { ProjectUnavailableError } from './project-lifecycle-lock';
 import { withSerializableTransaction } from './serializable';
 import { readPrivateDocumentBounded } from './storage';
 import { paymentCollectionCommand, PaymentCollectionError,
-  type PaymentCollectionCommand, type PaymentCollectionPreview } from './payment-collection-contract';
+  type PaymentCollectionBlock, type PaymentCollectionCommand, type PaymentCollectionPreview } from './payment-collection-contract';
 
 type Tx = Prisma.TransactionClient;
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -46,11 +47,55 @@ async function context(tx: Tx, claimed: AuthSession, clientId: string, paymentId
   return { ...auth, client, payment, contract, project };
 }
 type Context = Awaited<ReturnType<typeof context>>;
-async function openForCollection(tx: Tx, c: Context) {
-  return c.payment.status === 'da_incassare' && !c.payment.collectedAt && !c.payment.accountingDocumentId
-    && c.contract.status === 'firmato' && Boolean(c.contract.signedAt && c.contract.signedAt <= new Date())
-    && c.payment.totalAmount.gt(0) && c.payment.totalAmount.lte(c.contract.totalAmount)
-    && await tx.clientService.count({ where: { paymentId: c.payment.id } }) === 0;
+
+async function linkedServiceVisibleInDossier(tx: Tx, c: Context) {
+  if (!recordUpdatePermission(c.actor, 'service.read')) return false;
+  const rows = await tx.clientService.findMany({ where: { paymentId: c.payment.id, clientId: c.client.id, deletedAt: null } });
+  if (!rows.length) return false;
+  const projectIds = rows.flatMap(row => row.projectId ? [row.projectId] : []);
+  const [companies, projects] = await Promise.all([
+    tx.company.findMany({ where: { clientId: c.client.id, deletedAt: null }, select: { id: true } }),
+    projectIds.length && recordUpdatePermission(c.actor, 'project.read')
+      ? tx.project.findMany({ where: { id: { in: projectIds }, clientId: c.client.id, deletedAt: null } }) : [],
+  ]);
+  const projectById = new Map(projects.map(project => [project.id, { ...project, client: c.client }]));
+  return dossierServiceContexts(c.client, rows, projectById, new Set(companies.map(company => company.id)))
+    .some(service => canViewService(c.actor, service));
+}
+
+/** Called only after the transaction has admitted the actor and locked this payment and its contract. */
+async function collectionBlock(tx: Tx, c: Context): Promise<PaymentCollectionBlock | null> {
+  const dossier = `/clients/${encodeURIComponent(c.client.id)}`;
+  const paymentLink = { href: `${dossier}#pagamenti`, linkLabel: 'Apri i pagamenti del cliente' };
+  if (c.payment.status === 'incassato') {
+    return { ...paymentLink, reason: 'RECORDED', message: 'Questa rata risulta già incassata.' };
+  }
+  if (c.payment.status !== 'da_incassare') {
+    return { ...paymentLink, reason: 'PAYMENT_STATUS', message: `La rata risulta «${c.payment.status.replaceAll('_', ' ')}». La conferma è disponibile per le rate «da incassare».` };
+  }
+  if (c.payment.collectedAt || c.payment.accountingDocumentId) {
+    return { ...paymentLink, reason: 'EXISTING_EVIDENCE', message: 'La rata contiene già una data di incasso o un documento contabile. Verifica la registrazione esistente.' };
+  }
+  const contractLink = { href: `/contracts/${encodeURIComponent(c.contract.id)}`, linkLabel: 'Apri il contratto collegato' };
+  if (c.contract.status !== 'firmato') {
+    return { ...contractLink, reason: 'CONTRACT_UNSIGNED', message: `Il contratto collegato risulta «${c.contract.status.replaceAll('_', ' ')}». Per confermare l’incasso il contratto deve risultare firmato con una data di firma valida.` };
+  }
+  if (!c.contract.signedAt || !(c.contract.signedAt <= new Date())) {
+    return { ...contractLink, reason: 'SIGNATURE_DATE', message: c.contract.signedAt
+      ? 'La data di firma registrata è futura. Verifica la data nel contratto.'
+      : 'Il contratto risulta firmato, ma manca la data di firma registrata.' };
+  }
+  if (!c.payment.totalAmount.gt(0) || !c.payment.totalAmount.lte(c.contract.totalAmount)) {
+    return { ...paymentLink, reason: 'AMOUNT', message: 'L’importo della rata deve essere positivo e non può superare il totale del contratto. Verifica gli importi registrati.' };
+  }
+  if (await tx.clientService.count({ where: { paymentId: c.payment.id } })) {
+    if (!await linkedServiceVisibleInDossier(tx, c)) {
+      return { ...paymentLink, reason: 'UNAVAILABLE', message: 'La rata non è disponibile per una nuova conferma. Consulta i pagamenti nel fascicolo.' };
+    }
+    return { reason: 'LINKED_SERVICE', href: `${dossier}#servizi-acquistati`, linkLabel: 'Apri i servizi acquistati',
+      message: 'La rata è già collegata a un servizio acquistato. Verifica il collegamento esistente nel fascicolo.' };
+  }
+  return null;
 }
 async function evidence(tx: Tx, c: Context, versionId: string, verifyBytes: boolean) {
   const initial = await tx.documentVersion.findUnique({ where: { id: versionId } });
@@ -83,7 +128,11 @@ async function evidence(tx: Tx, c: Context, versionId: string, verifyBytes: bool
   return { document, version, service };
 }
 async function proposal(tx: Tx, c: Context, input: PaymentCollectionCommand) {
-  if (!await openForCollection(tx, c)) fail('CLOSED');
+  const block = await collectionBlock(tx, c);
+  if (block) {
+    await c.finish();
+    throw new PaymentCollectionError('CLOSED', block);
+  }
   const now = await c.finish(), collectedAt = new Date(input.collectedAt);
   if (!Number.isFinite(collectedAt.getTime()) || collectedAt > now) fail('INVALID');
   const proof = await evidence(tx, c, input.documentVersionId, true);
@@ -140,7 +189,8 @@ export async function paymentCollectionSetup(db: PrismaClient, actor: AuthSessio
   return withSerializableTransaction(db, async tx => {
     const initial = await tx.payment.findUnique({ where: { id: paymentId }, select: { clientId: true } });
     if (!initial) fail('DENIED');
-    const c = await context(tx, actor, initial.clientId, paymentId), reconciliationOnly = !await openForCollection(tx, c);
+    const c = await context(tx, actor, initial.clientId, paymentId);
+    const block = await collectionBlock(tx, c), reconciliationOnly = block !== null;
     const documents: Array<{ id: string; title: string; version: number }> = [];
     const candidates = reconciliationOnly ? [] : await tx.document.findMany({ where: { clientId: c.client.id, deletedAt: null,
       status: 'verificato', id: { not: c.contract.signedDocumentId ?? '' }, ...(query.trim() ? { title: { contains: query.trim().slice(0, 80), mode: 'insensitive' } } : {}) },
@@ -155,6 +205,6 @@ export async function paymentCollectionSetup(db: PrismaClient, actor: AuthSessio
     }
     await c.finish();
     return { clientId: c.client.id, paymentId, client: c.client.displayName, contract: c.contract.contractNumber,
-      amount: c.payment.totalAmount.toFixed(2), reconciliationOnly, documents, moreDocuments: candidates.length > 100 };
+      amount: c.payment.totalAmount.toFixed(2), reconciliationOnly, block, documents, moreDocuments: candidates.length > 100 };
   });
 }
