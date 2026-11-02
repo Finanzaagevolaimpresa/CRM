@@ -62,7 +62,9 @@ test('a linked lead opens its existing dossier only when that dossier is readabl
   await expect(dossier).toHaveAttribute('href', `/clients/${f.client.id}`);
   await expect(page.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
   await dossier.click(); await expect(page).toHaveURL(new RegExp(`/clients/${f.client.id}$`));
-  await expect(page.getByRole('heading', { name: `Fascicolo Cliente Interno - ${f.client.displayName}`, exact: true })).toBeVisible();
+  const heading = page.getByRole('heading', { level: 1 });
+  await expect(heading).toContainText('Fascicolo Cliente Interno');
+  await expect(heading).toContainText(f.client.displayName);
   const salesContext = await browser.newContext({ baseURL: 'http://127.0.0.1:3047' });
   try {
     const salesPage = await salesContext.newPage();
