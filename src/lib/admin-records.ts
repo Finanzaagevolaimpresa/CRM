@@ -956,7 +956,7 @@ async function fields(tx: Tx, policy: AdminRecordPolicy, row: Row | null, actor:
       descriptor.help = 'L’archiviazione conserva contenuto, autori e approvazioni. Il ripristino è ammesso solo allo stato registrato prima dell’archiviazione, senza altre modifiche.';
     } else if (policy.model === 'Payment' && name === 'status') {
       descriptor.type = 'select'; descriptor.options = (await paymentStatuses(tx, row)).map(value => ({ value, label: value.replaceAll('_', ' ') }));
-      descriptor.help = 'Il cambio di stato è una dichiarazione amministrativa documentata. Gli incassi si registrano dal percorso dedicato. Il ripristino recupera solo lo stato precedente registrato.';
+      descriptor.help = 'Per registrare Incassato usa Conferma pagamento: servono la data effettiva, la prova e la conferma personale. Gli altri cambi di stato sono rettifiche documentate; il ripristino recupera solo lo stato precedente registrato.';
     } else if (policy.model === 'ServiceCatalogRevision' && name === 'status') {
       descriptor.type = 'select'; descriptor.options = (row ? row.status === 'PUBLISHED' ? ['PUBLISHED', 'RETIRED'] : ['RETIRED'] : ['PUBLISHED'])
         .map(value => ({ value, label: value === 'PUBLISHED' ? 'Pubblicata internamente' : 'Ritirata' }));
@@ -1024,6 +1024,9 @@ export async function loadAdminRecord(db: PrismaClient, session: AuthSession, mo
     return { model, id, version: adminRecordVersion(row), label: creating ? `Nuovo · ${policy.label}` : label(row!),
       ...form, create: creating, trash: Boolean(policy.trash), deleted: Boolean(row?.deletedAt || removed),
       paymentCorrection: model === 'Payment' && !creating,
+      paymentCollection: model === 'Payment' && row && !creating && !removed
+        && ['da_incassare', 'scaduto'].includes(String(row.status)) && !row.collectedAt && !row.accountingDocumentId
+        ? { href: `/payments/${encodeURIComponent(id)}/collection`, recordedStatus: String(row.status) } : undefined,
       noticeLifecycle: model === 'PrivacyNoticeVersion' && row && !creating ? {
         status: String(row.status), action: row.status === 'DRAFT' ? 'ACTIVATE' : row.status === 'ACTIVE' ? 'RETIRE' : null,
         contentHash: String(row.contentHash), effectiveFrom: row.effectiveFrom ? (row.effectiveFrom as Date).toISOString() : null,

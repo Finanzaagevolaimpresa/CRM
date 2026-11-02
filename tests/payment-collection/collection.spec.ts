@@ -52,6 +52,71 @@ async function unpaid() {
   expect(p.status).toBe('da_incassare'); expect(p.collectedAt).toBeNull(); expect(p.accountingDocumentId).toBeNull();
   expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(0);
 }
+test('Admin Incassato choice preserves its draft, opens the guarded flow and reopens the persisted state', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 }); await login(page);
+  await page.goto('/payments');
+  const unpaidRow = page.getByRole('row').filter({ hasText: f.client.displayName });
+  await expect(unpaidRow.getByRole('link', { name: 'Conferma pagamento · Incassato', exact: true })).toHaveAttribute('href', `/payments/${f.payment.id}/collection`);
+  await expect(page.getByRole('heading', { name: 'Conferma pagamento', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Crea rata da incassare', exact: true })).toBeVisible();
+  await page.goto(`/admin/records/Payment/${f.payment.id}`);
+  const status = page.getByRole('combobox', { name: 'Stato', exact: true });
+  await expect(status).toBeEnabled();
+  const notes = page.getByLabel('Note', { exact: true }), reason = page.getByRole('textbox', { name: 'Motivazione della correzione', exact: true });
+  await notes.fill('Bozza sintetica non salvata'); await reason.fill('Motivo della bozza sintetica');
+  await status.selectOption({ label: 'Incassato · Conferma pagamento' });
+  await expect(page.getByRole('heading', { name: 'Conferma il pagamento per registrare Incassato', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Salva operazione', exact: true })).toBeDisabled();
+  await page.locator('form').filter({ has: status }).evaluate(form => (form as HTMLFormElement).requestSubmit());
+  await unpaid();
+  expect(await db.adminRecordRevision.count({ where: { model: 'Payment', recordId: f.payment.id } })).toBe(0);
+  const open = page.waitForEvent('popup');
+  await page.getByRole('link', { name: 'Apri conferma pagamento', exact: true }).click();
+  const collection = await open;
+  try {
+    await expect(collection).toHaveURL(new RegExp(`/payments/${f.payment.id}/collection$`));
+    await expect(collection.getByRole('heading', { name: 'Conferma incasso', exact: true })).toBeVisible();
+    await expect(notes).toHaveValue('Bozza sintetica non salvata');
+    await expect(reason).toHaveValue('Motivo della bozza sintetica');
+    await prepare(collection); await unpaid();
+    await collection.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
+    await expect(collection.getByRole('heading', { name: 'Incasso registrato', exact: true })).toBeVisible();
+    await collection.getByRole('link', { name: 'Apri pagamenti e verifica lo stato', exact: true }).click();
+    const row = collection.getByRole('row').filter({ hasText: f.client.displayName });
+    await expect(row).toContainText('incassato');
+    await expect(row.getByRole('link', { name: 'Apri incasso e verifiche', exact: true })).toBeVisible();
+    await expect(row.getByRole('link', { name: 'Conferma pagamento · Incassato', exact: true })).toHaveCount(0);
+    const stored = await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } });
+    expect(stored.status).toBe('incassato'); expect(stored.notes).not.toBe('Bozza sintetica non salvata');
+    expect(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } })).toBe(1);
+    await expect(notes).toHaveValue('Bozza sintetica non salvata');
+    await expect(reason).toHaveValue('Motivo della bozza sintetica');
+  } finally { await collection.close(); }
+});
+
+test('Admin collection choice preserves the unsigned-contract guard and new installments start unpaid', async ({ page }) => {
+  await db.contract.update({ where: { id: f.contract.id }, data: { status: 'da_preparare', signedAt: null, signedDocumentId: null } });
+  await login(page); await page.goto(`/admin/records/Payment/${f.payment.id}`);
+  const status = page.getByRole('combobox', { name: 'Stato', exact: true });
+  await expect(status).toBeEnabled(); await status.selectOption({ label: 'Incassato · Conferma pagamento' });
+  const open = page.waitForEvent('popup');
+  await page.getByRole('link', { name: 'Apri conferma pagamento', exact: true }).click();
+  const collection = await open;
+  try {
+    await expect(collection.getByRole('status')).toContainText('Il contratto collegato risulta «da preparare»');
+    await expect(collection.getByRole('link', { name: 'Apri il contratto collegato', exact: true })).toHaveAttribute('href', `/contracts/${f.contract.id}`);
+    await expect(collection.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
+    await unpaid();
+  } finally { await collection.close(); }
+  await status.selectOption('da_incassare');
+  await expect(page.getByRole('button', { name: 'Salva operazione', exact: true })).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Conferma il pagamento per registrare Incassato', exact: true })).toHaveCount(0);
+  await page.goto('/admin/records/Payment/new');
+  await expect(page.getByText(/La nuova rata viene creata Da incassare/)).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Stato', exact: true }).locator('option', { hasText: 'Incassato · Conferma pagamento' })).toHaveCount(0);
+  await unpaid();
+});
+
 test('a linked lead opens its existing dossier only when that dossier is readable', async ({ page, browser }) => {
   const sales = await db.user.create({ data: { role: 'commerciale', name: 'Commerciale sintetico', email: `lead-${f.tag}@example.test`.toLowerCase(), passwordHash: await bcrypt.hash(password, 4) } });
   const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico', assignedToId: sales.id, status: 'vinto', clientId: f.client.id } });
@@ -99,16 +164,26 @@ test('a stale conversion form and a new conversion do not expose a client to a w
       db.client.update({ where: { id: f.client.id }, data: { leadId: lead.id, salesOwnerId: sales.id } }),
       db.lead.update({ where: { id: lead.id }, data: { clientId: f.client.id, status: 'vinto' } }),
     ]);
-    const response = page.waitForResponse(res => res.request().method() === 'POST' && res.url().endsWith(`/leads/${lead.id}`));
-    await convert.click();
-    const post = await response;
-    await expect(page.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
-    await expect(page).toHaveURL(new RegExp(`/leads/${lead.id}$`));
-    const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
-    expect((await post.text()) + JSON.stringify(post.headers())).not.toContain(client.id);
-    await expect(page.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
-    await expect(convert).toHaveCount(0);
-    expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
+    const captured: { post?: { body: string; headers: Record<string, string> } } = {};
+    const matchesLead = (url: URL) => url.pathname === `/leads/${lead.id}`;
+    await page.route(matchesLead, async route => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      // Read the actual server response before navigation releases Chromium's body buffer.
+      const post = await route.fetch({ maxRedirects: 0 });
+      const body = await post.text(); captured.post = { body, headers: post.headers() };
+      await route.fulfill({ response: post, body });
+    });
+    try {
+      await convert.click();
+      await expect(page.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`/leads/${lead.id}$`));
+      const client = await db.client.findUniqueOrThrow({ where: { leadId: lead.id } });
+      expect(captured.post).toBeDefined();
+      expect(captured.post!.body + JSON.stringify(captured.post!.headers)).not.toContain(client.id);
+      await expect(page.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
+      await expect(convert).toHaveCount(0);
+      expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
+    } finally { await page.unroute(matchesLead); }
   }
 });
 
@@ -251,6 +326,10 @@ test('permission revocation after preview and direct technician URL deny collect
   await expect(other.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
   await expect(other.getByRole('link', { name: 'Apri il contratto collegato' })).toHaveCount(0);
   await expect(other.getByText(/Il contratto collegato risulta/)).toHaveCount(0);
+  await other.goto(`/admin/records/Payment/${f.payment.id}`);
+  await expect(other.getByText('404', { exact: true })).toBeVisible();
+  await expect(other.getByRole('link', { name: 'Conferma pagamento · Incassato', exact: true })).toHaveCount(0);
+  await expect(other.getByRole('combobox', { name: 'Stato', exact: true })).toHaveCount(0);
   await context.close();
 });
 test('new proof version after preview is rejected with no financial update', async ({ page }) => {
