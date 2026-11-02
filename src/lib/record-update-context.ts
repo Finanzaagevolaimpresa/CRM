@@ -1,8 +1,8 @@
 import { currentTechnicalRestriction } from './technical-account-membership';
 import { Prisma } from '@prisma/client';
-import type { AuthSession, Permission } from './auth';
+import type { Permission } from './auth';
 import { canViewClient, canViewLead, canViewProject, canViewTechnicalPractice } from './access-control';
-import { hasPermission } from './permission-evaluator';
+import { hasPermission, type PermissionSession } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
 import { loadSelectiveProjectScope } from './selective-project-scope';
 import { canonicalSha256 } from './canonical-json';
@@ -11,7 +11,7 @@ import type { UpdatePatch } from './record-update-input';
 import { projectExpenseVersion } from './project-parameters-state';
 
 type Tx = Prisma.TransactionClient;
-export function recordUpdatePermission(actor: Pick<AuthSession, 'active' | 'role' | 'permissionOverrides'>, permission: Permission) {
+export function recordUpdatePermission(actor: PermissionSession, permission: Permission) {
   // Explicit denial also suspends this Admin operation.
   return !actor.permissionOverrides.some(item => item.permission === permission && !item.allowed) && hasPermission(actor, permission);
 }

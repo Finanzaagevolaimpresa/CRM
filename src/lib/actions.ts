@@ -2,8 +2,8 @@
 import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
-import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
-import { nextConcurrencyTimestamp, withSerializableTransaction } from './serializable';
+import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive } from './lead-lifecycle-lock';
+import { nextConcurrencyTimestamp } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';

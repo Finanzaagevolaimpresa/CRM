@@ -6,7 +6,6 @@ import { loadClientReadScope } from './client-read-perimeter';
 import { recordUpdatePermission } from './record-update-context';
 import { assertLeadActorLive, LeadLifecycleError, lockLeadForMutation, lockLeadWriteActor } from './lead-lifecycle-lock';
 import { isTechnicalAccount } from './technical-confidentiality';
-import { currentTechnicalRestriction } from './technical-account-membership';
 import { nextConcurrencyTimestamp, withSerializableTransaction } from './serializable';
 import { requireCommercialOfferTargetAccess, requireLeadEditAccess } from './write-access';
 
@@ -20,7 +19,7 @@ export async function readableLeadClient(db: Pick<Prisma.TransactionClient, 'cli
 }
 
 async function currentConversionActor(tx: Prisma.TransactionClient, locked: Awaited<ReturnType<typeof lockLeadWriteActor>>) {
-  if (!recordUpdatePermission(locked, 'client.write') || await currentTechnicalRestriction(tx, locked.userId, locked)) {
+  if (!recordUpdatePermission(locked, 'client.write') || isTechnicalAccount(locked)) {
     throw new LeadLifecycleError('DENIED');
   }
   return { ...locked, clientReadScope: await loadClientReadScope(tx, locked.userId), technicalRestricted: false };
