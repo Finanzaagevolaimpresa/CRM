@@ -120,8 +120,8 @@ test('technical and commercial profiles cannot open the new financial route or i
   await login(page); await prepare(page); await page.getByRole('button', { name: 'Registra incasso storico' }).click();
   await expect(page.getByRole('heading', { name: 'Incasso storico registrato su attestazione Admin' })).toBeVisible();
   for (const role of ['consulente','commerciale'] as const) {
-    const user = role === 'consulente' ? f.tech : await db.user.create({ data: { name: 'Commerciale sintetico', role, email: `history-${f.tag}@example.test`, passwordHash: await bcrypt.hash(password, 4) } });
-    const context = await browser.newContext(), other = await context.newPage();
+    const user = role === 'consulente' ? f.tech : await db.user.create({ data: { name: 'Commerciale sintetico', role, email: `history-${f.tag}@example.test`.toLowerCase(), passwordHash: await bcrypt.hash(password, 4) } });
+    const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3047' }), other = await context.newPage();
     await login(other, user.email, false); await other.goto(url());
     await expect(other.getByText('404', { exact: true })).toBeVisible();
     await expect(other.getByText('Titolare sintetico', { exact: false })).toHaveCount(0);
