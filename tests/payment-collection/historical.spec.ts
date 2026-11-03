@@ -108,7 +108,8 @@ test('inline privileged reconfirmation preserves the historical draft and permit
   await page.getByRole('button', { name: 'Registra incasso storico' }).click();
   await expect(page.getByLabel('Password corrente', { exact: true })).toBeVisible(); await zero();
   await expect(page.getByLabel('Giorno effettivo dell’incasso', { exact: true })).toHaveValue('2026-01-15');
-  await expect(page.getByLabel('Motivazione della rettifica', { exact: true })).toHaveValue('Riconciliazione storica sintetica senza prova bancaria verificata');
+  await expect(page.getByRole('textbox', { name: 'Motivazione della rettifica', exact: true })).toHaveValue('Riconciliazione storica sintetica senza prova bancaria verificata');
+  await expect(page.getByRole('textbox', { name: 'Provenienza dell’attestazione', exact: true })).toHaveValue('Ordine sintetico nel canale amministrativo autorizzato');
   await page.getByLabel('Password corrente', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Riconferma identità se la finestra è scaduta', exact: true })).toBeVisible();
