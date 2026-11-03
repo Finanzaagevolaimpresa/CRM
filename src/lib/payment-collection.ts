@@ -24,11 +24,12 @@ const receiptSchema = z.object({ type: z.literal('PAYMENT_COLLECTION_V1'), actio
 const fingerprint = (value: unknown) => canonicalSha256(JSON.parse(JSON.stringify(value)));
 function fail(code: PaymentCollectionError['code']): never { throw new PaymentCollectionError(code); }
 
-async function context(tx: Tx, claimed: AuthSession, clientId: string, paymentId: string,
-  options: { write?: boolean; proof?: UpdateCredentials } = {}) {
+export async function paymentCollectionContext(tx: Tx, claimed: AuthSession, clientId: string, paymentId: string,
+  options: { write?: boolean; proof?: UpdateCredentials; source?: 'ADMIN_ATTESTATION' } = {}) {
   const auth = await updateActor(tx, claimed, options.proof);
-  if (auth.actor.role !== 'admin' || !(['client.read', 'contract.read', 'payment.read', 'payment.write', 'document.download'] as const)
-    .every(permission => recordUpdatePermission(auth.actor, permission))) fail('DENIED');
+  if (auth.actor.role !== 'admin' || !(['client.read', 'contract.read', 'payment.read', 'payment.write'] as const)
+    .every(permission => recordUpdatePermission(auth.actor, permission))
+    || (options.source !== 'ADMIN_ATTESTATION' && !recordUpdatePermission(auth.actor, 'document.download'))) fail('DENIED');
   await tx.$queryRaw(Prisma.sql`SELECT id FROM "Client" WHERE id=${clientId} ${Prisma.raw(options.write ? 'FOR UPDATE' : 'FOR SHARE')}`);
   const client = await tx.client.findUnique({ where: { id: clientId } });
   if (!client || client.deletedAt || ['archiviato', 'sospeso'].includes(client.status) || !canViewClient(auth.actor, client)) fail('DENIED');
@@ -46,7 +47,7 @@ async function context(tx: Tx, claimed: AuthSession, clientId: string, paymentId
   await auth.finish();
   return { ...auth, client, payment, contract, project };
 }
-type Context = Awaited<ReturnType<typeof context>>;
+type Context = Awaited<ReturnType<typeof paymentCollectionContext>>;
 
 async function linkedServiceVisibleInDossier(tx: Tx, c: Context) {
   if (!recordUpdatePermission(c.actor, 'service.read')) return false;
@@ -156,13 +157,13 @@ async function receipt(tx: Tx, c: Context, commandId: string, input?: PaymentCol
 }
 export async function previewPaymentCollection(db: PrismaClient, actor: AuthSession, raw: unknown) {
   const input = paymentCollectionCommand.parse(raw);
-  return withSerializableTransaction(db, async tx => (await proposal(tx, await context(tx, actor, input.clientId, input.paymentId), input)).preview);
+  return withSerializableTransaction(db, async tx => (await proposal(tx, await paymentCollectionContext(tx, actor, input.clientId, input.paymentId), input)).preview);
 }
 export async function confirmPaymentCollection(db: PrismaClient, actor: AuthSession, raw: unknown, digest: string, credentials: UpdateCredentials) {
   const input = paymentCollectionCommand.parse(raw); hash.parse(digest);
   if (!credentials) fail('DENIED');
   return withSerializableTransaction(db, async tx => {
-    const c = await context(tx, actor, input.clientId, input.paymentId, { write: true, proof: credentials });
+    const c = await paymentCollectionContext(tx, actor, input.clientId, input.paymentId, { write: true, proof: credentials });
     const prior = await receipt(tx, c, input.commandId, input);
     if (prior) return prior;
     const current = await proposal(tx, c, input);
@@ -183,13 +184,13 @@ export async function confirmPaymentCollection(db: PrismaClient, actor: AuthSess
 }
 export async function readPaymentCollectionReceipt(db: PrismaClient, actor: AuthSession, clientId: string, paymentId: string, commandId: string) {
   z.string().uuid().parse(commandId);
-  return withSerializableTransaction(db, async tx => receipt(tx, await context(tx, actor, clientId, paymentId), commandId));
+  return withSerializableTransaction(db, async tx => receipt(tx, await paymentCollectionContext(tx, actor, clientId, paymentId), commandId));
 }
 export async function paymentCollectionSetup(db: PrismaClient, actor: AuthSession, paymentId: string, query = '') {
   return withSerializableTransaction(db, async tx => {
     const initial = await tx.payment.findUnique({ where: { id: paymentId }, select: { clientId: true } });
     if (!initial) fail('DENIED');
-    const c = await context(tx, actor, initial.clientId, paymentId);
+    const c = await paymentCollectionContext(tx, actor, initial.clientId, paymentId);
     const block = await collectionBlock(tx, c), reconciliationOnly = block !== null;
     const documents: Array<{ id: string; title: string; version: number }> = [];
     const candidates = reconciliationOnly ? [] : await tx.document.findMany({ where: { clientId: c.client.id, deletedAt: null,

@@ -10,6 +10,8 @@ import { canViewPaymentListRecord } from '@/lib/business-list-access';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { registerPaymentAndRefresh } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
+import { historicalPaymentSummaries } from '@/lib/payment-historical-attestation';
+import { historicalDayLabel } from '@/lib/payment-historical-attestation-contract';
 
   async function Page() {
   const session = await requirePermission('payment.read');
@@ -37,13 +39,14 @@ import { prisma } from '@/lib/prisma';
     });
   });
   const canWrite = hasPermission(session, 'payment.write');
+  const attestations = await historicalPaymentSummaries(prisma, session, visibleItems);
 
   return <div className="crm-space-y-6">
     <PageHeader title="Pagamenti" description="Scadenze, incassi e note amministrative collegate ai contratti accessibili." />
     <AdminRecordShortcut session={session} model="Payment" />
     {session.role === 'admin' && canWrite && <Card title="Conferma pagamento">
       <p>Per registrare <strong>Incassato</strong>, scegli <strong>Conferma pagamento · Incassato</strong> accanto alla rata già presente nell’elenco.</p>
-      <p className="mt-2">Il percorso richiede data e ora effettive, prova verificata e conferma personale. Se manca un requisito, indica il motivo e la scheda da aprire. Da incassare, scaduto e stornato non attestano un accredito.</p>
+      <p className="mt-2">La conferma documentale richiede data e ora effettive, prova verificata e conferma personale. Per un incasso storico attestato espressamente dal titolare, usa Rettifica storica: registra il giorno e la fonte amministrativa senza richiedere allegati o attestare una verifica bancaria.</p>
     </Card>}
     {canWrite ? <Card title="Crea rata da incassare">
       <form action={registerPaymentAndRefresh} className="grid gap-3 md:grid-cols-5">
@@ -56,13 +59,16 @@ import { prisma } from '@/lib/prisma';
       </form>
     </Card> : null}
     <Card title="Elenco operativo">
-      {visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pagamenti disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Conferma pagamento', 'Stato', 'Totale', 'Metodo', 'Scadenza', 'Tracciabilità']} rows={visibleItems.map((payment) => [
+      {visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pagamenti disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Conferma pagamento', 'Stato', 'Totale', 'Metodo', 'Scadenza', ...(session.role === 'admin' ? ['Incasso e fonte'] : []), 'Tracciabilità']} rows={visibleItems.map((payment) => [
         clientById.get(payment.clientId)?.displayName ?? '—',
-        session.role === 'admin' && canWrite ? <Link key="collection" className="font-semibold text-fai-blue underline" href={`/payments/${payment.id}/collection`}>
+        session.role === 'admin' && canWrite ? <span key="collection" className="grid gap-2"><Link className="font-semibold text-fai-blue underline" href={`/payments/${payment.id}/collection`}>
           {['da_incassare', 'scaduto'].includes(payment.status) ? 'Conferma pagamento · Incassato' : 'Apri incasso e verifiche'}
-        </Link> : '—',
+        </Link><Link className="font-semibold underline" href={`/payments/${payment.id}/historical-attestation`}>{attestations.has(payment.id) ? 'Apri attestazione storica' : 'Rettifica storica · attestazione Admin'}</Link></span> : '—',
         <StatusBadge status={payment.status} key="s" />, `€ ${Number(payment.totalAmount).toLocaleString('it-IT')}`,
         payment.method ?? '—', formatDateTime(payment.dueDate),
+        ...(session.role === 'admin' ? [attestations.has(payment.id)
+          ? <span key="source">{historicalDayLabel(attestations.get(payment.id)!.effectiveDay)} · solo giorno<br />Attestazione Admin · ora e metodo non dichiarati</span>
+          : payment.collectedAt ? formatDateTime(payment.collectedAt) : '—'] : []),
         <MetaCell key="m" createdAt={payment.createdAt} updatedAt={payment.updatedAt} />,
       ])} />}
     </Card>

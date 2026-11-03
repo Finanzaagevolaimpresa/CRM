@@ -22,6 +22,7 @@ export const privilegedStepUpCookieName = 'fai_crm_privileged_step_up';
 export const privilegedMutationCodes = [
   'TECHNICAL_ASSIGNMENT_MANAGE',
   'PAYMENT_COLLECTION_DECLARE',
+  'PAYMENT_HISTORICAL_ATTESTATION',
   'VIDEO_LIBRARY_MANAGE',
   'RECORD_UPDATE_MANAGE',
   'LEAD_LIFECYCLE',

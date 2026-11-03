@@ -32,6 +32,10 @@ import { SerializableConflictError } from '@/lib/serializable';
     <PageHeader title="Conferma incasso" description={`${setup.client} · ${setup.contract} · € ${setup.amount}`} />
     <AdminRecordShortcut session={session} model="Payment" id={id} />
     <Link className="font-semibold text-fai-blue underline" href="/payments">Torna ai pagamenti</Link>
+    <Card title="Incasso storico attestato dal titolare">
+      <p>Per una rettifica amministrativa espressamente attestata, registra il giorno e la provenienza della dichiarazione. Questo percorso separato non richiede contratto firmato o allegati e non attesta una verifica bancaria.</p>
+      <Link className="font-semibold underline" href={`/payments/${id}/historical-attestation`}>Rettifica storica · attestazione Admin</Link>
+    </Card>
     <Card title="Rata e prova del pagamento">
       {!setup.reconciliationOnly && <><p className="mb-4">Registra l’incasso effettivo della rata già presente. L’importo non viene modificato. Scegli la prova verificata nel fascicolo, distinta dall’incarico firmato; dimensione massima 50 MB.</p>
         <form method="get" className="mb-5 flex flex-wrap items-end gap-3"><label className="min-w-0">Cerca prova per titolo<input name="q" maxLength={80} defaultValue={q} className="block w-full rounded-xl border p-3" /></label><button className="rounded-xl border p-3 font-semibold">Cerca</button></form>
