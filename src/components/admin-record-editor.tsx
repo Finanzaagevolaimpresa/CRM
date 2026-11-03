@@ -67,7 +67,9 @@ export function AdminRecordEditor({ data, commandId, recovering = false }: { dat
         target={data.model === 'Payment' ? '_blank' : undefined} rel={data.model === 'Payment' ? 'noopener' : undefined}>
         {data.model === 'Payment' ? data.paymentCollection ? 'Conferma pagamento · Incassato' : 'Apri incasso e verifiche' : 'Apri percorso operativo'}
       </Link>}
-      {!data.create && <Link className="underline" target="_blank" rel="noopener" href={href}>Confronta la scheda attuale in una nuova scheda</Link>}</nav>
+      {!data.create && <Link className="underline" target="_blank" rel="noopener" href={href}>Confronta la scheda attuale in una nuova scheda</Link>}
+      {data.model === 'Payment' && !data.create && !frozen && <Link className="underline" target="_blank" rel="noopener"
+        href={`/payments/${data.id}/historical-attestation`}>Rettifica storica · attestazione Admin</Link>}</nav>
     {data.model === 'ServiceCatalogRevision' && !data.create && <Link className="font-bold underline" href={`/admin/records/ServiceCatalogRevision/new?copyFrom=${data.id}`}>Prepara una nuova revisione da questi contenuti</Link>}
     {data.guidance && <p className="rounded-xl bg-slate-100 p-4">{data.guidance}</p>}
     {data.model === 'Payment' && data.create && <p className="rounded-xl border border-blue-200 bg-blue-50 p-4">

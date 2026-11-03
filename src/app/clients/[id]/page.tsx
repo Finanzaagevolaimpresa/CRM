@@ -27,6 +27,8 @@ import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorizat
 import { parseProgressTaskType } from '@/lib/customer-progress-policy';
 import { clientHasOperationalHold, CLIENT_OPERATIONAL_HOLD_MESSAGE } from '@/lib/contract-operational-state';
 import { mayManageClientSharing } from '@/lib/selective-client-access';
+import { historicalPaymentSummaries } from '@/lib/payment-historical-attestation';
+import { historicalDayLabel } from '@/lib/payment-historical-attestation-contract';
 
 const serviceSections = [
   ['overview', 'Overview'],
@@ -171,6 +173,7 @@ const isRedundantOperationalAudit = (event: { category: string; type: string; en
     const contract = contractById.get(payment.contractId);
     return Boolean(contract && contract.clientId === payment.clientId);
   });
+  const paymentAttestations = canViewPayments ? await historicalPaymentSummaries(prisma, session, payments) : new Map();
   const preAnalyses = preAnalysisRows.filter((preAnalysis) => {
     const project = projectById.get(preAnalysis.projectId) ?? null;
     if (!project) return false;
@@ -382,7 +385,9 @@ const isRedundantOperationalAudit = (event: { category: string; type: string; en
       {dossiers.length > 0 ? <div className="mt-6"><h3 className="mb-3 text-sm font-black uppercase tracking-wide text-slate-500">Dossier legacy progetto</h3><Table headers={['Titolo','Tipo','Stato','Creato il','Aggiornato il']} rows={dossiers.map((d) => [d.title, d.type, <StatusBadge status={d.status} key='s' />, formatDateTime(d.createdAt), formatDateTime(d.updatedAt)])} /></div> : null}
     </Card>
     {canViewContracts ? <Card id="contratti" title="Contratti">{contracts.length === 0 ? <EmptyState title="Nessun contratto" /> : <Table headers={['Numero','Servizio','Totale','Stato','Creato il','Aggiornato il']} rows={contracts.map((c) => [c.contractNumber, c.serviceName, `€ ${Number(c.totalAmount).toLocaleString('it-IT')}`, <StatusBadge status={c.status} key='s' />, formatDateTime(c.createdAt), formatDateTime(c.updatedAt)])} />}</Card> : null}
-    {canViewPayments ? <Card id="pagamenti" title="Pagamenti">{payments.length === 0 ? <EmptyState title="Nessun pagamento" /> : <Table headers={['Totale','Metodo','Scadenza','Stato','Creato il','Aggiornato il']} rows={payments.map((p) => [`€ ${Number(p.totalAmount).toLocaleString('it-IT')}`, p.method ?? '—', formatDateTime(p.dueDate), <StatusBadge status={p.status} key='s' />, formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card> : null}
+    {canViewPayments ? <Card id="pagamenti" title="Pagamenti">{payments.length === 0 ? <EmptyState title="Nessun pagamento" /> : <Table headers={['Totale','Metodo','Scadenza','Stato',...(session.role === 'admin' ? ['Incasso e fonte'] : []),'Creato il','Aggiornato il']} rows={payments.map((p) => [`€ ${Number(p.totalAmount).toLocaleString('it-IT')}`, p.method ?? '—', formatDateTime(p.dueDate), <StatusBadge status={p.status} key='s' />,
+      ...(session.role === 'admin' ? [paymentAttestations.has(p.id) ? <span key="source">{historicalDayLabel(paymentAttestations.get(p.id)!.effectiveDay)} · solo giorno · attestazione Admin<br />Ora e metodo non dichiarati<br /><Link className="underline" href={`/payments/${p.id}/historical-attestation`}>Apri attestazione storica</Link></span> : p.collectedAt ? formatDateTime(p.collectedAt) : '—'] : []),
+      formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card> : null}
     <Card id="task-scadenze" title="Attività e scadenze">
       {canManageTasks ? <form action={createClientTaskAndRefresh} className="mb-5 grid gap-3 rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-200 md:grid-cols-2">
         <input type="hidden" name="clientId" value={client.id}/>
