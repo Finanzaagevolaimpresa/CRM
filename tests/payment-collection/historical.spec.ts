@@ -92,6 +92,11 @@ test('lost historical confirmation response is reconciled through the same comma
   });
   await page.getByRole('button', { name: 'Registra incasso storico' }).click();
   await expect(page.getByRole('button', { name: 'Verifica esito' })).toBeVisible();
+  // The saved command exposes verification immediately, while it remains
+  // disabled until the original POST has settled. Observe that actual boundary
+  // before querying persistence or removing the response-loss route.
+  await expect(page.getByRole('button', { name: 'Verifica esito' })).toBeEnabled();
+  await expect(page.getByRole('status')).toContainText('La risposta non è arrivata');
   await recorded(); expect(attempts).toBe(1); await page.unroute(route);
   await page.getByRole('button', { name: 'Verifica esito' }).click();
   await expect(page.getByRole('heading', { name: 'Incasso storico registrato su attestazione Admin' })).toBeVisible();
