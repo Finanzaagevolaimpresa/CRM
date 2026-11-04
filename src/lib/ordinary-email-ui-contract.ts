@@ -1,6 +1,6 @@
 import type { previewStoredOrdinaryEmail } from './ordinary-email-store-candidate';
 export type OrdinaryEmailPreview = Awaited<ReturnType<typeof previewStoredOrdinaryEmail>>;
-export type OrdinaryEmailPreviewResult = { status: 'READY'; preview: OrdinaryEmailPreview } | { status: 'UNAVAILABLE' };
+export type OrdinaryEmailPreviewResult = { status: 'READY'; preview: OrdinaryEmailPreview } | { status: 'UNAVAILABLE'; message?: string };
 export type OrdinaryEmailRefusalResult = { status: 'REJECTED'; revision: number } | { status: 'CHECK_CURRENT' };
 export type OrdinaryEmailSendResult = { status: 'RECORDED'; outcome: 'ACCEPTED' | 'NOT_SENT' | 'UNCERTAIN' }
   | { status: 'CHECK_CURRENT' };

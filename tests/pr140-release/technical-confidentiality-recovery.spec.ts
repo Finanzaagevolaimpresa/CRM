@@ -41,16 +41,23 @@ test('the exact compatible recovery and resume retain technical privacy across p
         expect(response.headers()['content-disposition']).toBeUndefined();
         expect(response.headers()['cache-control']).toContain('no-store');
       }
-      // Communications is an admitted technical projection, not the original
-      // message screen. Verify the rendered contract as well as the response
-      // payload for every technical profile in candidate/recovery/resume.
+      // These profiles have broad financial/file overrides but no selected
+      // internal-content permission. The current guard must deny that surface
+      // throughout candidate/recovery/resume without leaking reserved values.
       const communications = await page.goto(origin + '/communications');
       expect(communications?.status()).toBe(200);
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Comunicazioni · perimetro tecnico');
-      await expect(page.getByRole('link', { name: 'Apri aggiornamenti e promemoria selezionati', exact: true })).toBeVisible();
+      await expect(page).toHaveURL(origin + '/dashboard');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dashboard');
+      await expect(page.locator('main')).toContainText('Il tuo lavoro tecnico');
       const communicationBody = (await communications!.text()) + (await page.content());
       for (const value of [...f.excluded, f.documents[2].bytes]) expect(communicationBody).not.toContain(value);
       await expect(page.getByRole('button', { name: /invia|prepara risposta/i })).toHaveCount(0);
+      // Selected operational notices remain a separate, guarded read surface.
+      const updates = await page.goto(origin + '/notifications/updates');
+      expect(updates?.status()).toBe(200);
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Aggiornamenti selezionati');
+      const updatesBody = (await updates!.text()) + (await page.content());
+      for (const value of [...f.excluded, f.documents[2].bytes]) expect(updatesBody).not.toContain(value);
       if (email !== f.mixedEmail) {
         await page.goto(origin + '/technical-work/practices/' + f.practiceId);
         for (const value of f.excluded) expect(await page.content()).not.toContain(value);

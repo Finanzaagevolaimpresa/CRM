@@ -9,6 +9,8 @@ import { syntheticSession } from '../selective-sharing/fixtures';
 import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
 import { uploadVideo, readVideoSetup, previewVideo, confirmVideo, readVideoBytes } from '../../src/lib/video-library';
 import type { VideoCommand } from '../../src/lib/video-input';
+import { previewDriveVideo, confirmDriveVideo, driveVideoSetup } from '../../src/lib/drive-video-library';
+import { driveVideoAccount, type DriveVideoCommand } from '../../src/lib/drive-video-contract';
 
 const db = new PrismaClient();
 async function main() {
@@ -45,6 +47,26 @@ async function main() {
     if (mode === 'RESTORED') await command('RESTORE_DRAFT');
     records[mode] = id;
   }
+  const driveRecords: Record<string, string> = {};
+  for (const mode of ['PUBLISHED', 'ARCHIVED', 'RESTORED', 'REVOKED']) {
+    const id = randomUUID();
+    async function command(operation: DriveVideoCommand['operation']) {
+      const setup = await driveVideoSetup(db, actor.session, id);
+      const base = { protocol: 'DRIVE_VIDEO_REFERENCE_V1' as const, commandId: randomUUID(), videoId: id, expectedVersion: setup.current?.revision ?? 0 };
+      const input: DriveVideoCommand = operation === 'PUBLISH' || operation === 'SAVE_DRAFT'
+        ? { ...base, operation, details: { url: 'https://drive.google.com/file/d/synthetic_restart_' + id.replaceAll('-', '') + '/view',
+          title: 'SYNTHETIC_DRIVE_RECOVERY ' + mode, description: 'Isolated reference; no Google request', category: '', position: 0,
+          sourceAccount: driveVideoAccount, accountConfirmed: true, downloadAllowed: false, expiresAt: null,
+          selection: { people: [mode === 'REVOKED' ? revoked.id : reader.id], areas: [] } } }
+        : { ...base, operation };
+      const preview = await previewDriveVideo(db, actor.session, input);
+      await confirmDriveVideo(db, actor.session, input, preview.digest, proof);
+    }
+    await command('SAVE_DRAFT'); await command('PUBLISH');
+    if (mode === 'ARCHIVED' || mode === 'RESTORED') await command('ARCHIVE');
+    if (mode === 'RESTORED') await command('RESTORE_DRAFT');
+    driveRecords[mode] = id;
+  }
   await db.userPermissionOverride.create({ data: { userId: revoked.id, permission: 'video.read', allowed: false } });
   // A regained role/permission must not resurrect the old audience.
   await db.userPermissionOverride.deleteMany({ where: { userId: revoked.id, permission: 'video.read' } });
@@ -53,7 +75,7 @@ async function main() {
   assert.equal((await readVideoBytes(db, recipient.session, records.PUBLISHED)).bytes.length, bytes.length);
   writeFileSync(process.env.R05_VIDEO_RECOVERY_FIXTURE!, JSON.stringify({ synthetic: true, noProvider: true,
     readerEmail: reader.email, revokedEmail: revoked.email, otherEmail: 'context-recovery-other@invalid.test',
-    records, sizeBytes: bytes.length }, null, 2) + '\n');
+    records, driveRecords, sizeBytes: bytes.length }, null, 2) + '\n');
   console.log('PRIVATE_VIDEOS_SYNTHETIC_RESTART_HISTORY_READY');
 }
 void main().finally(() => db.$disconnect());

@@ -6,6 +6,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
 import { approvedMessageHash, approvedMessageSnapshotSchema } from '../../src/lib/approved-communication-contract';
 import { emptyCommunicationRecipientSelection } from '../../src/lib/communication-recipient-policy';
+import { captureInternalDisclosure } from '../../src/lib/internal-content-disclosure-db';
 
 // Persistence fixture only. The channel stays disabled. The following updates
 // fixture enables the owner's personal binding for synthetic drafts only;
@@ -47,6 +48,23 @@ async function main(){
     await db.communicationVersion.create({data:{messageId:id,revision:1,createdById:owner.id,snapshot:snapshot as Prisma.InputJsonObject,snapshotHash:approvedMessageHash(snapshot)}});
     messages.push(id);
   }
+  // Separate synthetic, already-approved text from the retained private legacy
+  // draft above. Participation alone must not expose that draft or its files.
+  const publishedId=randomUUID(),selection=emptyCommunicationRecipientSelection();selection.to.userIds=[member.id];
+  const disclosure=await db.$transaction(tx=>captureInternalDisclosure(tx,thread,
+    [{userId:owner.id,version:1},{userId:member.id,version:1}],owner.id,null));
+  const published=approvedMessageSnapshotSchema.parse({schema:'fai.approved-email.v2',messageId:publishedId,revision:1,
+    context:{kind:'INTERNAL',id:thread.id},clientId:null,channel:'EMAIL_MANUAL',mailboxId:box.id,mailboxRevision:box.revision,
+    from:box.address,replyTo:box.address,to:[member.email],cc:[],bcc:[],subject:'SYNTHETIC_SELECTED_RESTART_TEXT',
+    body:'SYNTHETIC_SELECTED_RETAINED_BODY',classification:'ORDINARY',recipientSelection:selection,externalRecipients:{to:[],cc:[],bcc:[]},
+    recipientEvidenceHash:'c'.repeat(64),contextEvidenceHash:'d'.repeat(64),attachments:[],internalDisclosure:disclosure});
+  await db.approvedCommunication.create({data:{id:publishedId,contextKind:'INTERNAL',internalThreadId:thread.id,
+    mailboxId:box.id,createdById:owner.id,state:'APPROVED'}});
+  const publishedVersion=await db.communicationVersion.create({data:{messageId:publishedId,revision:1,createdById:owner.id,
+    snapshot:published as Prisma.InputJsonObject,snapshotHash:approvedMessageHash(published)}});
+  await db.communicationApproval.create({data:{versionId:publishedVersion.id,snapshotHash:publishedVersion.snapshotHash,
+    mailboxRevision:box.revision,approverUserId:owner.id,approverSessionId:randomUUID()}});
+  messages.push(publishedId);
   await writeFile(process.env.R05_CONTEXT_RECOVERY_FIXTURE!,JSON.stringify({synthetic:true,persistenceOnly:true,threadId:thread.id,deletedThreadId:deleted.id,
     ownerEmail:owner.email,memberEmail:member.email,otherEmail:other.email,leadId:lead.id,clientId:client.id,messageIds:messages,
     fileId:files[0].id,revokedFileId:files[1].id,sha256,bytes:bytes.toString()},null,2));

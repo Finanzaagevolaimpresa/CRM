@@ -31,7 +31,7 @@ const legacyPaths = [
   'src/lib/admin-role-profile-contract.ts', 'src/lib/admin-role-profile-store.ts',
   'src/lib/admin-user-command-contract.ts', 'src/lib/admin-user-commands.ts', 'src/lib/user-actions.ts',
   'src/components/admin-role-profile-account.tsx', 'src/app/settings/users/page.tsx',
-  'package.json', 'package-lock.json', 'eslint.config.mjs', 'scripts/lint-minimatch-compat.mjs',
+  'package.json', 'package-lock.json', 'next.config.ts', 'eslint.config.mjs', 'scripts/lint-minimatch-compat.mjs',
   'src/lib/private-document-versions.ts', 'src/lib/technical-document-acquisition-persistence.ts',
   'src/lib/technical-document-acquired-access.ts', 'src/lib/selective-client-documents.ts',
   'src/lib/admin-practice-formalization-store.ts', 'src/lib/admin-operational-link-contract.ts',
@@ -82,6 +82,7 @@ const stoppedActions = [
   'src/lib/admin-role-profile-actions.ts',
   'src/lib/admin-technical-disclosure-actions.ts',
   'src/lib/ordinary-email-reconciliation-actions.ts',
+  'src/lib/drive-video-actions.ts',
 ];
 for (const file of [...omittedPages, ...stoppedActions, 'src/components/ordinary-email-recovery.tsx']) overlay.add(file);
 // Close all missing relative/alias imports against the exact candidate tree.
@@ -146,6 +147,8 @@ try {
       content = content.slice(0, directive) + "\nimport { assertCompatibilityWriterSuspended } from './compatibility-writer-suspension';" + content.slice(directive);
     } else if (path === 'src/components/ordinary-email-recovery.tsx') {
       content = "export function OrdinaryEmailRecovery(props: { messageId: string; attemptId: string }) { void props; return null; }\n";
+    } else if (path === 'src/components/drive-video-editor.tsx') {
+      content = "export function DriveVideoEditor(props: { id: string; current: unknown; people: unknown }) { void props; return <p>Gestione dei riferimenti Drive sospesa durante il recupero applicativo compatibile. Riferimenti e storico sono conservati; la lettura resta soggetta ai permessi correnti.</p>; }\n";
     }
     const omittedLink = path === 'src/app/clients/[id]/acquired-documents/page.tsx' ? 'Carica o ripristina una versione privata'
       : path === 'src/app/practice-readiness/page.tsx' ? 'Rettifica contratto, versione firmata e servizio collegato' : null;
@@ -166,6 +169,12 @@ try {
     { env: commitEnv, input: 'Privacy-preserving compatible readers for candidate ' + candidate
       + '\n\nBaseline application with exact schema74/75 readers, the mandatory privacy delta and its import closure. New residual writers are suspended server-side. This is a composed recovery, not the unmodified historical image.\n' });
   assert.equal(git(['rev-parse', commit + '^{tree}']), tree);
+  // Preserve the typed journal readers, current disclosure rules and scoped
+  // Google frame policy. Recovery can read existing references, but cannot
+  // issue another Drive command through an already open Admin editor.
+  for (const path of ['next.config.ts', 'src/lib/drive-video-contract.ts', 'src/lib/drive-video-library.ts',
+    'src/lib/selected-internal-communications.ts', 'src/lib/internal-content-disclosure.ts',
+    'src/lib/approved-communication-contract.ts']) assert.equal(source(commit, path), source(candidate, path));
   for (const path of mandatoryBoundaries) {
     if (omittedPages.includes(path) || stoppedActions.includes(path)) continue;
     const emitted = source(commit, path);
@@ -179,6 +188,8 @@ try {
     linkAndPrivateVersionEditorsExposed: false, roleProfileEditorExposed: false,
     technicalClassificationEditorExposed: false, newResidualWritersSuspendedServerSide: true,
     accountCreationUsesStoredProfiles: true, smtpRecoveryEditorExposed: false,
+    driveReferenceReadersRetained: true, selectedInternalReadersRetained: true,
+    googleFramePolicyRetained: true, driveWritersSuspendedServerSide: true,
     authoritativeObservationWriterRetained: true, effectiveReconciledReceiptReadersRetained: true,
     originalSourceRowsRewritten: false, productionContact: false }));
 } finally {

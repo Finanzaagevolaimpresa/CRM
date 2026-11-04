@@ -1,13 +1,15 @@
 import { legacyRoleProfilePolicy } from './admin-role-profile-legacy-policy';
+import { pr252RoleProfilePolicy } from './admin-role-profile-pr252-policy';
 import { normalizeRoleProfile, originalRoleProfile, roleProfileDigest, RoleProfileError,
   type ProfileRole, type RoleProfileSnapshot, editableRolePermission } from './admin-role-profile-contract';
 /** Preserve exact immutable history while applying the current mandatory ceiling. */
 export function validateHistoricalRoleProfile(value: RoleProfileSnapshot) {
-  const legacy = legacyRoleProfilePolicy[value.id];
+  const legacy = [legacyRoleProfilePolicy[value.id], pr252RoleProfilePolicy[value.id]]
+    .find(policy => policy.catalogueHash === value.catalogueHash);
   if (value.catalogueHash === originalRoleProfile(value.id).catalogueHash) {
     if (roleProfileDigest(normalizeRoleProfile(value.id, value.overrides)) !== roleProfileDigest(value.overrides)) throw new RoleProfileError('INTEGRITY');
   } else {
-    if (value.catalogueHash !== legacy.catalogueHash
+    if (!legacy
       || new Set(value.overrides.map(v => v.permission)).size !== value.overrides.length
       || value.overrides.some(v => !(legacy.editable as readonly string[]).includes(v.permission)
         || v.allowed === (legacy.inherited as readonly string[]).includes(v.permission))

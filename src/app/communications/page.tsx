@@ -30,6 +30,10 @@ import { readRecordUpdateEmailPrefill } from '@/lib/record-update-email-queue';
 import { readAdminRequestDraftPrefill, isRequestUnavailable } from '@/lib/admin-request-service';
 import { RecordUpdateError } from '@/lib/record-update-contract';
 import { emptyCommunicationRecipientSelection } from '@/lib/communication-recipient-policy';
+import { isTechnicalAccount } from '@/lib/technical-confidentiality';
+import { selectedInternalDisclosure } from '@/lib/internal-content-disclosure';
+import { SelectedInternalCommunications } from '@/components/selected-internal-communications';
+import { InternalReadingExpiry } from '@/components/internal-reading-expiry';
 import { mutateApprovedMessageAction } from '@/lib/approved-communication-actions';
 import { ApprovedCommunicationError, communicationContextSchema, type ApprovedMessageSnapshot, type CommunicationContext } from '@/lib/approved-communication-contract';
 
@@ -74,6 +78,14 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
       initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />}
     <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject ?? replacement?.subject ?? updateDraft?.subject} /></label>
     <label>Testo esatto<textarea aria-label="Testo esatto" required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? replacement?.body ?? updateDraft?.body} /></label>
+    {data.context.kind === 'INTERNAL' && <section className="space-y-2 rounded-xl border p-3" aria-label="Lettura dei partecipanti CRM">
+      <p>La bozza è privata. Dopo l’approvazione esatta puoi condividere titolo e testo con i {data.participantIds?.length ?? 0} partecipanti attuali della conversazione. A/CC/BCC restano una scelta distinta.</p>
+      <label className="flex items-start gap-2"><input type="checkbox" name="shareInternalText" value="true"
+        defaultChecked={Boolean(snapshot && selectedInternalDisclosure(snapshot))}/>
+        <span>Confermo che titolo e testo sono condivisibili con questi partecipanti, anche tecnici, e non contengono pagamenti, contratti firmati o note riservate. Condividi solo il testo ordinario approvato; nessun allegato o record collegato.</span></label>
+      <InternalReadingExpiry initial={snapshot ? selectedInternalDisclosure(snapshot)?.expiresAt : null}/>
+      <p>Per togliere la lettura, revoca il partecipante o il suo permesso; una modifica al testo o ai destinatari richiede una nuova versione e approvazione.</p>
+    </section>}
     <label>Riservatezza<select aria-label="Riservatezza" name="classification" className={field} defaultValue={snapshot?.classification ?? replacement?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
     <fieldset className="min-w-0 rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
       {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
@@ -99,6 +111,12 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
   if(pendingFile && !pendingFile.success)notFound();
 
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
+  if (isTechnicalAccount(session) && context.success && context.data.kind !== 'INTERNAL') notFound();
+  if (session.role !== 'admin' && hasPermission(session, 'communications.internal.read')
+    && ((context.success && context.data.kind === 'INTERNAL') || (!query.kind && !query.practice))) {
+    if (query.reply || query.update || query.request || query.fileCommand || query.replaceDraft || query.draftCommand || query.archived) notFound();
+    return <SelectedInternalCommunications session={session} threadId={context.success ? context.data.id : undefined}/>;
+  }
   if (!context.success) {
     if (query.kind || query.practice || query.update || query.request || query.focus || query.replaceDraft || query.draftCommand) notFound();
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
@@ -150,6 +168,7 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
   const feedback: Record<string, string> = { RECORDED: 'Operazione registrata.', DENIED: 'Accesso o contesto non più valido.', CONFLICT: 'La versione è cambiata o l’operazione è già conclusa. Aggiorna e verifica la timeline.', SENDER_NOT_READY: 'Il mittente deve essere configurato, collaudato e abilitato.', INVALID: 'Controlla i campi del messaggio e i limiti degli allegati.', RECONCILIATION_REQUIRED: 'Registra o riconcilia il tentativo aperto prima di prepararne un altro.' };
   return <div className="min-w-0 crm-space-y-6 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni approvate" description={`Comunicazioni · ${data.label}`} />
     <Link className="font-bold underline" href="/communications">Tutte le comunicazioni</Link>
+    {data.context.kind === 'INTERNAL' && <p>Conversazione interna autonoma: il titolo non collega né modifica una scheda cliente o pratica. La lettura dei partecipanti richiede il testo selezionato e «Approva versione»; l’invio email è un’operazione distinta.</p>}
     {data.thread && data.personal && data.thread.ownerUserId === session.userId ? <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Gestisci partecipanti della conversazione interna</summary>
       <InternalCommunicationEditor key={`${data.thread.id}-${data.thread.version}`} id={data.thread.id} version={data.thread.version} title={data.thread.title}
         selectedIds={data.participantIds} people={data.directory} stepUpActive={ordinaryAuthority?.stepUpActive ?? false} /></details> : null}
@@ -182,12 +201,16 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
       <div role="region" aria-label="Testo del messaggio conservato" className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
+      {selectedInternalDisclosure(message.snapshot) && <p className="my-3 rounded-xl border p-3">
+        {message.internalTextApproved ? 'Versione approvata per la lettura dei partecipanti selezionati. L’invio email e la ricezione sono verifiche distinte.'
+          : 'Testo ancora privato. Richiedi l’approvazione Admin e approva questa versione per renderla leggibile ai partecipanti; poi prepara l’invio email.'}</p>}
       {data.isAdmin && message.ordinaryReceipts.filter(receipt => ['RESERVED','CLAIMED','UNCERTAIN'].includes(receipt.state) || receipt.reconciliation).map(receipt =>
         <OrdinaryEmailRecovery key={receipt.id} messageId={message.id} attemptId={receipt.id} />)}
       <div className="my-4 grid gap-4">
         {data.canWrite && message.operational && (!message.updateDeliveryId || message.updateDraft) && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
           key={`${message.id}-${message.currentRevision}-${message.snapshotHash}`} messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash}
           eligible={!message.needsFreshVersion && !message.updateDraft?.stale && ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
+            && (!selectedInternalDisclosure(message.snapshot) || message.internalTextApproved)
             && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && !message.attempts.some(attempt => ['SENDING','UNCERTAIN','SENT'].includes(attempt.state))}
           stepUpActive={ordinaryAuthority?.stepUpActive ?? false}>
           <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} requestSource={message.requestSource ?? undefined} updateDraft={message.updateDraft ?? undefined} /></details>

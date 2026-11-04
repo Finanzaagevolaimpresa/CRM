@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import { communicationRecipientGroups } from './communication-recipient-groups';
+import { isTechnicalAccount } from './technical-confidentiality';
 
 export const videoAreas = communicationRecipientGroups;
 export type VideoArea = keyof typeof videoAreas;
 export type VideoPerson = {
   id: string; name: string; email: string; role: string; active: boolean; deleted: boolean;
   epoch: number; canRead: boolean; canManage: boolean;
+  technicalRestricted?: boolean;
 };
-export type VideoSelection = { people: string[]; areas: VideoArea[] };
+export type VideoSelection = { people: string[]; areas: VideoArea[]; technicalContentReviewed?: boolean };
 export type VideoAudience = { id: string; epoch: number; role: string }[];
 export class VideoPolicyError extends Error {
   constructor(public readonly code: 'VIDEO_SELECTION_INVALID' | 'VIDEO_SELECTION_CHANGED') { super(code); }
@@ -22,7 +24,9 @@ const available = (person: VideoPerson) => person.active && !person.deleted && p
 export function resolveVideoAudience(raw: unknown, directory: readonly VideoPerson[]) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid();
   const value = raw as Record<string, unknown>;
-  if (Object.keys(value).length !== 2 || !Object.hasOwn(value, 'people') || !Object.hasOwn(value, 'areas')) invalid();
+  if (Object.keys(value).some(key => !['people', 'areas', 'technicalContentReviewed'].includes(key))
+    || !Object.hasOwn(value, 'people') || !Object.hasOwn(value, 'areas')
+    || (Object.hasOwn(value, 'technicalContentReviewed') && typeof value.technicalContentReviewed !== 'boolean')) invalid();
   const ids = (input: unknown, max: number): string[] => {
     if (!Array.isArray(input) || input.length > max || input.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id))
       || new Set(input).size !== input.length) invalid();
@@ -44,7 +48,8 @@ export function resolveVideoAudience(raw: unknown, directory: readonly VideoPers
     if (!person || !available(person)) throw new VideoPolicyError('VIDEO_SELECTION_CHANGED');
     return person;
   });
-  const selection: VideoSelection = { people, areas: areas as VideoArea[] };
+  const selection: VideoSelection = { people, areas: areas as VideoArea[],
+    ...(typeof value.technicalContentReviewed === 'boolean' ? { technicalContentReviewed: value.technicalContentReviewed } : {}) };
   const audience: VideoAudience = resolved.map(({ id, epoch, role }) => ({ id, epoch, role }));
   const binding = digest({ selection, audience, people: resolved.map(({ id, name, email }) => ({ id, name, email })),
     // Group changes between preview and confirmation must not use an old decision.
@@ -56,11 +61,12 @@ export function resolveVideoAudience(raw: unknown, directory: readonly VideoPers
 export type VideoPublication = {
   state: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'; fileReady: boolean;
   expiresAt: Date | null; authorId: string | null; authorEpoch: number | null;
-  audience: VideoAudience; downloadAllowed: boolean;
+  audience: VideoAudience; downloadAllowed: boolean; technicalContentReviewed?: boolean;
 };
 /** Fresh session/registry validation and a locked current row are required before
  * this policy, on list/search/metadata and every GET, HEAD or Range request. */
 export function canReadPublishedVideo(video: VideoPublication, person: VideoPerson, author: VideoPerson | null, now: Date) {
+  if (isTechnicalAccount(person) && video.technicalContentReviewed !== true) return false;
   if (!Number.isFinite(now.getTime()) || video.state !== 'PUBLISHED' || !video.fileReady || !available(person)
     || (video.expiresAt !== null && (!Number.isFinite(video.expiresAt.getTime()) || video.expiresAt <= now))) return false;
   if (!author || !author.active || author.deleted || author.role !== 'admin' || !author.canManage

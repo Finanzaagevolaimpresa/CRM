@@ -3,6 +3,7 @@ import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
+import { ApprovedCommunicationError } from './approved-communication-contract';
 import { confirmOrdinaryEmailFromRequest, previewOrdinaryEmailFromRequest, rejectOrdinaryEmailFromRequest } from './ordinary-email-server-candidate';
 import type { OrdinaryEmailPreviewResult, OrdinaryEmailRefusalResult, OrdinaryEmailSendResult } from './ordinary-email-ui-contract';
 
@@ -10,7 +11,18 @@ import type { OrdinaryEmailPreviewResult, OrdinaryEmailRefusalResult, OrdinaryEm
 export async function previewOrdinaryEmailAction(input: unknown): Promise<OrdinaryEmailPreviewResult> {
   await assertTechnicalServerAction("ordinary-email-actions:previewOrdinaryEmailAction");
   try { return { status: 'READY', preview: await previewOrdinaryEmailFromRequest(input) }; }
-  catch (error) { unstable_rethrow(error); return { status: 'UNAVAILABLE' }; }
+  catch (error) {
+    unstable_rethrow(error);
+    const message = error instanceof ApprovedCommunicationError && error.code === 'CONTENT_REVIEW_REQUIRED'
+      ? 'Destinatari tecnici selezionati: nella bozza interna conferma il testo condivisibile senza allegati, salva e approva la versione esatta.'
+      : error instanceof ApprovedCommunicationError && error.code === 'CONTENT_APPROVAL_REQUIRED'
+        ? 'Prima dell’invio, richiedi l’approvazione Admin e approva la versione esatta per pubblicare il testo ai partecipanti selezionati.'
+      : error instanceof ApprovedCommunicationError && error.code === 'RECIPIENT_PERMISSION_REQUIRED'
+        ? 'Un partecipante non ha il permesso Leggere comunicazioni interne. Verifica la sua scheda in Impostazioni → Utenti e salva una nuova versione.'
+        : error instanceof ApprovedCommunicationError && error.code === 'SHARING_EXPIRED'
+          ? 'La lettura selezionata è scaduta. Aggiorna la scadenza nella bozza e approva la nuova versione.' : undefined;
+    return { status: 'UNAVAILABLE', ...(message ? { message } : {}) };
+  }
 }
 
 export async function rejectOrdinaryEmailAction(input: unknown): Promise<OrdinaryEmailRefusalResult> {

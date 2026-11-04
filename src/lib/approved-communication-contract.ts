@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { canonicalJson, sha256 } from './canonical-json';
 import { communicationRecipientSelectionSchema } from './communication-recipient-policy';
+import { internalDisclosureSchema } from './internal-content-disclosure';
 
 export const DECLARED_FAI_MAILBOXES = Object.freeze([
   { address: 'info@finanzaagevolaimpresa.it', purpose: 'Primo contatto e commerciale', restricted: false },
@@ -89,6 +90,7 @@ const contextualSnapshot = legacySnapshot.extend({
   externalRecipients: z.object({ to: z.array(email).max(20), cc: z.array(email).max(20), bcc: z.array(email).max(20) }).strict(),
   recipientEvidenceHash: hash,
   contextEvidenceHash: hash,
+  internalDisclosure: internalDisclosureSchema.optional(),
 }).strict();
 // Legacy versions remain byte/hash compatible and immutable. New contexts use
 // v2; creating a client or practice as a placeholder is never a valid context.
@@ -100,6 +102,8 @@ export const approvedMessageSnapshotSchema = z.union([legacySnapshot, contextual
     || value.attachments.reduce((total, a) => total + a.bytes, 0) > 20 * 1024 * 1024)
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'MESSAGE_ATTACHMENT_SET_INVALID' });
   if (value.schema === 'fai.approved-email.v2') {
+    if (value.internalDisclosure && (value.context.kind !== 'INTERNAL' || value.classification !== 'ORDINARY' || value.attachments.length))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'INTERNAL_DISCLOSURE_TEXT_ONLY' });
     const requiresClient = ['READINESS', 'TECHNICAL', 'CLIENT'].includes(value.context.kind);
     if (requiresClient !== (value.clientId !== null)
       || (value.context.kind === 'CLIENT' && value.clientId !== value.context.id)
@@ -123,7 +127,8 @@ export const exactMessageApprovalSchema = z.object({
 export type ExactMessageApproval = z.infer<typeof exactMessageApprovalSchema>;
 
 export class ApprovedCommunicationError extends Error {
-  constructor(readonly code: 'INVALID' | 'DENIED' | 'CONFLICT' | 'SENDER_NOT_READY' | 'RECONCILIATION_REQUIRED') { super(code); }
+  constructor(readonly code: 'INVALID' | 'DENIED' | 'CONFLICT' | 'SENDER_NOT_READY' | 'RECONCILIATION_REQUIRED'
+    | 'CONTENT_REVIEW_REQUIRED' | 'CONTENT_APPROVAL_REQUIRED' | 'RECIPIENT_PERMISSION_REQUIRED' | 'SHARING_EXPIRED') { super(code); }
 }
 
 // Authority, practice/attachment access and suspension checks belong to the calling

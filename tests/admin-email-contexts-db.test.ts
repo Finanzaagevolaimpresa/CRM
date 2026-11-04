@@ -18,7 +18,7 @@ const enabled=process.env.CI==='true'&&process.env.ADMIN_EMAIL_CONTEXTS_TESTS===
   destructiveConfirmed:process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED==='1',databaseUrl:process.env.DATABASE_URL,sentinel:process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL,
   appEnvironment:process.env.APP_ENV,nodeEnvironment:process.env.NODE_ENV});
 const db=new PrismaClient(), options={skip:!enabled};
-const denied=(e:unknown)=>e instanceof Error&&/DENIED|CONFLICT|RECONCILIATION|INVALID|VIOLATION|CHECK_CURRENT|P2002|Unique constraint/i.test(e.message);
+const denied=(e:unknown)=>e instanceof Error&&/DENIED|CONFLICT|RECONCILIATION|INVALID|VIOLATION|CHECK_CURRENT|CONTENT_REVIEW_REQUIRED|RECIPIENT_PERMISSION_REQUIRED|P2002|Unique constraint/i.test(e.message);
 const hash=(bytes:Buffer)=>createHash('sha256').update(bytes).digest('hex');
 test.before(async()=>{
   if(!enabled)return;
@@ -77,7 +77,7 @@ test('internal context admits only current participants including against anothe
   const f=await contextFixture(db),before=await db.client.count(),thread=await contextThread(db,f);
   const saved=await saveApprovedMessageDraft(db,f.owner.actor,contextDraft(f,{kind:'INTERNAL',id:thread.id}));
   const row=await db.approvedCommunication.findUniqueOrThrow({where:{id:saved.id}});assert.equal(row.clientId,null);assert.equal(row.technicalPracticeId,null);
-  assert.equal((await readPracticeCommunications(db,f.member.actor,{kind:'INTERNAL',id:thread.id})).messages[0].id,saved.id);
+  await assert.rejects(readPracticeCommunications(db,f.member.actor,{kind:'INTERNAL',id:thread.id}),denied);
   await assert.rejects(readPracticeCommunications(db,f.outsider.actor,{kind:'INTERNAL',id:thread.id}),denied);
   assert.equal((await listInternalCommunications(db,f.outsider.actor)).length,0);assert.equal(await db.client.count(),before);
 });
@@ -165,7 +165,8 @@ test('internal reservation consumes one exact decision and lost-response replay 
 test('private context file upload is scoped, hash-bound, auditable and has no dossier document side effect',options,async()=>{
   const f=await contextFixture(db),thread=await contextThread(db,f),context={kind:'INTERNAL' as const,id:thread.id},id=randomUUID(),bytes=Buffer.from('SYNTHETIC_PRIVATE_CONTEXT_FILE');
   const before=await db.document.count();await storeCommunicationFile(db,f.owner.actor,{id,context,classification:'ORDINARY'},new File([bytes],'context.txt',{type:'text/plain'}));
-  assert.deepEqual((await readCommunicationFile(db,f.member.actor,{id,context,sha256:hash(bytes)})).bytes,bytes);
+  assert.deepEqual((await readCommunicationFile(db,f.owner.actor,{id,context,sha256:hash(bytes)})).bytes,bytes);
+  await assert.rejects(readCommunicationFile(db,f.member.actor,{id,context,sha256:hash(bytes)}),denied);
   await assert.rejects(readCommunicationFile(db,f.outsider.actor,{id,context,sha256:hash(bytes)}),denied);
   await assert.rejects(readCommunicationFile(db,f.owner.actor,{id,context:{kind:'CLIENT',id:f.client.id},sha256:hash(bytes)}),denied);
   await assert.rejects(readCommunicationFile(db,f.member.actor,{id,context,sha256:'a'.repeat(64)}),denied);

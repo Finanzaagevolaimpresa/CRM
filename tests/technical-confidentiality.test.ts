@@ -11,7 +11,8 @@ for (const role of ['consulente','backoffice'] as const) {
   test(role + ': positive overrides and historical broad fields cannot disclose protected data', () => {
     const actor = { role, active: true, permissionOverrides: ['contract.read','payment.read','audit.read','communications.internal.read','settings.manage']
       .map(permission => ({ permission, allowed: true })) };
-    for (const permission of ['contract.read','payment.read','audit.read','communications.internal.read','settings.manage'] as const) assert.equal(evaluatePermission(actor, permission).allowed, false);
+    for (const permission of ['contract.read','payment.read','audit.read','settings.manage'] as const) assert.equal(evaluatePermission(actor, permission).allowed, false);
+    assert.equal(evaluatePermission(actor, 'communications.internal.read').allowed, true);
     assert.deepEqual(fieldsForDisclosure(actor,'Project',['title','description','priority','technicalOwnerName','paymentReference','notes','amount','totalInvestment']),['title','priority','technicalOwnerName','totalInvestment']);
     assert.deepEqual(fieldsForDisclosure(actor,'TechnicalPractice',['integrationRequestNote','internalNotes','clientVisibleStatus','dueDate']),['dueDate']);
     assert.equal(technicalFieldAllowed('Task','description'),false);
@@ -43,7 +44,9 @@ test('new and indirect routes default to denial while selected technical routes 
   assert.equal(technicalPageMode('/technical-uploads/[kind]/[id]'),'original');
   assert.equal(technicalPageMode('/projects/[id]'),'record');
   assert.equal(technicalFileRouteAllowed('/technical-work/[kind]/[id]/documents/[versionId]'),true);
-  for(const route of ['/technical-uploads/[kind]/[id]/files/[commandId]','/videos/[id]/content','/export','/contracts/[id]/download']) assert.equal(technicalFileRouteAllowed(route),false);
+  for(const route of ['/technical-uploads/[kind]/[id]/files/[commandId]','/export','/contracts/[id]/download']) assert.equal(technicalFileRouteAllowed(route),false);
+  assert.equal(technicalFileRouteAllowed('/videos/[id]/content'),true);
+  assert.equal(technicalFileRouteAllowed('/videos/drive/[id]/access'),true);
 });
 test('unclassified communications cannot evade the technical recipient restriction via typed To, CC or BCC', () => {
   const person={id:'synthetic-tech',name:'Synthetic technician',email:'tech@example.test',role:'consulente',active:true,deletedAt:null};

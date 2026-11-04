@@ -36,7 +36,8 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
       const result = await previewOrdinaryEmailAction({ messageId: shown.messageId });
       if (started !== epoch.current) return;
       if (result.status !== 'READY' || !ordinaryPreviewMatches(result.preview, shown, Date.now())) {
-        setCheckCurrent(true); setNotice('Versione o accesso non più disponibili. Aggiorna la comunicazione.'); return;
+        setCheckCurrent(true); setNotice(result.status === 'UNAVAILABLE' && result.message ? result.message
+          : 'Versione o accesso non più disponibili. Aggiorna la comunicazione.'); return;
       }
       setPreview(result.preview);
     } catch { if (started === epoch.current) setNotice('Anteprima non disponibile. Verifica la connessione e aggiorna la comunicazione.'); }

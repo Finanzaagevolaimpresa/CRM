@@ -5,6 +5,9 @@ import { internalSessionMode } from './session';
 import { lockAuthoritativeInternalSession, lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
 import { redactAuditPayload } from './data-classification';
 import { lockCommunicationDirectory } from './communication-directory-lock';
+import { currentTechnicalRestriction } from './technical-account-membership';
+import { permissionOverrideControl } from './permission-evaluator';
+import { isPermission } from './permissions';
 
 export type PrivilegeActor = { userId: string; sessionId?: string };
 export type PrivilegeResult<T = unknown> = { ok: true; value: T } | { ok: false; message: string };
@@ -146,6 +149,13 @@ export async function updatePermissionOverridesWithAudit(tx: Tx, actor: Privileg
     return denied('Contratti, pagamenti e relativo audit sono riservati ad Admin e Amministrazione.');
   }
   const before = user.permissionOverrides.map(({ permission, allowed }) => ({ permission, allowed }));
+  const target = { ...user, permissionOverrides: overrides,
+    technicalRestricted: await currentTechnicalRestriction(tx, user.id, { ...user, permissionOverrides: overrides }) };
+  for (const item of overrides) {
+    if (!isPermission(item.permission)) return denied('Permesso non riconosciuto.');
+    const control = permissionOverrideControl(target, item.permission);
+    if (!control.editable) return denied(control.reason);
+  }
   await tx.userPermissionOverride.deleteMany({ where: { userId: user.id } });
   if (overrides.length) await tx.userPermissionOverride.createMany({ data: overrides.map((item) => ({ userId: user.id, ...item })), skipDuplicates: true });
   await auditTx(tx, actor.userId, 'user_permission_overrides_updated', 'User', user.id, overrides, before);
