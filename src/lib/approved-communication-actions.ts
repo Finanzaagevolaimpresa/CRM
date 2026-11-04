@@ -38,6 +38,8 @@ export async function mutateApprovedMessageAction(form: FormData): Promise<Workf
       mailboxId: value(form, 'mailboxId'), replyTo: value(form, 'replyTo'), to: addresses(form, 'to'), cc: addresses(form, 'cc'), bcc: addresses(form, 'bcc'),
       subject: value(form, 'subject'), body: value(form, 'body'), attachmentVersionIds: form.getAll('attachmentVersionId').map(String),
       classification: value(form, 'classification'),
+      shareInternalText: form.get('shareInternalText') === 'true',
+      internalReadingExpiresAt: value(form, 'internalReadingExpiresAt') || null,
       contextFileIds: form.getAll('contextFileId').map(String),
       ...(form.has('recipientSelection') ? { recipientSelection: JSON.parse(value(form, 'recipientSelection')) } : {}),
       ...(form.has('replySourceId') ? { replySource: { id: value(form,'replySourceId'), contentHash: value(form,'replySourceHash') } } : {}),
@@ -58,7 +60,10 @@ export async function mutateApprovedMessageAction(form: FormData): Promise<Workf
     errorCode = error.code;
   }
   if (errorCode) return { ok: false, message: errorCode === 'CONFLICT' ? 'La versione è cambiata o l’operazione risulta già conclusa. Conserva questa bozza e confronta il messaggio registrato.'
-    : errorCode === 'DENIED' ? 'Accesso o contesto non più valido. La bozza è conservata; verifica i permessi prima di proseguire.'
+    : errorCode === 'CONTENT_REVIEW_REQUIRED' ? 'La lettura o l’email include destinatari tecnici: conferma il testo condivisibile nella bozza interna ordinaria, senza allegati riservati. Salva la nuova versione prima di approvarla.'
+    : errorCode === 'RECIPIENT_PERMISSION_REQUIRED' ? 'Un partecipante selezionato non ha il permesso di lettura. Apri Impostazioni → Utenti, verifica Leggere comunicazioni interne, poi aggiorna la bozza e l’anteprima.'
+    : errorCode === 'SHARING_EXPIRED' ? 'La lettura selezionata è scaduta. Imposta una nuova scadenza nella bozza e approva la nuova versione.'
+    : errorCode === 'DENIED' ? 'Accesso o contesto non più valido. Il testo resta nel modulo e non risulta salvato da questa risposta. Verifica account, partecipazione e permessi prima di proseguire.'
     : errorCode === 'SENDER_NOT_READY' ? 'Il mittente non è qualificato per questa operazione. La bozza è conservata.' : 'Controlla campi, contesto, destinatari e permessi. La bozza è conservata.' };
   revalidatePath('/communications');
   return { ok: true, message: 'Operazione registrata.', href: `${target}&result=RECORDED&focus=${encodeURIComponent(value(form, 'messageId'))}` };

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
 import { permissionCatalog, permissionCodes, roleHasPermission, type Permission } from './permissions';
 import { evaluatePermission } from './permission-evaluator';
+import { isSelectedContentPermission } from './technical-confidentiality';
 
 export const profileRoles = ['direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione', 'collaboratore_limitato'] as const;
 export const profileRole = z.enum(profileRoles);
@@ -21,7 +22,7 @@ export function normalizeRoleProfile(role: ProfileRole, raw: unknown) {
   const values = roleProfileOverrides.parse(raw);
   if (new Set(values.map(value => value.permission)).size !== values.length
     || values.some(value => !editableRolePermission(role, value.permission))) throw new RoleProfileError('INVALID');
-  return values.filter(value => value.allowed !== roleHasPermission(role, value.permission))
+  return values.filter(value => isSelectedContentPermission(value.permission) || value.allowed !== roleHasPermission(role, value.permission))
     .sort((a, b) => a.permission.localeCompare(b.permission));
 }
 export const roleProfileSnapshot = z.object({

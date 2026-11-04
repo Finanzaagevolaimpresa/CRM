@@ -112,3 +112,11 @@ export function applicationSecurityHeaders(mode = securityHeadersMode()) {
     { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
   ] as const;
 }
+
+/** Only the two authenticated Drive video page families may frame Google.
+ * Other CSP directives and all other routes retain their existing policy. */
+export function driveVideoSecurityHeaders(mode = securityHeadersMode()) {
+  return applicationSecurityHeaders(mode).map(header =>
+    header.key === 'Content-Security-Policy' || header.key === 'Content-Security-Policy-Report-Only'
+      ? { ...header, value: header.value + '; frame-src https://drive.google.com' } : header);
+}

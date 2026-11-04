@@ -1,4 +1,6 @@
 import { canAccessFinancialDocument } from './financial-document-access';
+import { captureInternalDisclosure, assertInternalDisclosureCurrent } from './internal-content-disclosure-db';
+import { selectedInternalDisclosure } from './internal-content-disclosure';
 import { assertOperationalAccess, readOperationalState, AdminOperationalStateError, type AdminOperationalModel, type OperationalStateRow } from './admin-operational-state';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type CommunicationMailbox } from '@prisma/client';
@@ -69,7 +71,7 @@ async function actor(tx: Tx, claimed: AuthSession, permission: Permission, admin
   await lockCommunicationDirectory(tx);
   const row = await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId!, userId: claimed.userId });
   if (!row || !row.active || !row.live || row.revokedAt || row.deletedAt || (admin && row.role !== 'admin')) denied();
-  const current = { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+  const current = { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), role: row.role, active: row.active, technicalRestricted: row.technicalRestricted, permissionOverrides: [...row.permissionOverrides],
     clientReadScope: await loadClientReadScope(tx, claimed.userId) } satisfies AuthSession;
   // Context admission below still requires the appropriate permission. Internal
   // participation never grants the unrelated practice permission.
@@ -107,6 +109,9 @@ async function contextScope(tx: Tx, current: CommunicationPrincipal, context: Co
     catch (error) { if (error instanceof AdminOperationalStateError) denied(); throw error; }
   }
   if (context.kind !== 'READINESS' && context.kind !== 'TECHNICAL') {
+    // Selected readers use the text-only projection; membership never grants
+    // this management/attachment/mailbox context or its unclassified history.
+    if (context.kind === 'INTERNAL' && current.role !== 'admin') denied();
     if (context.kind === 'INTERNAL' && !hasPermission(current, 'communications.internal.read')) denied();
     if (write) {
       const [binding] = await tx.$queryRaw<Array<{ userId: string; enabled: boolean }>>`SELECT "userId","enabled" FROM "OrdinaryEmailAuthority" WHERE "id"='ordinary-email' FOR SHARE`;
@@ -248,6 +253,7 @@ async function snapshotAttachments(tx: Tx, current: CommunicationPrincipal, scop
 
 async function revalidateSnapshotRecipients(tx: Tx, scope: Awaited<ReturnType<typeof contextScope>>, snapshot: ApprovedMessageSnapshot) {
   await assertCommunicationTechnicalRecipients(tx, snapshot);
+  await assertInternalDisclosureCurrent(tx, snapshot, scope.thread, scope.participants);
   if (snapshot.schema !== 'fai.approved-email.v2') return;
   if (snapshot.contextEvidenceHash !== canonicalSha256(JSON.parse(JSON.stringify(scope)))) conflict();
   const resolved = await lockedCommunicationRecipients(tx, snapshot.recipientSelection, snapshot.externalRecipients,
@@ -343,6 +349,8 @@ async function messageScope(tx: Tx, current: CommunicationPrincipal, id: string,
     updateUntil = Math.min(updateUntil, admitted.accessUntil);
     requestSource = { requestId: admitted.state.requestId, sourceHash: admitted.sourceHash, mailboxId: admitted.authority.mailboxId };
   }
+  const shared = selectedInternalDisclosure(snapshot);
+  if (write && shared?.expiresAt) updateUntil = Math.min(updateUntil, new Date(shared.expiresAt).getTime());
   return { row, version, snapshot, scope, box, updateAdmission, updateUntil, requestSource };
 }
 
@@ -405,6 +413,8 @@ const editSchema = z.object({
   subject: z.string(), body: z.string(), attachmentVersionIds: z.array(identifier).max(20),
   classification: z.enum(['ORDINARY', 'SENSITIVE', 'COMPLAINT']),
   recipientSelection: communicationRecipientSelectionSchema.optional(),
+  shareInternalText: z.boolean().optional(),
+  internalReadingExpiresAt: z.string().datetime({ offset: true }).nullable().optional(),
   contextFileIds: z.array(uuid).max(20).default([]),
   replySource: z.object({ id: uuid, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   updateSource: z.object({ deliveryId: uuid, sourceHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
@@ -420,6 +430,8 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
   if (!hasPermission(current, 'practice_communications.read')) denied();
   const loaded = await messageScope(tx, current, messageId, true);
   await revalidateSnapshotRecipients(tx, loaded.scope, loaded.snapshot);
+  if (selectedInternalDisclosure(loaded.snapshot) && (!loaded.version.approval
+    || loaded.version.approval.snapshotHash !== loaded.version.snapshotHash)) throw new ApprovedCommunicationError('CONTENT_APPROVAL_REQUIRED');
   if (!mailboxQualification(mailboxSnapshot(loaded.box)).enabled) denied();
   await responsibleMailbox(tx, loaded.box);
   const files = await snapshotAttachments(tx, current, loaded.scope, loaded.snapshot, runtime);
@@ -519,13 +531,20 @@ export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: Aut
     const resolved = useV2 ? await lockedCommunicationRecipients(tx, selection, externalRecipients,
       scope.context.kind === 'INTERNAL' ? scope.participants!.map(person => person.userId) : undefined) : null;
     const files = await attachments(tx, current, scope, input.attachmentVersionIds, runtime, format, input.contextFileIds, input.classification);
+    if (input.shareInternalText && (scope.context.kind !== 'INTERNAL' || input.classification !== 'ORDINARY' || files.snapshot.length))
+      throw new ApprovedCommunicationError('CONTENT_REVIEW_REQUIRED');
+    const internalDisclosure = input.shareInternalText && scope.thread && scope.participants
+      ? await captureInternalDisclosure(tx, scope.thread, scope.participants, current.userId, input.internalReadingExpiresAt ?? null) : undefined;
     const snapshot = parse(approvedMessageSnapshotSchema, { schema: format, messageId: input.messageId,
       revision: input.expectedRevision + 1, context: input.context, clientId: scope.client?.id ?? null, channel: 'EMAIL_MANUAL',
       mailboxId: box.id, mailboxRevision: box.revision, from: box.address, replyTo: input.replyTo,
       ...(resolved?.recipients ?? externalRecipients), subject: input.subject, body: input.body, attachments: files.snapshot, classification: input.classification,
       ...(resolved ? { recipientSelection: resolved.selection, externalRecipients, recipientEvidenceHash: resolved.evidenceHash,
-        contextEvidenceHash: canonicalSha256(JSON.parse(JSON.stringify(scope))) } : {}) });
-    await assertCommunicationTechnicalRecipients(tx, snapshot);
+        contextEvidenceHash: canonicalSha256(JSON.parse(JSON.stringify(scope))),
+        ...(internalDisclosure ? { internalDisclosure } : {}) } : {}) });
+    // A private internal draft is safe to persist even while a selected reader's
+    // permission is being configured. Approval and DATA validate it afresh.
+    if (snapshot.context.kind !== 'INTERNAL') await assertCommunicationTechnicalRecipients(tx, snapshot);
     if (updateAdmission) replyAccessUntil = Math.min(replyAccessUntil, await updateRecipientAdmission(tx, updateAdmission, snapshot));
     if (!existing) await tx.approvedCommunication.create({ data: { id: input.messageId, clientId: scope.client?.id ?? null,
       updateDeliveryId: input.updateSource?.deliveryId ?? null,
@@ -712,6 +731,8 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       accessUntil = Math.min(accessUntil, messageUntil, detail.updateUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
         snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, requestSource: detail.requestSource,
+        internalTextApproved: Boolean(selectedInternalDisclosure(detail.snapshot) && detail.version.approval
+          && detail.version.approval.snapshotHash === detail.version.snapshotHash),
         lifecycleState: lifecycle?.state ?? 'ACTIVE' as const, operational, needsFreshVersion,
         updateDraft: detail.updateAdmission && current.userId === detail.updateAdmission.author.id ? {
           deliveryId: detail.row.updateDeliveryId!, sourceHash: detail.updateAdmission.proposal.sourceHash,

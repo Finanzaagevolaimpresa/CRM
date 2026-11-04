@@ -1,5 +1,5 @@
 import type { NextConfig } from 'next';
-import { applicationSecurityHeaders } from './src/lib/application-security-policy';
+import { applicationSecurityHeaders, driveVideoSecurityHeaders } from './src/lib/application-security-policy';
 
 const nextConfig: NextConfig = {
   // Each selected file is sent separately; 1 MB is reserved for multipart metadata.
@@ -11,7 +11,9 @@ const nextConfig: NextConfig = {
   crossOrigin: 'anonymous',
   allowedDevOrigins: ['127.0.0.1'],
   async headers() {
-    return [{ source: '/:path*', headers: [...applicationSecurityHeaders()] }];
+    return [{ source: '/:path*', headers: [...applicationSecurityHeaders()] },
+      { source: '/videos/drive/:id', headers: driveVideoSecurityHeaders() },
+      { source: '/videos/manage/drive/:id', headers: driveVideoSecurityHeaders() }];
   },
   images: {
     // The CRM has no next/image consumers. Keep generated image URLs direct;

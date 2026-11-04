@@ -5,11 +5,12 @@ export type TechnicalPageMode = 'original' | 'workspace' | 'record' | 'denied';
 export function technicalPageMode(route: string): TechnicalPageMode {
   if (['/', '/login', '/settings/account', '/technical-uploads/[kind]/[id]',
     '/notifications/updates', '/notifications/updates/[id]', '/technical-office/integrations',
-    '/admin-requests', '/admin-requests/new', '/admin-requests/[id]', '/assignments', '/assignments/[kind]/[id]'].includes(route)) return 'original';
+    '/admin-requests', '/admin-requests/new', '/admin-requests/[id]', '/assignments', '/assignments/[kind]/[id]',
+    '/communications', '/videos', '/videos/[id]', '/videos/drive/[id]'].includes(route)) return 'original';
   if (['/dashboard', '/projects', '/technical-office', '/technical-office/practices',
     '/tasks', '/deadlines', '/documents', '/document-checklists', '/search',
     '/notifications',
-    '/communications', '/communications/updates'].includes(route)) return 'workspace';
+    '/communications/updates'].includes(route)) return 'workspace';
   if (['/projects/[id]', '/technical-office/practices/[id]'].includes(route)) return 'record';
   if (['/technical-work', '/technical-work/[kind]/[id]', '/technical-work/[kind]/[id]/items/[itemKind]/[itemId]'].includes(route)
     || ['/shared-projects', '/shared-projects/[id]', '/shared-practices', '/shared-practices/[id]',
@@ -17,6 +18,8 @@ export function technicalPageMode(route: string): TechnicalPageMode {
   return 'denied';
 }
 const fileRoutes = new Set([
+  '/videos/[id]/content',
+  '/videos/drive/[id]/access',
   '/api/admin-requests/outcome',
   '/documents/[id]/download', '/documents/[id]/view', '/acquired-documents/[id]',
   '/shared-projects/[id]/documents/[versionId]', '/shared-clients/[id]/documents/[versionId]',

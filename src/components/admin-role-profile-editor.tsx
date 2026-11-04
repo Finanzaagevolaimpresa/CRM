@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { readAdminRoleProfile } from '@/lib/admin-role-profiles';
 import { editableRolePermission, type RoleProfileSnapshot } from '@/lib/admin-role-profile-contract';
 import { permissionCatalog } from '@/lib/permissions';
-import { evaluatePermission } from '@/lib/permission-evaluator';
+import { evaluatePermission, permissionOverrideControl } from '@/lib/permission-evaluator';
 import { effectiveRoleProfileOverrides } from '@/lib/admin-role-profile-compatibility';
 import { saveAdminRoleProfileAction, reconcileAdminRoleProfileAction, type RoleProfileResult } from '@/lib/admin-role-profile-actions';
 import { InlinePrivilegedConfirmation } from './inline-privileged-confirmation';
@@ -50,8 +50,11 @@ export function AdminRoleProfileEditor({ data, commandId: initialCommandId, reco
     <form onSubmit={event => { event.preventDefault(); void save(); }} className="space-y-4">
       <fieldset disabled={frozen} className="space-y-3">{permissionCatalog.map(item => {
         const editable = editableRolePermission(data.role, item.code), override = overrides.find(value => value.permission === item.code);
+        const control = permissionOverrideControl({ role: data.role, active: true, permissionOverrides: overrides }, item.code);
         return <div key={item.code} className="rounded-xl border p-3 grid gap-3 md:grid-cols-[1fr_auto]">
-          <div><strong>{item.label}</strong><p>{item.description}</p><p>{item.group} · {effective(item.code) ? 'Consentito' : 'Negato'}{!editable && ' · limite protetto'}</p></div>
+          <div><strong>{item.label}</strong><p>{item.description}</p>
+            <p>{item.group} · Ereditato: {control.inherited ? 'sì' : 'no'} · Effettivo nel profilo: {effective(item.code) ? 'consentito' : 'negato'}</p>
+            <p>{!editable && control.editable ? 'Funzione esclusa dai profili di ruolo: le autorizzazioni dedicate mantengono il proprio percorso.' : control.reason}</p></div>
           <label>Scelta per {item.label}<select className="block border rounded-lg p-2" aria-label={'Profilo · ' + item.label}
             disabled={!editable} value={override === undefined ? 'inherit' : override.allowed ? 'allow' : 'deny'}
             onChange={event => { setOverrides(values => [...values.filter(value => value.permission !== item.code),

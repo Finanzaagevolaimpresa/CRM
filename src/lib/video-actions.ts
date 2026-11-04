@@ -18,6 +18,7 @@ async function proof() {
     stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' };
 }
 function failure(error: unknown) {
+  if (error instanceof VideoLibraryError && error.code === 'CONTENT_REVIEW_REQUIRED') return 'Sono selezionate persone con funzione tecnica. Verifica video, titolo e descrizione e conferma il contenuto condivisibile prima di pubblicare.';
   if (error instanceof z.ZodError) return 'Controlla titolo, destinatari, scadenza e file.';
   if (error instanceof VideoLibraryError && error.code === 'QUOTA') return 'Quota della libreria esaurita. Nessun nuovo file è stato registrato.';
   if (error instanceof VideoLibraryError && error.code === 'STALE') return 'Video o permessi cambiati: prepara un nuovo riepilogo dalla scheda corrente.';

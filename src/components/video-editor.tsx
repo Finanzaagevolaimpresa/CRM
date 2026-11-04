@@ -33,6 +33,8 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
   const interactive = useSyncExternalStore(subscribe, ready, server);
   const pending = useRef(false);
   const [details, setDetails] = useState(setup.details);
+  const changeContent = (value: Partial<VideoDetails>) => setDetails(current => ({ ...current, ...value,
+    selection: { ...current.selection, technicalContentReviewed: false } }));
   const [files, setFiles] = useState(setup.files), [fileQuery, setFileQuery] = useState('');
   const [nextFileOffset, setNextFileOffset] = useState<number | null>(null);
   const [busy, setBusy] = useState(false), [uncertain, setUncertain] = useState(false), [done, setDone] = useState(false);
@@ -99,7 +101,7 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
   return <section className="crm-space-y-5 min-w-0" data-testid="video-editor" data-interactive-ready={interactive}>
     <p className="break-words text-sm text-slate-600">File: <strong>{setup.fileName}</strong>. Stato: {setup.state === 'PUBLISHED' ? 'pubblicato' : setup.state === 'ARCHIVED' ? 'archiviato' : 'bozza'}.</p>
     <fieldset disabled={locked || setup.state === 'ARCHIVED'} className="crm-space-y-4 min-w-0">
-      <label className="block font-bold">File del video<select className={field} value={details.fileId} onChange={e => setDetails({ ...details, fileId: e.target.value })}>
+      <label className="block font-bold">File del video<select className={field} value={details.fileId} onChange={e => changeContent({ fileId: e.target.value })}>
         {files.map(file => <option key={file.id} value={file.id}>{file.fileName} · {(file.sizeBytes / 1024 / 1024).toFixed(2)} MiB · {file.id.slice(0, 8)}</option>)}
       </select></label>
       <div className="flex flex-wrap items-end gap-2">
@@ -109,10 +111,10 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
       </div>
       <p className="text-sm text-slate-600">Per sostituire il contenuto, carica prima il nuovo file nella gestione video, poi selezionalo qui. Il salvataggio riporta questa scheda in bozza privata e conserva il file precedente nello storico.</p>
       {replacingFile && <p className="rounded-xl bg-amber-50 p-3">La sostituzione richiede prima il salvataggio in bozza. Per rendere visibile il nuovo file dovrai riaprire la scheda e confermare una nuova pubblicazione.</p>}
-      <label className="block font-bold">Titolo<input className={field} maxLength={160} required value={details.title} onChange={e => setDetails({ ...details, title: e.target.value })}/></label>
-      <label className="block font-bold">Descrizione<textarea className={field} rows={4} maxLength={3000} value={details.description} onChange={e => setDetails({ ...details, description: e.target.value })}/></label>
+      <label className="block font-bold">Titolo<input className={field} maxLength={160} required value={details.title} onChange={e => changeContent({ title: e.target.value })}/></label>
+      <label className="block font-bold">Descrizione<textarea className={field} rows={4} maxLength={3000} value={details.description} onChange={e => changeContent({ description: e.target.value })}/></label>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-        <label className="block font-bold">Categoria<input className={field} maxLength={80} value={details.category} onChange={e => setDetails({ ...details, category: e.target.value })}/></label>
+        <label className="block font-bold">Categoria<input className={field} maxLength={80} value={details.category} onChange={e => changeContent({ category: e.target.value })}/></label>
         <label className="block font-bold">Ordine<input className={field} type="number" min={0} max={10000} value={details.position} onChange={e => setDetails({ ...details, position: Number(e.target.value) })}/></label>
       </div>
       <fieldset className="crm-space-y-2"><legend className="font-bold">Aree</legend>
@@ -135,6 +137,9 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
           <span className="min-w-0 break-words">{person.name} · {person.email} <span className="text-slate-500">({person.role})</span></span></label>)}
       </div></fieldset>
       <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={details.downloadAllowed} onChange={e => setDetails({ ...details, downloadAllowed: e.target.checked })}/><span>Consenti anche il download alle persone ammesse</span></label>
+      <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={details.selection.technicalContentReviewed === true}
+        onChange={e => setDetails({ ...details, selection: { ...details.selection, technicalContentReviewed: e.target.checked } })}/>
+        <span>Ho verificato video, titolo e descrizione: sono condivisibili anche con i destinatari tecnici selezionati e non contengono pagamenti, contratti firmati o note riservate.</span></label>
       <label className="block font-bold">Scadenza facoltativa<input className={field} type="datetime-local" value={localDate(details.expiresAt)}
         onChange={e => setDetails({ ...details, expiresAt: e.target.value ? new Date(e.target.value).toISOString() : null })}/></label>
     </fieldset>

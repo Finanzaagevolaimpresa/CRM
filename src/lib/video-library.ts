@@ -19,7 +19,7 @@ type Proof = UpdateCredentials;
 const transactionOptions = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 } as const;
 const uuid = z.string().uuid();
 export class VideoLibraryError extends Error {
-  constructor(public readonly code: 'DENIED' | 'STALE' | 'QUOTA' | 'UNAVAILABLE' | 'CLOSED') { super('VIDEO_' + code); }
+  constructor(public readonly code: 'DENIED' | 'STALE' | 'QUOTA' | 'UNAVAILABLE' | 'CLOSED' | 'CONTENT_REVIEW_REQUIRED') { super('VIDEO_' + code); }
 }
 function denied(): never { throw new VideoLibraryError('DENIED'); }
 function stale(): never { throw new VideoLibraryError('STALE'); }
@@ -32,7 +32,8 @@ type CurrentPerson = Prisma.UserGetPayload<{ select: typeof userSelection }>;
 function person(row: CurrentPerson & { technicalRestricted?: boolean }): VideoPerson {
   return { id: row.id, name: row.name, email: row.email, role: row.role, active: row.active, deleted: Boolean(row.deletedAt),
     epoch: row.recordUpdateEpoch, canRead: recordUpdatePermission(row, 'video.read'),
-    canManage: row.role === 'admin' && recordUpdatePermission(row, 'video.manage') };
+    canManage: row.role === 'admin' && recordUpdatePermission(row, 'video.manage'),
+    technicalRestricted: row.technicalRestricted };
 }
 async function directory(tx: Tx) {
   const rows = await tx.user.findMany({ select: userSelection, orderBy: { id: 'asc' } });
@@ -46,6 +47,8 @@ async function actor(tx: Tx, claimed: AuthSession, manage = false, proof?: Proof
   if (!current.canRead || (manage && !current.canManage)) denied();
   return { ...auth, person: current };
 }
+// Both storage modes use the same fresh session, directory and permission checks.
+export { actor as currentVideoActor, directory as currentVideoDirectory };
 async function entry(tx: Tx, id: string, write = false) {
   uuid.parse(id);
   await tx.$queryRaw(Prisma.sql`SELECT id FROM "VideoEntry" WHERE id=${id}::uuid ${Prisma.raw(write ? 'FOR UPDATE' : 'FOR SHARE')}`);
@@ -65,7 +68,8 @@ function publication(row: VideoEntry, file: VideoAsset): VideoPublication {
   const audience = audienceSchema.parse(row.audience);
   if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(row.state) || new Set(audience.map(item => item.id)).size !== audience.length) denied();
   return { state: row.state as VideoPublication['state'], fileReady: file.state === 'READY', expiresAt: row.expiresAt,
-    authorId: row.publishedById, authorEpoch: row.publisherEpoch, audience, downloadAllowed: row.downloadAllowed };
+    authorId: row.publishedById, authorEpoch: row.publisherEpoch, audience, downloadAllowed: row.downloadAllowed,
+    technicalContentReviewed: videoDetailsSchema.shape.selection.parse(row.selection).technicalContentReviewed === true };
 }
 function details(row: VideoEntry): VideoDetails {
   return videoDetailsSchema.parse({ fileId: row.fileId, title: row.title, description: row.description, category: row.category,
@@ -153,6 +157,10 @@ async function proposal(tx: Tx, claimed: AuthSession, input: VideoCommand, proof
     ? resolveVideoAudience(next.selection, people) : null;
   const now = await auth.finish(), expiresAt = next.expiresAt ? new Date(next.expiresAt) : null;
   if (input.operation === 'PUBLISH' && (!resolved || (expiresAt && expiresAt <= now))) denied();
+  if (input.operation === 'PUBLISH' && resolved!.audience.some(member => {
+    const target = people.find(person => person.id === member.id);
+    return target?.technicalRestricted || target?.role === 'consulente' || target?.role === 'backoffice';
+  }) && next.selection.technicalContentReviewed !== true) throw new VideoLibraryError('CONTENT_REVIEW_REQUIRED');
   // Revocation and restoration to a private draft must remain possible even
   // when an old recipient or the stored bytes are no longer available.
   if (changesDetails) await readPrivateVideoFile(file.id, file);
@@ -310,7 +318,7 @@ export async function readVideoBytes(db: PrismaClient, claimed: AuthSession, id:
     let recipient = auth.person;
     if (options.asRecipient) {
       const target = await tx.user.findUnique({ where: { id: z.string().min(1).max(128).parse(options.asRecipient) }, select: userSelection });
-      if (!target) denied(); recipient = person(target);
+      if (!target) denied(); recipient = person({ ...target, technicalRestricted: await currentTechnicalRestriction(tx, target.id, target) });
     }
     if (!options.preview || options.asRecipient) {
       if (!await admission(tx, row, file, recipient, await auth.finish(), options.download)) denied();
@@ -328,7 +336,8 @@ export async function readVideoPreview(db: PrismaClient, claimed: AuthSession, i
       const target = await tx.user.findUnique({ where: { id: z.string().min(1).max(128).parse(asRecipient) }, select: userSelection });
       if (!target) denied();
       recipientName = target.name;
-      allowed = await admission(tx, row, file, person(target), await auth.finish());
+      allowed = await admission(tx, row, file, person({ ...target,
+        technicalRestricted: await currentTechnicalRestriction(tx, target.id, target) }), await auth.finish());
     }
     const now = await auth.finish();
     if (asRecipient && row.expiresAt && row.expiresAt <= now) allowed = false;
