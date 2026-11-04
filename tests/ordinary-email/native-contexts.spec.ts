@@ -83,10 +83,14 @@ test('native lead, standalone client and internal composition preserve context, 
   await page.setViewportSize({width:390,height:844});
   await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:path.join(evidence,'native-context-mobile.png'),fullPage:true});await page.setViewportSize({width:1280,height:900});
-  await participant.goto(target);await expect(participant.getByText('SYNTHETIC_CONTEXT_NATIVE_BODY',{exact:true})).toBeVisible();
+  await participant.goto(target);await expect(participant.getByText('SYNTHETIC_CONTEXT_NATIVE_BODY',{exact:true})).toHaveCount(0);
+  await expect(participant.getByRole('heading',{name:'Native internal message · v1',exact:true})).toHaveCount(0);
+  await expect(participant.getByRole('button',{name:/Salva bozza|Approva|Invia/})).toHaveCount(0);
   expect((await outsider.request.get(target)).status()).toBe(404);
   const download=()=>participant.request.post('/communications/files/'+file.id,{headers:{origin},form:{kind:'INTERNAL',contextId:threadId,sha256}});
-  const downloaded=await download();expect(downloaded.status()).toBe(200);expect(await downloaded.body()).toEqual(bytes);
+  const deniedDownload=await download();expect(deniedDownload.status()).toBe(404);expect(await deniedDownload.text()).not.toContain(bytes.toString());
+  const downloaded=await page.request.post('/communications/files/'+file.id,{headers:{origin},form:{kind:'INTERNAL',contextId:threadId,sha256}});
+  expect(downloaded.status()).toBe(200);expect(await downloaded.body()).toEqual(bytes);
   expect((await outsider.request.post('/communications/files/'+file.id,{headers:{origin},form:{kind:'INTERNAL',contextId:threadId,sha256}})).status()).toBe(404);
   await page.locator('summary').filter({hasText:'Gestisci partecipanti della conversazione interna'}).click();
   await page.locator('input[name="participant"][value="'+member.id+'"]').uncheck();await page.getByRole('button',{name:'Mostra riepilogo partecipanti'}).click();
@@ -133,7 +137,7 @@ test('native lead, standalone client and internal composition preserve context, 
   expect({clients:await db.client.count(),practices:await db.technicalPractice.count(),documents:await db.document.count()}).toEqual(counts);
   expect(await db.ordinaryEmailAttempt.count({where:{messageId:{in:[leadMessage,clientMessage,internalMessage]}}})).toBe(0);expect(external).toBe(0);
   await writeFile(path.join(evidence,'native-context-proof.json'),JSON.stringify({synthetic:true,nativeActions:true,leadClientInternal:true,explicitRecipients:true,
-    privateUploadDownload:true,otherAdminDenied:true,participantOpenSessionRevocation:true,previousVersionInvalidated:true,stepUp:true,doubleClickPosts:posts,
+    privateUploadDownload:true,privateDraftNotPublished:true,participantFileDenied:true,otherAdminDenied:true,participantOpenSessionRevocation:true,previousVersionInvalidated:true,stepUp:true,doubleClickPosts:posts,
     committedResponseLost:true,replayDenied:true,noPlaceholderClientOrPractice:true,realTransports:0,screenshotsInspected:false},null,2));
   for(const context of contexts)await context.close();
 });
