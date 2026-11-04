@@ -24,6 +24,12 @@ async function main() {
     if (label === 'direction') await db.userPermissionOverride.create({ data: { userId: p.user.id, permission: 'technical.write', allowed: true } });
     if (p.user.role !== 'admin') await db.userPermissionOverride.createMany({ data: ['video.read','communications.internal.read'].map(permission => ({ userId: p.user.id, permission, allowed: true })) });
   }
+  const immutableDenials = ['video.manage', 'user.write', 'legal.read'].map(permission => ({ permission, allowed: false }));
+  await db.userPermissionOverride.createMany({ data: immutableDenials.map(row => ({ userId: technical.user.id, ...row })) });
+  const backofficeChoices = await db.userPermissionOverride.findMany({ where: { userId: backoffice.user.id },
+    select: { permission: true, allowed: true } });
+  await db.auditLog.create({ data: { actorId: f.owner.user.id, entityType: 'User', entityId: backoffice.user.id,
+    event: 'user_permission_overrides_updated', before: [...backofficeChoices, ...immutableDenials], after: backofficeChoices } });
   const input = { id: randomUUID(), expectedVersion: 0, title: 'Synthetic six participant conversation',
     selection: { userIds: [f.member, second, direction, technical, backoffice].map(p => p.user.id), groups: [] } };
   const preview = await previewInternalCommunication(db, f.owner.actor, input, f.credentials);

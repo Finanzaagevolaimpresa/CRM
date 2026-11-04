@@ -17,6 +17,7 @@ import { AdminUserRecoveryPage } from '@/components/admin-user-recovery-page';
 import { adminUserVersion } from '@/lib/admin-user-version';
 import { readAdminRoleProfile } from '@/lib/admin-role-profiles';
 import { AdminRoleProfileApplication } from '@/components/admin-role-profile-account';
+import { readPermissionDenialRestoration } from '@/lib/admin-permission-restoration';
   async function UserPermissionsPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ accountCommand?: string; sessionAfter?: string }> }) {
   const session = await requirePermission('user.read');
   const { id } = await params;
@@ -29,6 +30,7 @@ import { AdminRoleProfileApplication } from '@/components/admin-role-profile-acc
   const canEdit = session.role === 'admin' && !isAdminTarget && session.userId !== user.id;
   const roleProfile = canEdit ? await readAdminRoleProfile(prisma, session, user.role) : null;
   const targetActor = { ...user, technicalRestricted: await currentTechnicalRestriction(prisma, user.id, user) };
+  const denialRestoration = canEdit ? await readPermissionDenialRestoration(prisma, targetActor) : null;
   const profileActor = roleProfile ? { ...user, permissionOverrides: roleProfile.current.overrides,
     technicalRestricted: await currentTechnicalRestriction(prisma, user.id, { ...user, permissionOverrides: roleProfile.current.overrides }) } : null;
   return <AdminUserRecoveryGuard><div className="crm-space-y-6"><Card title="Profilo utente"><div className="grid gap-2 text-sm md:grid-cols-4"><div><b>Nome</b><br/>{user.name}</div><div><b>Email</b><br/>{user.email}</div><div><b>Ruolo</b><br/><Badge>{user.role}</Badge></div><div><b>Stato</b><br/>{user.active?<Badge tone="green">attivo</Badge>:<Badge tone="gray">non attivo</Badge>}</div></div>{isAdminTarget?<p className="mt-4 rounded-xl bg-fai-lime/10 p-3 text-sm font-bold text-fai-green">Gli amministratori sono immuni dagli override: accesso completo dal ruolo admin e nessuna eccezione salvabile.</p>:null}</Card>
@@ -38,6 +40,21 @@ import { AdminRoleProfileApplication } from '@/components/admin-role-profile-acc
     : <AdminAccountManagement user={user} available={internalSessionMode() === 'registry'} sessionAfter={query.sessionAfter} />}</Card> : null}
   {session.role === 'admin' ? <Card title="Perimetro clienti"><Link href={`/settings/users/${user.id}/perimeter`}>Gestisci consultazioni aggiuntive e revoche</Link><p>Consenti la lettura di clienti specifici, mantenendo separate le responsabilità operative.</p></Card> : null}
   {session.role === 'admin' ? <Card title="Rimozione con conservazione dello storico"><AdminAccountLifecycle user={user} available={internalSessionMode() === 'registry' && session.userId !== user.id} />{session.userId === user.id && <p>Non puoi rimuovere il tuo account dalla sessione in uso.</p>}</Card> : null}
+  {denialRestoration && <Card title="Ripristina dinieghi precedenti non modificabili">
+    <p>Un salvataggio precedente ha omesso queste scelte. Il ripristino usa lo storico registrato e aggiunge soltanto i dinieghi elencati;
+      non concede accessi e conserva tutte le altre scelte correnti.</p>
+    <p>Fonte: <code>{denialRestoration.sourceAuditId}</code> · {denialRestoration.createdAt.toISOString()}</p>
+    <ul>{denialRestoration.denials.map(row => <li key={row.permission}>
+      {permissionCatalog.find(item => item.code === row.permission)?.label} · <code>{row.permission}</code>: Eredita → Nega; accesso effettivo negato.
+    </li>)}</ul>
+    <AdminUserForm identity={{ operation: 'RESTORE_PERMISSION_DENIALS', commandId: randomUUID(), userId: user.id,
+      expectedVersion: adminUserVersion(user) }} label="Ripristino dinieghi documentati" className="space-y-3">
+      <input type="hidden" name="sourceAuditId" value={denialRestoration.sourceAuditId}/>
+      <input type="hidden" name="sourceHash" value={denialRestoration.sourceHash}/>
+      <label className="flex gap-2"><input type="checkbox" name="confirmed" required/>Confermo il ripristino dei soli dinieghi elencati dallo storico.</label>
+      <button className="rounded-xl bg-fai-green px-4 py-3 font-black text-white">Ripristina dinieghi documentati</button>
+    </AdminUserForm>
+  </Card>}
   {roleProfile && <Card title="Applica il profilo del ruolo"><AdminRoleProfileApplication name={user.name} email={user.email}
     identity={{ operation: 'APPLY_ROLE_PROFILE', commandId: randomUUID(), userId: user.id, expectedVersion: adminUserVersion(user) }}
     profile={{ role: user.role, version: roleProfile.version, revision: roleProfile.current.revision,

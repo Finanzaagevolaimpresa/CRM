@@ -10,6 +10,7 @@ export function AdminPermissionChoices({ actor, canEdit }: { actor: PermissionSe
   const current = { ...actor, permissionOverrides: overrides };
   const groups = [...new Set(permissionCatalog.map(item => item.group))];
   return <div className="space-y-4">
+    <p>I selettori non modificabili conservano la scelta già registrata quando salvi gli altri permessi. Il limite effettivo del ruolo resta applicato.</p>
     {!actor.active && <p>L’account è inattivo. Puoi preparare i permessi; l’accesso resta negato finché non lo riattivi.</p>}
     {groups.map(group => <Card title={group} key={group}><div className="space-y-3">
       {permissionCatalog.filter(item => item.group === group).map(item => {

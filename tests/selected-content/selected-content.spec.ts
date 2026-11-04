@@ -99,11 +99,33 @@ test('Admin explicit technical permissions persist and match selectors without e
     await expect(admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true })).toBeVisible();
     await admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
     await expect(admin.page.locator('select[name="permission:communications.internal.read"]')).toHaveValue('deny');
+    for (const code of ['video.manage', 'user.write', 'legal.read']) {
+      await expect(admin.page.locator('select[name="permission:' + code + '"]')).toBeDisabled();
+      await expect(admin.page.locator('select[name="permission:' + code + '"]')).toHaveValue('deny');
+    }
     await admin.page.locator('select[name="permission:communications.internal.read"]').selectOption('allow');
     await admin.page.locator('select[name="permission:communications.internal.read"]').locator('xpath=ancestor::form').getByRole('button', { name: /Salva/ }).click();
     await expect(admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true })).toBeVisible();
     await admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
     await expect(admin.page.locator('select[name="permission:communications.internal.read"]')).toHaveValue('allow');
+    for (const code of ['video.manage', 'user.write', 'legal.read']) await expect(admin.page.locator('select[name="permission:' + code + '"]')).toHaveValue('deny');
+  } finally { await admin.context.close(); }
+});
+test('Admin reopens audited restoration without replaying any allow or losing the existing selected-content choices', async ({ browser }) => {
+  const admin = await session(browser, 'admin', true);
+  try {
+    await admin.page.goto('/settings/users/' + f.people.backoffice.id);
+    const form = admin.page.getByRole('form', { name: 'Ripristino dinieghi documentati', exact: true });
+    await expect(form).toBeVisible();
+    await form.getByLabel('Confermo il ripristino dei soli dinieghi elencati dallo storico.', { exact: true }).check();
+    await form.getByRole('button', { name: 'Ripristina dinieghi documentati', exact: true }).click();
+    await expect(admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true })).toBeVisible();
+    await admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
+    await expect(admin.page.getByRole('form', { name: 'Ripristino dinieghi documentati', exact: true })).toHaveCount(0);
+    for (const code of ['video.manage', 'user.write', 'legal.read']) await expect(admin.page.locator('select[name="permission:' + code + '"]')).toHaveValue('deny');
+    for (const code of ['video.read', 'communications.internal.read']) await expect(admin.page.locator('select[name="permission:' + code + '"]')).toHaveValue('allow');
+    await admin.page.reload();
+    expect(await db.auditLog.count({ where: { entityId: f.people.backoffice.id, event: 'user_permission_denials_restored' } })).toBe(1);
   } finally { await admin.context.close(); }
 });
 test('six CRM participants and four To recipients survive reload; approval publishes only text to technical and commercial', async ({ browser }) => {

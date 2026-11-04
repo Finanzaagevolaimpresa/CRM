@@ -15,6 +15,7 @@ import { RoleProfileError } from './admin-role-profile-contract';
 
 const codes = { CREATE: 'USER_CREATE', ACTIVATE: 'USER_ACTIVATE', DEACTIVATE: 'USER_DEACTIVATE', ROLE: 'USER_ROLE_UPDATE',
   OVERRIDES: 'USER_PERMISSION_OVERRIDE_UPDATE', RESET_OVERRIDES: 'USER_PERMISSION_OVERRIDE_RESET', APPLY_ROLE_PROFILE: 'USER_PERMISSION_OVERRIDE_UPDATE',
+  RESTORE_PERMISSION_DENIALS: 'USER_PERMISSION_OVERRIDE_UPDATE',
   PROFILE: 'USER_ACCOUNT_UPDATE', PASSWORD_RESET: 'USER_ACCOUNT_UPDATE', REMOVE: 'USER_ACCOUNT_UPDATE',
   RESTORE: 'USER_ACCOUNT_UPDATE', REVOKE_SESSIONS: 'USER_ACCOUNT_UPDATE', REVOKE_SESSION: 'USER_ACCOUNT_UPDATE' } as const;
 export async function submitAdminUserCommand(form: FormData): Promise<AdminUserCommandState> {
@@ -29,6 +30,7 @@ export async function submitAdminUserCommand(form: FormData): Promise<AdminUserC
     if (!key) return { ok: false, message: 'Conferma privilegiata non disponibile. Nessun comando eseguito.' };
     const values = operation === 'CREATE' ? { name: form.get('name'), email: form.get('email'), password: form.get('password'), role: form.get('role'), active: form.get('active') === 'on', roleProfileVersion: form.get('roleProfileVersion') }
       : operation === 'APPLY_ROLE_PROFILE' ? { roleProfileVersion: form.get('roleProfileVersion'), confirmed: form.get('confirmed') === 'on' }
+      : operation === 'RESTORE_PERMISSION_DENIALS' ? { sourceAuditId: form.get('sourceAuditId'), sourceHash: form.get('sourceHash'), confirmed: form.get('confirmed') === 'on' }
       : operation === 'ROLE' ? { role: form.get('role') }
       : operation === 'OVERRIDES' ? { overrides: Array.from(form.entries()).filter(([name]) => name.startsWith('permission:')).map(([name, value]) => ({ permission: name.slice(11), value })) }
       : operation === 'PROFILE' ? { name: form.get('name'), email: form.get('email') }
