@@ -11,7 +11,9 @@ const actor: PermissionSession = { role: 'consulente', active: true, permissionO
   { permission: 'communications.internal.read', allowed: false },
 ] };
 test('a form omitting disabled fields retains their exact values while changing only the editable choices', () => {
-  const next = preserveUneditableOverrides(actor, [{ permission: 'communications.internal.read', allowed: true }]);
+  const stored = { ...actor, permissionOverrides: actor.permissionOverrides.map((row, index) => ({ ...row,
+    id: 'synthetic-row-' + index, userId: 'synthetic-user', createdAt: new Date(0), updatedAt: new Date(0) })) };
+  const next = preserveUneditableOverrides(stored, [{ permission: 'communications.internal.read', allowed: true }]);
   assert.deepEqual(next, [{ permission: 'communications.internal.read', allowed: true }, ...actor.permissionOverrides.slice(0, 2)]);
   assert.equal(evaluatePermission({ ...actor, permissionOverrides: next }, 'video.manage').allowed, false);
 });

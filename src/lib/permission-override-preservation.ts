@@ -17,7 +17,7 @@ export function preserveUneditableOverrides(actor: PermissionSession, requested:
     || !permissionOverrideControl(proposed, row.permission).editable);
   const retainedCodes = new Set(retained.map(row => row.permission));
   if (requested.some(row => retainedCodes.has(row.permission))) throw new Error('READ_ONLY_OVERRIDE_SUBMITTED');
-  return [...requested, ...retained];
+  return [...requested, ...retained].map(({ permission, allowed }) => ({ permission, allowed }));
 }
 
 /** Recover only absent historical DENY values from the exact current audit
