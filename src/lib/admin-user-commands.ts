@@ -18,6 +18,7 @@ import { createInternalUserWithAudit, activateInternalUserWithAudit, deactivateI
   updateInternalUserRoleWithAudit, updatePermissionOverridesWithAudit, resetPermissionOverridesWithAudit, removeInternalUserWithAudit } from './user-privilege-service';
 import { mapSerializableConflict } from './serializable';
 import { loadAdminRoleProfile } from './admin-role-profile-store';
+import { restorePermissionDenials } from './admin-permission-restoration';
 
 type Tx = Prisma.TransactionClient;
 export class AdminUserCommandError extends Error {
@@ -70,6 +71,9 @@ export async function executeAdminUserCommand(db: PrismaClient, actor: AuthSessi
   const profile = input.operation === 'PROFILE' ? accountProfileSchema.parse(values) : null;
   const reset = input.operation === 'PASSWORD_RESET' ? passwordResetSchema.parse(values) : null;
   const targetSession = input.operation === 'REVOKE_SESSION' ? z.string().uuid().parse(values.sessionId) : null;
+  const denialRestoration = input.operation === 'RESTORE_PERMISSION_DENIALS' ? z.object({
+    sourceAuditId: z.string().min(1).max(128), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), confirmed: z.literal(true),
+  }).strict().parse(values) : null;
   if (input.operation === 'REMOVE') z.literal(true).parse(values.retainHistory);
   if (input.operation === 'RESTORE') z.literal(true).parse(values.restoreInactive);
   if (input.operation === 'APPLY_ROLE_PROFILE') z.literal(true).parse(values.confirmed);
@@ -113,7 +117,8 @@ export async function executeAdminUserCommand(db: PrismaClient, actor: AuthSessi
     else if (input.operation === 'ACTIVATE') result = await activateInternalUserWithAudit(tx, actor, input.userId);
     else if (input.operation === 'DEACTIVATE') result = await deactivateInternalUserWithAudit(tx, actor, input.userId);
     else if (input.operation === 'OVERRIDES') result = await updatePermissionOverridesWithAudit(tx, actor, input.userId,
-      overrides!.filter(row => row.value !== 'inherit').map(row => ({ permission: row.permission, allowed: row.value === 'allow' })));
+      overrides!.filter(row => row.value !== 'inherit').map(row => ({ permission: row.permission, allowed: row.value === 'allow' })), true);
+    else if (denialRestoration && before) result = await restorePermissionDenials(tx, actor.userId, before, denialRestoration);
     else if (input.operation === 'RESET_OVERRIDES') result = await resetPermissionOverridesWithAudit(tx, actor, input.userId);
     else if (profile) result = await updateAccountProfile(tx, actor, input.userId, profile, true);
     else if (reset) result = await resetAccountPassword(tx, actor, input.userId, passwordHash!);

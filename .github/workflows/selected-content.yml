@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [drive-database, internal-database, browser]
+        target: [drive-database, internal-database, permission-database, browser]
     services:
       postgres:
         image: postgres:16
@@ -85,6 +85,16 @@ jobs:
           grep -Fx '# tests 8' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
           grep -Fx '# pass 8' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
           grep -Fx '# skipped 0' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
+      - name: Permission selection persistence and audited denial recovery
+        if: matrix.target == 'permission-database'
+        env:
+          PERMISSION_PRESERVATION_DB_TESTS: '1'
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/permission-override-preservation-db.test.ts | tee "$SELECTED_CONTENT_EVIDENCE/permissions.tap"
+          grep -Fx '# tests 6' "$SELECTED_CONTENT_EVIDENCE/permissions.tap"
+          grep -Fx '# pass 6' "$SELECTED_CONTENT_EVIDENCE/permissions.tap"
+          grep -Fx '# skipped 0' "$SELECTED_CONTENT_EVIDENCE/permissions.tap"
       - name: Prepare synthetic browser identities and ordinary activation prerequisites
         if: matrix.target == 'browser'
         run: |
@@ -106,7 +116,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTED_CONTENT_EVIDENCE/playwright.json" npx playwright test --config tests/selected-content/playwright.config.ts --reporter=line,json
-          node -e 'const r=require(process.env.SELECTED_CONTENT_EVIDENCE+"/playwright.json");if(r.stats.expected!==3||r.stats.unexpected!==0||r.stats.skipped!==0)process.exit(1)'
+          node -e 'const r=require(process.env.SELECTED_CONTENT_EVIDENCE+"/playwright.json");if(r.stats.expected!==5||r.stats.unexpected!==0||r.stats.skipped!==0)process.exit(1)'
       - name: Bind evidence
         if: always()
         run: git rev-parse HEAD 'HEAD^{tree}' > "$SELECTED_CONTENT_EVIDENCE/source.txt"
