@@ -236,6 +236,8 @@ async function main() {
       m4Mailboxes: await db.communicationMailbox.findMany({ orderBy: { id: 'asc' } }),
       internalThreads: await db.internalCommunicationThread.findMany({ orderBy: { id: 'asc' } }),
       internalParticipants: await db.internalCommunicationParticipant.findMany({ orderBy: [{ threadId: 'asc' }, { userId: 'asc' }] }),
+      driveReferenceRevisions: await db.adminRecordRevision.findMany({ where: { model: 'DriveVideoReference' }, orderBy: { commandId: 'asc' } }),
+      driveReferenceAudit: await db.auditLog.findMany({ where: { entityType: 'DriveVideoReference' }, orderBy: { id: 'asc' } }),
       contextFiles: await db.communicationContextFile.findMany({ orderBy: { id: 'asc' } }),
       m4MailboxHistory: await db.communicationMailboxHistory.findMany({ orderBy: { id: 'asc' } }),
       m4Messages: await db.approvedCommunication.findMany({ orderBy: { id: 'asc' } }),

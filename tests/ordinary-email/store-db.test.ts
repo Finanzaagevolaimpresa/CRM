@@ -749,26 +749,30 @@ test('admitted receipt projection distinguishes pending, accepted and historical
 });
 
 test('current context, session, permission and attachment filters precede receipt disclosure', options, async () => {
-  for(const change of ['archive','trash','session','permission','document','expiry','classification'] as const) {
+  for(const change of ['archive','trash','session','permission','document','expiry','classification','technicalFunction'] as const) {
     const f=await fixture(); await reserve(f);
+    let viewer=f.actor;
     // Native Admin bypasses per-user overrides. Use a current direction actor
-    // with a positive read first to exercise effective individual denials.
+    // without a technical assignment to exercise individual/attachment denials.
+    // The fixture owner has a technical function and cannot serve as that positive case.
     if(change==='permission'||change==='classification') {
-      await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
-      assert.equal((await read(f)).messages.length,1);
+      viewer=await person();
+      await db.user.update({where:{id:viewer.userId},data:{role:'direzione'}});
+      assert.equal((await read(f,viewer)).messages.length,1);
     }
+    if(change==='technicalFunction') await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
     if(change==='archive') await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
     if(change==='trash') await db.project.update({where:{id:f.project.id},data:{deletedAt:new Date()}});
     if(change==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
-    if(change==='permission') await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'practice_communications.read',allowed:false}});
+    if(change==='permission') await db.userPermissionOverride.create({data:{userId:viewer.userId,permission:'practice_communications.read',allowed:false}});
     if(change==='document') await db.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
     if(change==='expiry') await db.document.update({where:{id:f.doc.id},data:{validUntil:new Date(Date.now()-1)}});
     if(change==='classification') {
       await db.document.update({where:{id:f.doc.id},data:{type:'contratto_fai'}});
-      await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'contract.read',allowed:false}});
+      await db.userPermissionOverride.create({data:{userId:viewer.userId,permission:'contract.read',allowed:false}});
     }
-    if(['archive','trash','session','permission'].includes(change)) await assert.rejects(read(f),change);
-    else assert.equal((await read(f)).messages.length,0,change);
+    if(['archive','trash','session','permission','technicalFunction'].includes(change)) await assert.rejects(read(f,viewer),change);
+    else assert.equal((await read(f,viewer)).messages.length,0,change);
   }
 });
 
@@ -1155,13 +1159,18 @@ test('forged attachment selection, manual replies and unassociated MIME return n
 });
 
 test('attachment access rechecks permissions, session, lifecycle, original documents and selective scope', options, async()=>{
-  for(const mode of ['download','sensitive','contract','payment','session','archive','trash','document','selective'] as const) {
+  for(const mode of ['download','sensitive','contract','payment','session','archive','trash','document','selective','technicalFunction'] as const) {
     const f=await attachmentFixture();
+    let viewer=f.actor;
     if(['download','sensitive','contract','payment'].includes(mode)) {
-      await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
+      viewer=await person();
+      await db.user.update({where:{id:viewer.userId},data:{role:'direzione'}});
       const permission={download:'document.download',sensitive:'document.sensitive.read',contract:'contract.read',payment:'payment.read'}[mode as 'download'|'sensitive'|'contract'|'payment'];
-      await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission,allowed:false}});
-      assert.deepEqual((await read(f)).messages[0].replies[0].receivedAttachments,[]);
+      await db.userPermissionOverride.create({data:{userId:viewer.userId,permission,allowed:false}});
+      assert.deepEqual((await read(f,viewer)).messages[0].replies[0].receivedAttachments,[]);
+    } else if(mode==='technicalFunction') {
+      await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
+      await assert.rejects(read(f,viewer));
     } else if(mode==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
     else if(mode==='archive') await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
     else if(mode==='trash') await db.project.update({where:{id:f.project.id},data:{deletedAt:new Date()}});
@@ -1171,7 +1180,7 @@ test('attachment access rechecks permissions, session, lifecycle, original docum
       await db.selectiveProjectGrant.create({data:{projectId:f.project.id,recipientId:f.actor.userId,approvedById:approver.userId,
         revision:1,authorityRevision:1,keyVersion:f.sourceKey.version,selection:{},proof:'0'.repeat(64),approvedAt:new Date(),revokedAt:new Date()}});
     }
-    await assert.rejects(readStoredOrdinaryAttachment(db,f.actor,f.request,runtime),/ATTACHMENT_UNAVAILABLE/);
+    await assert.rejects(readStoredOrdinaryAttachment(db,viewer,f.request,runtime),/ATTACHMENT_UNAVAILABLE/);
     assert.equal(await db.auditLog.count({where:{entityId:f.request.replyId,event:'ordinary_email_attachment_download'}}),0);
   }
 });

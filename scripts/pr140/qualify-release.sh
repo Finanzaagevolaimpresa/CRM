@@ -25,7 +25,7 @@ if docker volume inspect "$prefix-documents" >/dev/null 2>&1; then exit 1; fi
 mkdir -p "$evidence" "$source_candidate" "$source_recovery"
 printf 'R05_EVIDENCE_DIR=%s\n' "$evidence" >> "$GITHUB_ENV"
 node scripts/admin-residuals/compose-compatibility.mjs "$head" > "$evidence/compatibility-source.json"
-node -e 'const a=require("node:assert/strict"),r=require(process.argv[1]);a.equal(r.protocol,"ADMIN_PRIVACY_COMPATIBILITY_SOURCE_V2");a.equal(r.mandatoryTechnicalCeilingRetained,true);a.equal(r.newResidualWritersSuspendedServerSide,true);a.equal(r.unmodifiedHistoricalRecovery,false)' "$evidence/compatibility-source.json"
+node -e 'const a=require("node:assert/strict"),r=require(process.argv[1]);a.equal(r.protocol,"ADMIN_PRIVACY_COMPATIBILITY_SOURCE_V2");a.equal(r.mandatoryTechnicalCeilingRetained,true);a.equal(r.newResidualWritersSuspendedServerSide,true);a.equal(r.unmodifiedHistoricalRecovery,false);for(const k of ["driveReferenceReadersRetained","selectedInternalReadersRetained","googleFramePolicyRetained","driveWritersSuspendedServerSide"])a.equal(r[k],true,k)' "$evidence/compatibility-source.json"
 recovery_head="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).commit' "$evidence/compatibility-source.json")"
 recovery_tree="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).tree' "$evidence/compatibility-source.json")"
 [[ "$recovery_head" =~ ^[a-f0-9]{40}$ && "$recovery_tree" =~ ^[a-f0-9]{40}$ && "$recovery_head" != "$head" ]]

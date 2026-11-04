@@ -17,12 +17,14 @@ test('packaged schema63 restart retains context messages, private files and revo
   await login(owner,f.ownerEmail);await login(member,f.memberEmail);await login(other,f.otherEmail);
   const target=origin+'/communications?kind=INTERNAL&practice='+f.threadId;
   for(const page of [owner,member]){
-    await page.goto(target);await expect(page.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toBeVisible();
-    expect((await page.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(200);
+    await page.goto(target);
+    await expect(page.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_SELECTED_RETAINED_BODY$/})).toBeVisible();
+    await expect(page.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toHaveCount(page===owner?1:0);
+    expect((await page.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(page===owner?200:404);
     expect((await page.request.post(origin+'/communications/files/'+f.revokedFileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(404);
     expect((await page.request.get(origin+'/communications?kind=INTERNAL&practice='+f.deletedThreadId)).status()).toBe(404);
   }
-  const bytes=await member.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}});
+  const bytes=await owner.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}});
   expect(await bytes.body()).toEqual(Buffer.from(f.bytes));
   expect((await other.request.get(target)).status()).toBe(404);
   expect((await other.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(404);

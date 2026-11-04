@@ -34,7 +34,7 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
   const pending = useRef(false);
   const [details, setDetails] = useState(setup.details);
   const changeContent = (value: Partial<VideoDetails>) => setDetails(current => ({ ...current, ...value,
-    selection: { ...current.selection, technicalContentReviewed: false } }));
+    selection: { ...current.selection, ...(current.selection.technicalContentReviewed === undefined ? {} : { technicalContentReviewed: false }) } }));
   const [files, setFiles] = useState(setup.files), [fileQuery, setFileQuery] = useState('');
   const [nextFileOffset, setNextFileOffset] = useState<number | null>(null);
   const [busy, setBusy] = useState(false), [uncertain, setUncertain] = useState(false), [done, setDone] = useState(false);

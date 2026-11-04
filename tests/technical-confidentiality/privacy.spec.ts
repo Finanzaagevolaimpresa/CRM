@@ -70,8 +70,11 @@ for (const profile of ['techA', 'techB', 'mixed'] as const) test(profile + ': te
   for (const url of ['/dashboard', '/dashboard?view=oggi', '/documents', '/search?q=PAGAMENTO', '/notifications', '/communications']) {
     const response = await page.goto(url); expect(response?.status()).toBe(200);
     const title = url.startsWith('/documents') ? 'Documenti tecnici consentiti' : url.startsWith('/search') ? 'Ricerca nel perimetro tecnico'
-      : url.startsWith('/notifications') ? 'Notifiche · perimetro tecnico' : url.startsWith('/communications') ? 'Comunicazioni · perimetro tecnico' : 'Ufficio Tecnico';
-    if (url.startsWith('/dashboard')) { await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dashboard');
+      : url.startsWith('/notifications') ? 'Notifiche · perimetro tecnico' : 'Ufficio Tecnico';
+    // No selected-content permission is granted in this privacy fixture.
+    // The ordinary permission guard must redirect without opening internal text.
+    if (url.startsWith('/dashboard') || url.startsWith('/communications')) { await expect(page).toHaveURL(/\/dashboard(?:\?view=oggi)?$/);
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dashboard');
       await expect(page.locator('main')).toContainText('Il tuo lavoro tecnico'); }
     else await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
     const html = (await response!.text()) + (await page.content());
@@ -90,7 +93,7 @@ test('Admin and Commerciale retain their actual permitted paths; exact classific
     for (const code of ['contract.read', 'payment.read', 'dossier.read']) {
       const control = admin.locator('select[name="permission:' + code + '"]');
       await expect(control).toBeDisabled();
-      await expect(control.locator('..')).toContainText('Effettivo: negato');
+      await expect(admin.locator('[data-permission-code="' + code + '"]')).toContainText('Effettivo: negato');
     }
   }
   await admin.goto('/contracts/' + row.contractId); await expect(admin.locator('main')).toContainText(row.contractNumber);
