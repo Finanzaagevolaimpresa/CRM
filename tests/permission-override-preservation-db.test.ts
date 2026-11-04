@@ -8,6 +8,7 @@ import { executeAdminUserCommand } from '../src/lib/admin-user-commands';
 import { adminUserVersion } from '../src/lib/admin-user-version';
 import { readPermissionDenialRestoration } from '../src/lib/admin-permission-restoration';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
+import { evaluatePermission } from '../src/lib/permission-evaluator';
 const enabled = process.env.CI === 'true' && process.env.RUN_DB_TESTS === '1' && process.env.PERMISSION_PRESERVATION_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
 before(async () => { if (enabled) await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
@@ -78,4 +79,30 @@ test('forged readonly allows remain denied and explicit reset keeps its separate
   await executeAdminUserCommand(db, f.owner.actor, { ...f.identity, operation: 'RESET_OVERRIDES' }, {}, f.credentials);
   assert.equal((await snapshot(f.target.user.id)).permissionOverrides.length, 0);
   assert.equal(await readPermissionDenialRestoration(db, await snapshot(f.target.user.id)), null);
+});
+
+test('adding a technical function preserves newly disabled stored values with full audit and idempotent replay', options, async () => {
+  const f = await contextFixture(db), target = await contextPerson(db, 'commerciale');
+  const prior = [{ permission: 'legal.read', allowed: false }, { permission: 'user.write', allowed: true }];
+  await db.userPermissionOverride.createMany({ data: prior.map(row => ({ userId: target.user.id, ...row })) });
+  const current = await snapshot(target.user.id), identity = { operation: 'OVERRIDES', commandId: randomUUID(),
+    userId: target.user.id, expectedVersion: adminUserVersion(current) };
+  await assert.rejects(executeAdminUserCommand(db, f.owner.actor, identity,
+    { overrides: [{ permission: 'technical.write', value: 'allow' }, { permission: 'legal.read', value: 'allow' }] }, f.credentials));
+  assert.equal(adminUserVersion(await snapshot(target.user.id)), identity.expectedVersion);
+  const values = { overrides: [{ permission: 'technical.write', value: 'allow' }] };
+  const first = await executeAdminUserCommand(db, f.owner.actor, identity, values, f.credentials);
+  assert.deepEqual(await executeAdminUserCommand(db, f.owner.actor, identity, values, f.credentials), first);
+  const reopened = await snapshot(target.user.id);
+  assert.equal(reopened.permissionOverrides.length, 3);
+  for (const row of prior) {
+    assert.equal(reopened.permissionOverrides.find(item => item.permission === row.permission)?.allowed, row.allowed);
+    assert.equal(evaluatePermission(reopened, row.permission as 'legal.read' | 'user.write').allowed, false);
+  }
+  const audits = await db.auditLog.findMany({ where: { entityId: target.user.id, event: 'user_permission_overrides_updated' } });
+  assert.equal(audits.length, 1);
+  const order = (rows: typeof prior) => [...rows].sort((a, b) => a.permission.localeCompare(b.permission));
+  assert.deepEqual(order(audits[0].before as typeof prior), order(prior));
+  assert.deepEqual(order(audits[0].after as typeof prior), order([...prior, { permission: 'technical.write', allowed: true }]));
+  assert.equal(await db.adminRecordRevision.count({ where: { commandId: identity.commandId } }), 1);
 });

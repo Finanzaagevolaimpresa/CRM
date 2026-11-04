@@ -11,8 +11,10 @@ export const overrideSnapshotHash = (rows: readonly PermissionOverrideSnapshot[]
 /** Disabled controls are omitted by FormData. Their current server values are
  * retained, never reconstructed from a client-provided hidden field. */
 export function preserveUneditableOverrides(actor: PermissionSession, requested: readonly PermissionOverrideSnapshot[]) {
+  const proposed = { ...actor, permissionOverrides: requested };
   const retained = actor.permissionOverrides.filter(row => !isPermission(row.permission)
-    || !permissionOverrideControl(actor, row.permission).editable);
+    || !permissionOverrideControl(actor, row.permission).editable
+    || !permissionOverrideControl(proposed, row.permission).editable);
   const retainedCodes = new Set(retained.map(row => row.permission));
   if (requested.some(row => retainedCodes.has(row.permission))) throw new Error('READ_ONLY_OVERRIDE_SUBMITTED');
   return [...requested, ...retained];

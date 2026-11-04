@@ -7,6 +7,12 @@ omesso dal browser perché disabilitato non equivale a scegliere **Eredita**.
 Il ruolo e il limite della funzione tecnica continuano a determinare il diniego
 effettivo dei contenuti riservati.
 
+La conservazione vale anche quando la modifica aggiunge una funzione tecnica e
+rende non modificabili altri selettori. In quel caso il riepilogo mostra il
+valore già registrato, che il server conserva anche se era **Consenti**: il limite
+tecnico nega comunque l'accesso. Un valore provvisorio inserito prima di rendere
+il selettore non modificabile non viene presentato come un salvataggio possibile.
+
 **Ripristina ereditarietà** e **Applica il profilo del ruolo** rimangono operazioni
 esplicite separate. Il salvataggio ordinario non le esegue implicitamente.
 

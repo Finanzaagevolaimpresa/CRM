@@ -26,6 +26,8 @@ async function main() {
   }
   const immutableDenials = ['video.manage', 'user.write', 'legal.read'].map(permission => ({ permission, allowed: false }));
   await db.userPermissionOverride.createMany({ data: immutableDenials.map(row => ({ userId: technical.user.id, ...row })) });
+  await db.userPermissionOverride.createMany({ data: [{ permission: 'legal.read', allowed: false },
+    { permission: 'user.write', allowed: true }].map(row => ({ userId: second.user.id, ...row })) });
   const backofficeChoices = await db.userPermissionOverride.findMany({ where: { userId: backoffice.user.id },
     select: { permission: true, allowed: true } });
   await db.auditLog.create({ data: { actorId: f.owner.user.id, entityType: 'User', entityId: backoffice.user.id,

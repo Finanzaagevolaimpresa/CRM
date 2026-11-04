@@ -52,3 +52,22 @@ test('every role and technical second function retain the entire noneditable cat
     assert.equal(new Set(retained.map(row => row.permission)).size, retained.length);
   }
 });
+
+test('entering any technical function retains prior allow and deny choices for every nontechnical operator role', () => {
+  const roles: RoleCode[] = ['direzione', 'commerciale', 'amministrazione', 'revisore', 'collaboratore_limitato'];
+  for (const role of roles) for (const trigger of ['technical.write', 'technical.status', 'technical.assign', 'technical.admin']) {
+    for (const allowed of [true, false]) {
+      const current: PermissionSession = { role, active: true, technicalRestricted: false,
+        permissionOverrides: ['legal.read', 'user.write'].map(permission => ({ permission, allowed })) };
+      for (const permission of ['legal.read', 'user.write'] as const) assert.equal(permissionOverrideControl(current, permission).editable, true);
+      const requested = [{ permission: trigger, allowed: true }];
+      const next = preserveUneditableOverrides(current, requested);
+      assert.deepEqual(next, [...requested, ...current.permissionOverrides]);
+      for (const permission of ['legal.read', 'user.write'] as const) {
+        assert.equal(permissionOverrideControl({ ...current, permissionOverrides: next }, permission).editable, false);
+        assert.equal(evaluatePermission({ ...current, permissionOverrides: next }, permission).allowed, false);
+        assert.throws(() => preserveUneditableOverrides(current, [...requested, { permission, allowed: !allowed }]));
+      }
+    }
+  }
+});

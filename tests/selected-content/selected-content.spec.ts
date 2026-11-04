@@ -111,6 +111,36 @@ test('Admin explicit technical permissions persist and match selectors without e
     for (const code of ['video.manage', 'user.write', 'legal.read']) await expect(admin.page.locator('select[name="permission:' + code + '"]')).toHaveValue('deny');
   } finally { await admin.context.close(); }
 });
+test('a commercial account entering the technical function preserves newly disabled choices before save and after reopen', async ({ browser }) => {
+  const admin = await session(browser, 'admin', true);
+  try {
+    await admin.page.goto('/settings/users/' + f.people.second.id);
+    const legal = admin.page.locator('select[name="permission:legal.read"]');
+    const users = admin.page.locator('select[name="permission:user.write"]');
+    const technical = admin.page.locator('select[name="permission:technical.write"]');
+    await expect(legal).toBeEnabled(); await expect(users).toBeEnabled();
+    await expect(legal).toHaveValue('deny'); await expect(users).toHaveValue('allow');
+    await legal.selectOption('allow'); await users.selectOption('deny');
+    await technical.selectOption('allow');
+    await expect(legal).toBeDisabled(); await expect(users).toBeDisabled();
+    // Once immutable, the preview shows the server-stored values that will be preserved.
+    await expect(legal).toHaveValue('deny'); await expect(users).toHaveValue('allow');
+    await technical.locator('xpath=ancestor::form').getByRole('button', { name: /Salva/ }).click();
+    await expect(admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true })).toBeVisible();
+    await admin.page.getByRole('link', { name: 'Riapri account e permessi', exact: true }).click();
+    await expect(technical).toHaveValue('allow');
+    for (const [code, value] of [['legal.read', 'deny'], ['user.write', 'allow']]) {
+      const row = admin.page.locator('[data-permission-code="' + code + '"]');
+      await expect(row.locator('select')).toBeDisabled(); await expect(row.locator('select')).toHaveValue(value);
+      await expect(row).toContainText('Effettivo: negato');
+    }
+    await admin.page.reload();
+    const saved = await db.userPermissionOverride.findMany({ where: { userId: f.people.second.id } });
+    expect(saved.find(row => row.permission === 'legal.read')?.allowed).toBe(false);
+    expect(saved.find(row => row.permission === 'user.write')?.allowed).toBe(true);
+  } finally { await admin.context.close(); }
+});
+
 test('Admin reopens audited restoration without replaying any allow or losing the existing selected-content choices', async ({ browser }) => {
   const admin = await session(browser, 'admin', true);
   try {

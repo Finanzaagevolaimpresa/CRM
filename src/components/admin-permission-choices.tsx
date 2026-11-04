@@ -10,12 +10,12 @@ export function AdminPermissionChoices({ actor, canEdit }: { actor: PermissionSe
   const current = { ...actor, permissionOverrides: overrides };
   const groups = [...new Set(permissionCatalog.map(item => item.group))];
   return <div className="space-y-4">
-    <p>I selettori non modificabili conservano la scelta già registrata quando salvi gli altri permessi. Il limite effettivo del ruolo resta applicato.</p>
+    <p>I selettori non modificabili conservano la scelta già registrata quando salvi gli altri permessi. Se una scelta diventa non modificabile, viene mostrato e conservato il valore già registrato. Il limite effettivo del ruolo resta applicato.</p>
     {!actor.active && <p>L’account è inattivo. Puoi preparare i permessi; l’accesso resta negato finché non lo riattivi.</p>}
     {groups.map(group => <Card title={group} key={group}><div className="space-y-3">
       {permissionCatalog.filter(item => item.group === group).map(item => {
         const control = permissionOverrideControl(current, item.code);
-        const stored = overrides.find(value => value.permission === item.code);
+        const stored = (control.editable ? overrides : actor.permissionOverrides).find(value => value.permission === item.code);
         return <div key={item.code} data-permission-code={item.code} className="grid gap-2 rounded-2xl border p-3 md:grid-cols-[1fr_auto_auto_auto]">
           <div><p className="font-black">{item.label} <code className="text-xs text-slate-500">{item.code}</code></p>
             <p className="text-sm">{item.description}</p><p className="text-sm">{control.reason}</p></div>
