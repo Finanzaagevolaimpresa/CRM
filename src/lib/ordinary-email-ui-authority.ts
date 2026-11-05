@@ -25,7 +25,7 @@ export async function readOrdinaryEmailUiAuthority(db: Pick<PrismaClient, '$tran
     const digest = await tokenDigestFromCookie(credentials.sessionToken);
     const registry = await tx.internalSession.findUnique({ where: { id: claimed.sessionId }, select: { tokenDigest: true } });
     if (!digest || !registry || digest.length !== registry.tokenDigest.length || !timingSafeEqual(digest, registry.tokenDigest)) return null;
-    const rows = await tx.$queryRaw<Array<{ mailboxId: string }>>`SELECT a."mailboxId" FROM "OrdinaryEmailAuthority" a
+    const rows = await tx.$queryRaw<Array<{ mailboxId: string; mailboxAddress: string }>>`SELECT a."mailboxId", b."address" AS "mailboxAddress" FROM "OrdinaryEmailAuthority" a
       JOIN "OrdinaryEmailChannel" c ON c."mailboxId"=a."mailboxId"
       JOIN "CommunicationMailbox" b ON b."id"=a."mailboxId"
       WHERE a."id"='ordinary-email' AND a."enabled" AND a."userId"=${actor.userId}
@@ -35,7 +35,7 @@ export async function readOrdinaryEmailUiAuthority(db: Pick<PrismaClient, '$tran
         AND b."configuredRevision"=b."revision" AND b."testedRevision"=b."revision"`;
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (!rows[0] || !claimed.active || actor.expiresAt <= clock.now || claimed.expiresAt * 1000 <= clock.now.getTime()) return null;
-    return { mailboxId: rows[0].mailboxId, stepUpActive: Boolean(verifyPrivilegedStepUpToken({ key,
+    return { mailboxId: rows[0].mailboxId, mailboxAddress: rows[0].mailboxAddress, stepUpActive: Boolean(verifyPrivilegedStepUpToken({ key,
       expectedUserId: actor.userId, role: actor.role, sessionToken: credentials.sessionToken, token: credentials.stepUpToken,
       nowSeconds: Math.floor(clock.now.getTime() / 1000) })) };
   }, { timeout: 30_000 });

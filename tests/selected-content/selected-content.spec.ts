@@ -38,10 +38,22 @@ async function editor(page: Page, id: string) {
   await page.locator('[data-testid="drive-video-editor"][data-interactive-ready="true"]').waitFor();
 }
 async function confirm(page: Page, operation: string) {
+  const creating = page.url().endsWith('/videos/manage/drive/new');
   await page.getByRole('button', { name: operation, exact: true }).click();
   await page.getByLabel('Confermo il riepilogo esatto', { exact: true }).check();
   await page.getByRole('button', { name: 'Conferma operazione', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true })).toBeVisible();
+  if (creating) {
+    // A refreshed /new response allocates another proposed ID. The completed
+    // command must still open the one persisted reference, without another save.
+    const created = await db.adminRecordRevision.findMany({
+      where: { model: 'DriveVideoReference', operation: 'CREATE' }, select: { recordId: true },
+    });
+    expect(created).toHaveLength(1);
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }))
+      .toHaveAttribute('href', '/videos/manage/drive/' + created[0].recordId);
+  }
   const href = await page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }).getAttribute('href');
   await page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }).click();
   return href!.split('/').at(-1)!;
@@ -59,6 +71,8 @@ test('Drive invalid URL, private draft, exact audiences, technical/commercial vi
     await admin.page.getByLabel('Link del video Google Drive', { exact: true }).fill('https://drive.google.com/file/d/synthetic_neutral_not_a_real_id_001/view');
     for (const key of ['commercial','technical']) await admin.page.getByLabel(f.people[key].name + ' · ' + f.people[key].email, { exact: false }).check();
     const id = await confirm(admin.page, 'Salva bozza privata');
+    await expect(admin.page.getByLabel('Titolo', { exact: true })).toHaveValue('Synthetic selective Drive clip');
+    expect(await db.adminRecordRevision.count({ where: { model: 'DriveVideoReference', operation: 'CREATE' } })).toBe(1);
     await commercial.page.goto('/videos/drive/' + id); await expect(commercial.page.getByText('Synthetic selective Drive clip', { exact: true })).toHaveCount(0);
     await admin.page.reload(); await expect(admin.page.getByLabel('Titolo', { exact: true })).toHaveValue('Synthetic selective Drive clip');
     await admin.page.getByLabel('Ho verificato video, titolo e descrizione', { exact: false }).check();
