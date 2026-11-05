@@ -1,3 +1,4 @@
+import { compareVideoOrder } from '@/lib/video-order';
 import { currentTechnicalRestriction } from './technical-account-membership';
 import { Prisma, type PrismaClient, type VideoEntry, type VideoAsset } from '@prisma/client';
 import { z } from 'zod';
@@ -294,7 +295,7 @@ export async function listVideos(db: PrismaClient, claimed: AuthSession, query =
       results.push({ ...item(row, file), state: row.state });
     }
     const now = await auth.finish();
-    return results.filter(row => manage || !row.expiresAt || new Date(row.expiresAt) > now);
+    return results.filter(row => manage || !row.expiresAt || new Date(row.expiresAt) > now).sort(compareVideoOrder);
   });
 }
 export async function readVideo(db: PrismaClient, claimed: AuthSession, id: string) {

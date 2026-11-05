@@ -23,3 +23,9 @@ Tecnico/commerciale: aprire Comunicazioni per il testo approvato o Video per la 
 Persistenza: DriveVideoReference usa revisioni tipizzate nel journal AdminRecordRevision esistente, con hash prima/dopo, autore, sessione, comando e audit nativo atomico. Nessuna migrazione o finta VideoAsset. Gli storici di profili PR252 restano leggibili attraverso il loro catalogo immutabile.
 
 Validazione: fixture e mock di un errore Google sono distinti dalla riproduzione reale su Google e dalla ricezione email. Il collaudo produttivo richiede build distribuita qualificata e ricevute separate per salvataggio, approvazione, SMTP e caselle.
+
+## Ordine della libreria
+
+Libreria personale e Gestione video uniscono file locali e riferimenti Drive con lo stesso criterio, dopo i controlli di accesso e ricerca. Il campo Ordine già impostato resta prioritario. A parità di Ordine, il numero iniziale del titolo segue la sequenza numerica (2 e 02 sono equivalenti e precedono 10); i titoli senza numero seguono quelli numerati. A parità di numero, oppure tra titoli non numerati, l'ID è lo spareggio stabile, indipendente dalle date e dalla lingua del server. Il prefisso è una sequenza di cifre iniziale, eventualmente preceduta da spazi, separata dal titolo da spazio, punto, trattino, due punti o parentesi chiusa.
+
+L'ordinamento non scrive record, versioni, destinatari, link, stati o scadenze. Una ricerca o un sottoinsieme autorizzato conserva lo stesso ordine relativo; non concede altri video. I test sintetici verificano ordine, filtri, ricerca, ricaricamento e immutabilità delle revisioni. La verifica reale riguarda la lista, non la riproduzione Google o i permessi del file esterno.

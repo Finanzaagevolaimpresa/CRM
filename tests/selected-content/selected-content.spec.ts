@@ -39,6 +39,9 @@ async function editor(page: Page, id: string) {
 }
 async function confirm(page: Page, operation: string) {
   const creating = page.url().endsWith('/videos/manage/drive/new');
+  const priorIds = creating ? new Set((await db.adminRecordRevision.findMany({
+    where: { model: 'DriveVideoReference', operation: 'CREATE' }, select: { recordId: true },
+  })).map(row => row.recordId)) : new Set<string>();
   await page.getByRole('button', { name: operation, exact: true }).click();
   await page.getByLabel('Confermo il riepilogo esatto', { exact: true }).check();
   await page.getByRole('button', { name: 'Conferma operazione', exact: true }).click();
@@ -49,10 +52,12 @@ async function confirm(page: Page, operation: string) {
     const created = await db.adminRecordRevision.findMany({
       where: { model: 'DriveVideoReference', operation: 'CREATE' }, select: { recordId: true },
     });
-    expect(created).toHaveLength(1);
+    expect(created).toHaveLength(priorIds.size + 1);
+    const added = created.filter(row => !priorIds.has(row.recordId));
+    expect(added).toHaveLength(1);
     await page.waitForLoadState('networkidle');
     await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }))
-      .toHaveAttribute('href', '/videos/manage/drive/' + created[0].recordId);
+      .toHaveAttribute('href', '/videos/manage/drive/' + added[0].recordId);
   }
   const href = await page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }).getAttribute('href');
   await page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }).click();
@@ -208,4 +213,58 @@ test('six CRM participants and four To recipients survive reload; approval publi
     await other.page.goto(route); await expect(other.page.getByText('SYNTHETIC_SELECTED_TEXT_ONLY', { exact: true })).toHaveCount(0);
     expect(await db.ordinaryEmailAttempt.count()).toBe(0);
   } finally { for (const item of [admin, technical, commercial, other]) await item.context.close(); }
+});
+
+test('numbered library and management preserve exact authorized sets, search and reload without record writes', async ({ browser }) => {
+  test.setTimeout(360000);
+  const admin = await session(browser, 'admin', true), commercial = await session(browser, 'commercial'),
+    technical = await session(browser, 'technical'), other = await session(browser, 'unselected');
+  const ids: string[] = [], title = (n: number) => String(n).padStart(2, '0') + ' - Synthetic order lesson';
+  try {
+    for (const n of [2, 10, 9, 12, 6, 13, 4, 3, 1, 11, 5, 8, 7]) {
+      await editor(admin.page, 'new');
+      await admin.page.getByLabel('Link del video Google Drive', { exact: true })
+        .fill('https://drive.google.com/file/d/synthetic_order_not_a_real_file_' + String(n).padStart(2, '0') + '/view');
+      await admin.page.getByLabel('Confermo che il file appartiene al Drive', { exact: false }).check();
+      await admin.page.getByLabel('Titolo', { exact: true }).fill(title(n));
+      await admin.page.getByLabel('Descrizione', { exact: true }).fill('Synthetic numbered order course');
+      const viewers = ['admin', ...(n % 2 ? ['commercial'] : []), ...(n % 3 === 0 ? ['technical'] : [])];
+      for (const key of viewers) await admin.page.getByLabel(f.people[key].name + ' · ' + f.people[key].email, { exact: false }).check();
+      await admin.page.getByLabel('Ho verificato video, titolo e descrizione', { exact: false }).check();
+      ids.push(await confirm(admin.page, 'Salva bozza privata'));
+      await confirm(admin.page, 'Pubblica per le persone scelte');
+    }
+    const snapshot = () => db.adminRecordRevision.findMany({
+      where: { model: 'DriveVideoReference', recordId: { in: ids } },
+      select: { commandId: true, recordId: true, operation: true, afterHash: true }, orderBy: { commandId: 'asc' },
+    });
+    const before = await snapshot();
+    const all = Array.from({ length: 13 }, (_, i) => i + 1);
+    const readers: Array<[typeof admin, number[]]> = [[admin, all], [commercial, all.filter(n => n % 2)],
+      [technical, all.filter(n => n % 3 === 0)], [other, []]];
+    for (const [viewer, numbers] of readers) {
+      await viewer.page.goto('/videos');
+      await expect(viewer.page.locator('article h2')).toHaveText(numbers.map(title));
+      await viewer.page.reload();
+      await expect(viewer.page.locator('article h2')).toHaveText(numbers.map(title));
+      await viewer.page.getByLabel('Cerca nella libreria', { exact: true }).fill('numbered order course');
+      await viewer.page.getByRole('button', { name: 'Cerca', exact: true }).click();
+      await expect(viewer.page.locator('article h2')).toHaveText(numbers.map(title));
+      await viewer.page.getByLabel('Cerca nella libreria', { exact: true }).fill(title(10));
+      await viewer.page.getByRole('button', { name: 'Cerca', exact: true }).click();
+      await expect(viewer.page.locator('article h2')).toHaveText(numbers.includes(10) ? [title(10)] : []);
+      await viewer.page.reload();
+      await expect(viewer.page.locator('article h2')).toHaveText(numbers.includes(10) ? [title(10)] : []);
+    }
+    await admin.page.goto('/videos/manage');
+    await expect(admin.page.locator('article h3').filter({ hasText: /^\d{2} - Synthetic order lesson$/ })).toHaveText(all.map(title));
+    await admin.page.reload();
+    await expect(admin.page.locator('article h3').filter({ hasText: /^\d{2} - Synthetic order lesson$/ })).toHaveText(all.map(title));
+    for (const viewer of [commercial, technical, other]) {
+      await viewer.page.goto('/videos/manage');
+      await expect(viewer.page.getByRole('heading', { name: 'Gestione video', exact: true })).toHaveCount(0);
+    }
+    expect((await other.page.request.get('/videos/drive/' + ids[0] + '/access')).status()).toBe(404);
+    expect(await snapshot()).toEqual(before);
+  } finally { for (const item of [admin, commercial, technical, other]) await item.context.close(); }
 });
