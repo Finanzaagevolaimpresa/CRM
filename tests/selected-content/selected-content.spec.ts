@@ -61,6 +61,9 @@ async function confirm(page: Page, operation: string) {
   }
   const href = await page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }).getAttribute('href');
   await page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }).click();
+  // The next command must observe the reopened route, not the previous /new URL.
+  await expect(page).toHaveURL(new URL(href!, page.url()).href);
+  await page.locator('[data-testid="drive-video-editor"][data-interactive-ready="true"]').waitFor();
   return href!.split('/').at(-1)!;
 }
 test('Drive invalid URL, private draft, exact audiences, technical/commercial viewing and current revocation', async ({ browser }) => {
