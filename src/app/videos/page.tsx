@@ -1,3 +1,4 @@
+import { compareVideoOrder } from '@/lib/video-order';
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -14,7 +15,7 @@ export const dynamic = 'force-dynamic';
     if (error instanceof VideoLibraryError) notFound(); throw error;
   });
   const rows = [...localRows.map(row => ({ ...row, href: '/videos/' + row.id })),
-    ...driveRows.map(row => ({ ...row, href: '/videos/drive/' + row.id }))].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    ...driveRows.map(row => ({ ...row, href: '/videos/drive/' + row.id }))].sort(compareVideoOrder);
   return <div className="crm-space-y-6 min-w-0"><PageHeader title="Video" description="Formazione e istruzioni operative condivise con il tuo profilo."/>
     {session.role === 'admin' && recordUpdatePermission(session, 'video.manage') && <Link className="font-bold underline" href="/videos/manage">Gestisci video e destinatari</Link>}
     <form className="flex flex-wrap gap-3"><label className="min-w-0 flex-1 font-bold">Cerca nella libreria<input name="q" maxLength={160} defaultValue={q} className="mt-1 block w-full rounded-xl border p-3"/></label><button className="self-end rounded-xl border px-4 py-3 font-bold">Cerca</button></form>

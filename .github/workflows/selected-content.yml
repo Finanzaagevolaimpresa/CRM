@@ -116,7 +116,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTED_CONTENT_EVIDENCE/playwright.json" npx playwright test --config tests/selected-content/playwright.config.ts --reporter=line,json
-          node -e 'const r=require(process.env.SELECTED_CONTENT_EVIDENCE+"/playwright.json");if(r.stats.expected!==5||r.stats.unexpected!==0||r.stats.skipped!==0)process.exit(1)'
+          node -e 'const r=require(process.env.SELECTED_CONTENT_EVIDENCE+"/playwright.json");if(r.stats.expected!==6||r.stats.unexpected!==0||r.stats.skipped!==0)process.exit(1)'
       - name: Bind evidence
         if: always()
         run: git rev-parse HEAD 'HEAD^{tree}' > "$SELECTED_CONTENT_EVIDENCE/source.txt"

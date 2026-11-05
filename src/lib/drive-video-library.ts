@@ -1,3 +1,4 @@
+import { compareVideoOrder } from '@/lib/video-order';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -176,6 +177,6 @@ export async function listDriveVideos(db: PrismaClient, claimed: AuthSession, qu
         && (!search || [row.details.title, row.details.description, row.details.category].some(v => v.toLocaleLowerCase('it-IT').includes(search)))) rows.push(row);
     }
     const now = await auth.finish();
-    return rows.filter(row => manage || allowed(row, auth.person, directory, now)).map(view).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    return rows.filter(row => manage || allowed(row, auth.person, directory, now)).map(view).sort(compareVideoOrder);
   });
 }
