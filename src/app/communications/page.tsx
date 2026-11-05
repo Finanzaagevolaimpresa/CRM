@@ -35,6 +35,7 @@ import { selectedInternalDisclosure } from '@/lib/internal-content-disclosure';
 import { SelectedInternalCommunications } from '@/components/selected-internal-communications';
 import { InternalReadingExpiry } from '@/components/internal-reading-expiry';
 import { mutateApprovedMessageAction } from '@/lib/approved-communication-actions';
+import { OrdinaryEmailSendReadiness } from '@/components/ordinary-email-send-readiness';
 import { ApprovedCommunicationError, communicationContextSchema, type ApprovedMessageSnapshot, type CommunicationContext } from '@/lib/approved-communication-contract';
 
 export const dynamic = 'force-dynamic';
@@ -201,6 +202,8 @@ function Draft({ data, snapshot, replySource, updateDraft, requestSource, replac
       <div role="region" aria-label="Testo del messaggio conservato" className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
+      {message.operational && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) && <OrdinaryEmailSendReadiness
+        isAdmin={data.isAdmin} selectedMailboxId={message.mailboxId} selectedAddress={message.snapshot.from} authority={ordinaryAuthority} />}
       {selectedInternalDisclosure(message.snapshot) && <p className="my-3 rounded-xl border p-3">
         {message.internalTextApproved ? 'Versione approvata per la lettura dei partecipanti selezionati. L’invio email e la ricezione sono verifiche distinte.'
           : 'Testo ancora privato. Richiedi l’approvazione Admin e approva questa versione per renderla leggibile ai partecipanti; poi prepara l’invio email.'}</p>}

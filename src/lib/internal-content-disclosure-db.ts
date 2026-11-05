@@ -27,7 +27,7 @@ export async function assertInternalDisclosureCurrent(tx: Tx, snapshot: Approved
   if (!shared) return;
   if (!thread || !participants) throw new ApprovedCommunicationError('CONFLICT');
   const current = await captureInternalDisclosure(tx, thread, participants, shared.reviewerUserId, shared.expiresAt);
-  if (canonicalSha256(current) !== canonicalSha256(shared)) throw new ApprovedCommunicationError('CONFLICT');
+  if (canonicalSha256(current) !== canonicalSha256(shared)) throw new ApprovedCommunicationError('SHARING_CHANGED');
   const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
   if (shared.expiresAt && new Date(shared.expiresAt) <= clock.now) throw new ApprovedCommunicationError('SHARING_EXPIRED');
   const users = await tx.user.findMany({ where: { id: { in: shared.participants.map(p => p.userId) } },

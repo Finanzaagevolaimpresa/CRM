@@ -95,3 +95,28 @@ test('selected disclosure cannot be attached to restricted content, files or ano
   await assert.rejects(saveApprovedMessageDraft(db, f.owner.actor, { ...contextDraft(f, { kind: 'CLIENT', id: f.client.id }), shareInternalText: true }));
   await assert.rejects(saveApprovedMessageDraft(db, f.owner.actor, { ...contextDraft(f, f.context), shareInternalText: true, contextFileIds: [randomUUID()] }));
 });
+
+test('changed participant permissions require an explicit fresh version before approval, preserving the original', options, async () => {
+  const f = await fixture();
+  const input = { ...contextDraft(f, f.context), shareInternalText: true };
+  const first = await saveApprovedMessageDraft(db, f.owner.actor, input);
+  await db.userPermissionOverride.create({ data: {
+    userId: f.member.user.id, permission: 'video.read', allowed: false,
+  } });
+  const stale = { messageId: first.id, expectedRevision: first.revision, snapshotHash: first.snapshotHash };
+  await submitApprovedMessage(db, f.owner.actor, stale);
+  await assert.rejects(approveExactMessage(db, f.owner.actor, stale), /SHARING_CHANGED/);
+  assert.equal(await db.communicationApproval.count({ where: { version: { messageId: first.id } } }), 0);
+  assert.equal(await db.ordinaryEmailAttempt.count({ where: { messageId: first.id } }), 0);
+  const refreshed = await saveApprovedMessageDraft(db, f.owner.actor, { ...input, expectedRevision: first.revision });
+  assert.equal(refreshed.id, first.id); assert.equal(refreshed.revision, 2);
+  const current = { messageId: refreshed.id, expectedRevision: refreshed.revision, snapshotHash: refreshed.snapshotHash };
+  await submitApprovedMessage(db, f.owner.actor, current); await approveExactMessage(db, f.owner.actor, current);
+  const versions = await db.communicationVersion.findMany({ where: { messageId: first.id }, orderBy: { revision: 'asc' } });
+  assert.equal(versions.length, 2);
+  assert.equal(versions[0].snapshotHash, first.snapshotHash);
+  const view = (await readSelectedInternalCommunications(db, f.member.actor, f.thread.id))[0].messages;
+  assert.equal(view.length, 1); assert.equal(view[0].revision, 2);
+  assert.equal(view[0].body, input.body);
+  assert.equal(await db.ordinaryEmailAttempt.count({ where: { messageId: first.id } }), 0);
+});

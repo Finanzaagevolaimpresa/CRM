@@ -128,7 +128,7 @@ export type ExactMessageApproval = z.infer<typeof exactMessageApprovalSchema>;
 
 export class ApprovedCommunicationError extends Error {
   constructor(readonly code: 'INVALID' | 'DENIED' | 'CONFLICT' | 'SENDER_NOT_READY' | 'RECONCILIATION_REQUIRED'
-    | 'CONTENT_REVIEW_REQUIRED' | 'CONTENT_APPROVAL_REQUIRED' | 'RECIPIENT_PERMISSION_REQUIRED' | 'SHARING_EXPIRED') { super(code); }
+    | 'CONTENT_REVIEW_REQUIRED' | 'CONTENT_APPROVAL_REQUIRED' | 'RECIPIENT_PERMISSION_REQUIRED' | 'SHARING_EXPIRED' | 'SHARING_CHANGED') { super(code); }
 }
 
 // Authority, practice/attachment access and suspension checks belong to the calling
