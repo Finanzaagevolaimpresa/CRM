@@ -93,7 +93,7 @@ export function DriveVideoEditor({ id, current, people }: { id: string; current:
       <ul>{proposal.preview.people.map(p => <li key={p.id}>{p.name} · {p.email}</li>)}</ul>
       <p>Scadenza: {proposal.preview.expiresAt ?? 'nessuna'}. Nessun download o diritto di gestione aggiunto.
         {proposal.command.operation !== 'PUBLISH' && ' Il riferimento non sarà visibile agli spettatori.'}</p>
-      <DriveVideoPlayer id={id} version={current?.revision ?? 0} url={proposal.preview.url} expiresAt={null} preview/>
+      <DriveVideoPlayer id={proposal.command.videoId} version={proposal.command.expectedVersion} url={proposal.preview.url} expiresAt={null} preview/>
       <label className="flex gap-2"><input type="checkbox" checked={consent} disabled={busy || uncertain} onChange={e => setConsent(e.target.checked)}/>Confermo il riepilogo esatto</label>
       <button className={button} disabled={busy || !consent || uncertain} onClick={() => execute()}>Conferma operazione</button>
       {uncertain ? <button className={button} disabled={busy} onClick={() => execute(true)}>Verifica esito</button>
@@ -101,6 +101,6 @@ export function DriveVideoEditor({ id, current, people }: { id: string; current:
     </section>}
     {stepUp && <InlinePrivilegedConfirmation/>}
     {message && <p role="status">{message}</p>}
-    {done && <Link className="font-bold underline" href={'/videos/manage/drive/' + id}>Riapri la scheda salvata</Link>}
+    {done && proposal && <Link className="font-bold underline" href={'/videos/manage/drive/' + proposal.command.videoId}>Riapri la scheda salvata</Link>}
   </section>;
 }
