@@ -82,8 +82,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/selected-internal-communications-db.test.ts | tee "$SELECTED_CONTENT_EVIDENCE/internal.tap"
-          grep -Fx '# tests 8' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
-          grep -Fx '# pass 8' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
+          grep -Fx '# tests 9' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
+          grep -Fx '# pass 9' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
           grep -Fx '# skipped 0' "$SELECTED_CONTENT_EVIDENCE/internal.tap"
       - name: Permission selection persistence and audited denial recovery
         if: matrix.target == 'permission-database'
