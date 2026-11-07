@@ -22,6 +22,7 @@ async function session(browser: Browser, name: string, stepUp = false) {
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   if (stepUp) await confirmIdentity(page);
   return { page, context };
 }
@@ -62,8 +63,15 @@ test('normal Admin path: one reference across library/client, selection, search,
   try {
     await admin.page.goto('/clients/' + f.emptyClientId);
     await expect(admin.page.getByText('Nessun fascicolo collegato', { exact: true })).toBeVisible();
-    await expect(admin.page.getByRole('link', { name: 'Collega cartella Drive a questo cliente', exact: true })).toHaveAttribute('href', '/drive-folders/manage/new?client=' + f.emptyClientId);
-    await editor(admin.page, 'new'); await form(admin.page, 'Synthetic Alpha Folder');
+    const clientEntry = admin.page.getByRole('link', { name: 'Collega cartella Drive a questo cliente', exact: true });
+    await expect(clientEntry).toHaveAttribute('href', '/drive-folders/manage/new?client=' + f.emptyClientId);
+    // Follow the actual client entry point. Starting a second document navigation
+    // while Next hydrates this client page can abort it before the editor loads.
+    await clientEntry.click();
+    await expect(admin.page).toHaveURL(origin + '/drive-folders/manage/new?client=' + f.emptyClientId);
+    await admin.page.locator('[data-testid="drive-folder-editor"][data-interactive-ready="true"]').waitFor();
+    await expect(admin.page.getByLabel('Cliente / account', { exact: true })).toHaveValue(f.emptyClientId);
+    await form(admin.page, 'Synthetic Alpha Folder');
     await expect(admin.page.getByLabel(new RegExp(f.people.disabled.email.replaceAll('.', '\\.')))).toBeDisabled();
     const id = await confirm(admin.page, 'Salva bozza privata');
     await commercial.page.goto('/drive-folders'); await expect(commercial.page.getByText('Synthetic Alpha Folder', { exact: true })).toHaveCount(0);
