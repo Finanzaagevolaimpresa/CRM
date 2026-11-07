@@ -17,7 +17,7 @@ async function session(browser: Browser, name: string, stepUp = false) {
   // folder content is simulated as a real-world PASS; all egress is rejected.
   await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   const page = await context.newPage(); await page.goto('/login');
-  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+  await page.locator('body > span[hidden][data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(f.people[name].email);
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno', exact: true }).click();
@@ -62,7 +62,7 @@ test('normal Admin path: one reference across library/client, selection, search,
   const admin = await session(browser, 'admin', true), commercial = await session(browser, 'commercial'), technical = await session(browser, 'technical'), outsider = await session(browser, 'outsider'), disabled = await session(browser, 'disabled');
   try {
     await admin.page.goto('/clients/' + f.emptyClientId);
-    await admin.page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await admin.page.locator('body > span[hidden][data-interactive-ready="true"]').waitFor({ state: 'attached' });
     await expect(admin.page.getByText('Nessun fascicolo collegato', { exact: true })).toBeVisible();
     const clientEntry = admin.page.getByRole('link', { name: 'Collega cartella Drive a questo cliente', exact: true });
     await expect(clientEntry).toHaveAttribute('href', '/drive-folders/manage/new?client=' + f.emptyClientId);
