@@ -54,22 +54,17 @@ async function form(page: Page, title: string) {
   await page.getByLabel(new RegExp(f.people.technical.email.replaceAll('.', '\\.'))).check();
   await page.getByLabel(/Ho verificato cartella, sottocartelle/).check();
 }
-async function browserResponse(page: Page, target: string, method = 'GET') {
-  // Use the authenticated browser's normal cookie policy, including Secure
-  // cookies on loopback in the compiled runner. The separate APIRequestContext
-  // is not a browser navigation. The context's route guard rejects every
-  // external redirect before the network; observe only the CRM response.
-  const [response] = await Promise.all([
-    page.waitForResponse(response => response.url() === origin + target && response.request().method() === method),
-    page.evaluate(async ({ target, method }) => {
-      await fetch(target, { method, credentials: 'same-origin', redirect: 'follow' }).catch(() => undefined);
-    }, { target, method }),
-  ]);
+async function sessionResponse(page: Page, target: string, method = 'GET') {
+  // Playwright's cookie jar treats localhost as a secure local context, as the
+  // browser does. Use the normal authenticated context without extracting or
+  // weakening cookies. No redirect is followed, including the Drive Location.
+  expect(new URL(origin).hostname).toBe('localhost');
+  const response = await page.request.fetch(target, { method, maxRedirects: 0 });
   expect(response.headers().location ?? '').not.toContain('/login');
   return response;
 }
 async function direct(page: Page, id: string, method = 'GET') {
-  return browserResponse(page, '/drive-folders/' + id + '/open', method);
+  return sessionResponse(page, '/drive-folders/' + id + '/open', method);
 }
 
 test('normal Admin path: one reference across library/client, selection, search, reload, revocation and restore', async ({ browser }) => {
@@ -99,15 +94,15 @@ test('normal Admin path: one reference across library/client, selection, search,
       const response = await direct(page, id); expect(response.status()).toBe(302);
       expect(response.headers().location).toBe('https://drive.google.com/drive/folders/synthetic_browser_Synthetic_Alpha_Folder');
       expect(response.headers()['cache-control']).toContain('no-store'); expect((await direct(page, id, 'HEAD')).status()).toBe(302);
-      expect((await browserResponse(page, '/drive-folders/manage/' + id)).status()).toBe(404);
+      expect((await sessionResponse(page, '/drive-folders/manage/' + id)).status()).toBe(404);
     }
     await commercial.page.goto('/clients/' + f.clientId);
     await expect(commercial.page.locator('#file-condivisi [data-folder-id="' + id + '"]')).toHaveCount(1);
     await outsider.page.goto('/drive-folders?q=Alpha'); await expect(outsider.page.getByText('Synthetic Alpha Folder', { exact: true })).toHaveCount(0);
     expect((await direct(outsider.page, id)).status()).toBe(404);
     expect((await direct(disabled.page, id, 'HEAD')).status()).toBe(404);
-    expect((await browserResponse(technical.page, '/payments')).status()).toBe(404);
-    expect((await browserResponse(technical.page, '/contracts')).status()).toBe(404);
+    expect((await sessionResponse(technical.page, '/payments')).status()).toBe(404);
+    expect((await sessionResponse(technical.page, '/contracts')).status()).toBe(404);
     await confirm(admin.page, 'Disabilita il riferimento CRM');
     for (const { page } of [commercial, technical]) { await page.goto('/drive-folders'); await expect(page.getByText('Synthetic Alpha Folder', { exact: true })).toHaveCount(0); expect((await direct(page, id)).status()).toBe(404); }
     await confirm(admin.page, 'Attiva per le persone scelte'); expect((await direct(commercial.page, id)).status()).toBe(302);

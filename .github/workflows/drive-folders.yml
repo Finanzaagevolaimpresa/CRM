@@ -41,7 +41,7 @@ jobs:
       AUTH_COOKIE_NAME: fai_folders_test_session
       LOGIN_THROTTLE_MODE: disabled
       SECURITY_HEADERS_MODE: report-only
-      APP_ORIGIN: http://127.0.0.1:3051
+      APP_ORIGIN: http://localhost:3051
       PRIVILEGED_ACCESS_MODE: enforced
       PRIVILEGED_STEP_UP_KEY_VERSION: '1'
       PRIVILEGED_STEP_UP_SECRET: synthetic-folder-step-up-only-0000000000000000
