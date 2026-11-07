@@ -47,7 +47,7 @@ Le letture verificano sessione registrata, account corrente, permesso della sezi
 | Conferma personale e conservazione delle scelte | Scenario browser con tentativo chiuso e nuova conferma |
 | Nessuna modifica a video o documenti | Conteggi invariati nei test; confronto privato prima/dopo richiesto al rilascio |
 
-La workflow `Selective client Drive folders` esegue prove native e browser su PostgreSQL effimero, solo fixture. Il runner locale supportato è `node node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port 3051`, con ambiente sintetico e registro sessioni attivato dalla fixture. Non usare credenziali, URL o dati reali in quel database.
+La workflow `Selective client Drive folders` esegue prove native e browser su PostgreSQL effimero, solo fixture. Il collaudo browser usa `NODE_ENV=production npm run build` e `NODE_ENV=production npx next start --hostname 127.0.0.1 --port 3051`; la preparazione del database e il processo di test mantengono l’ambiente sintetico con i relativi guard. Le verifiche HTTP passano dalla sessione browser ordinaria; ogni tentativo di rete esterna è bloccato prima della connessione. Il runner locale supportato è `node node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port 3051`, con ambiente sintetico e registro sessioni attivato dalla fixture. Non usare credenziali, URL o dati reali in quel database.
 
 Il collaudo sintetico non attesta popolamento né apertura di cartelle reali. Dopo la qualificazione della funzionalità, gli abbinamenti reali richiedono la fonte privata ASUS e l’allineamento con Stella: i casi discordanti o non trovati rimangono sospesi. Nessun dato reale viene creato come fixture.
 
@@ -55,4 +55,4 @@ Il collaudo sintetico non attesta popolamento né apertura di cartelle reali. Do
 
 Prima del rilascio: HEAD/CI esatti, riesame indipendente pertinente, piano esecutivo e backup/ripristino qualificati secondo i gate del mandato. Nessuna migrazione o backfill. Conservare integralmente video, documenti e grant preesistenti.
 
-Il recupero applicativo al rilascio precedente rende la nuova sezione indisponibile, conservando le revisioni e gli audit già registrati; non cancella righe del journal né modifica Drive. Il ripristino della versione nuova richiede controllo delle selezioni correnti. Il pacchetto esecutivo deve qualificare questa compatibilità sul candidato reale.
+Il recupero applicativo compatibile conserva i lettori dei fascicoli, le revisioni e gli audit già registrati, mantenendo i controlli correnti. Sospende sul server tutti i nuovi comandi di gestione e sostituisce l’editor con un avviso esplicito. Non è il ritorno all’immagine storica senza modifiche: il pacchetto esecutivo deve qualificare questa composizione sul candidato reale. Non cancella righe del journal né modifica Drive.
