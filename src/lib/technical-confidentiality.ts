@@ -7,7 +7,7 @@ export type TechnicalConfidentialityActor = {
 export const technicalOfficeRoles = ['consulente', 'backoffice'] as const;
 /** Explicit Admin read grants may open only separately selected, reviewed
  * content. They never change the financial/document/record disclosure ceiling. */
-export const selectedContentPermissions = ['communications.internal.read', 'video.read'] as const;
+export const selectedContentPermissions = ['communications.internal.read', 'video.read', 'drive_folders.read'] as const;
 export function isSelectedContentPermission(permission: string) {
   return (selectedContentPermissions as readonly string[]).includes(permission);
 }
@@ -25,7 +25,7 @@ const restrictedPermissions = new Set([
   'dossier.read', 'dossier.write', 'dossier.approve', 'ai.review', 'ai.approve',
   'ai.execution.audit', 'ai.orchestrator.audit', 'legal.read', 'privacy.evidence.read',
   'practice_communications.read', 'practice_communications.review', 'practice_communications.mark_used',
-  'video.manage', 'user.read', 'user.write', 'settings.manage',
+  'video.manage', 'drive_folders.manage', 'user.read', 'user.write', 'settings.manage',
 ]);
 export function technicalPermissionCeiling(actor: TechnicalConfidentialityActor, permission: string) {
   return !isTechnicalAccount(actor) || !restrictedPermissions.has(permission);

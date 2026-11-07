@@ -35,7 +35,7 @@ export function evaluatePermission(session: PermissionSession, permission: Permi
     return { allowed: false, source: session.role === 'admin' ? 'ADMIN' : 'ROLE' };
   }
   if (session.role === 'admin') return { allowed: true, source: 'ADMIN' };
-  if (permission === 'video.manage') return { allowed: false, source: 'ROLE' };
+  if (permission === 'video.manage' || permission === 'drive_folders.manage') return { allowed: false, source: 'ROLE' };
   if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {
     return { allowed: session.role === 'direzione', source: 'ROLE' };
   }
@@ -62,6 +62,7 @@ export function permissionOverrideControl(session: PermissionSession, permission
   const reason = session.role === 'admin' ? 'Il ruolo Admin governa questa funzione; gli override individuali non si applicano.'
     : !technicalPermissionCeiling(session, permission) ? 'Contenuto riservato per la funzione tecnica: il permesso individuale non può aprirlo.'
     : isFinancialPermission(permission) && !hasFinancialRole(session) ? 'Riservato ad Admin e Amministrazione.'
+    : permission === 'drive_folders.manage' ? 'Collegamenti e destinatari delle cartelle sono gestiti soltanto dall’Admin.'
     : permission === 'video.manage' ? 'Caricamento, modifica e pubblicazione dei video sono riservati all’Admin.'
     : permission === 'ai.execution.consume' ? 'Funzione interna non attivabile da un account.'
     : !editable ? 'Funzione riservata ai ruoli previsti: nessun override individuale applicabile.'

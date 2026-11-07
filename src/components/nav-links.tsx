@@ -21,7 +21,7 @@ export type NavItem = {
 
 function NavIcon({ href }: { href: string }) {
   const names: Record<string, string> = { '/dashboard': 'home', '/leads': 'people', '/clients': 'people', '/projects': 'folder',
-    '/technical-office': 'gear', '/communications': 'mail', '/documents': 'document', '/videos': 'video', '/settings/account': 'gear', '/search': 'search' };
+    '/technical-office': 'gear', '/communications': 'mail', '/documents': 'document', '/videos': 'video', '/drive-folders': 'folder', '/settings/account': 'gear', '/search': 'search' };
   return <DashboardIcon name={names[href] ?? 'document'} className="h-5 w-5 shrink-0"/>;
 }
 
@@ -44,6 +44,7 @@ const sections: NavSection[] = [
       { label: "Scadenze", href: "/deadlines", requiredPermission: "service.read" },
       { label: "Documenti", href: "/documents", requiredPermission: "document.download" },
       { label: "Video", href: "/videos", requiredPermission: "video.read" },
+      { label: "Fascicoli Drive", href: "/drive-folders", requiredPermission: "drive_folders.read" },
       { label: "Checklist documentale", href: "/document-checklists", requiredPermission: "document.download" },
     ],
   },
@@ -160,7 +161,7 @@ export function NavLinks({
   const pathname = usePathname();
   const visibleSections = getVisibleNavItems({ role, technicalRestricted, effectivePermissions });
   const all = visibleSections.flatMap(section => section.items);
-  const primaryPaths = ["/dashboard", "/leads", "/clients", "/projects", "/technical-office", "/communications", "/documents", "/videos", "/settings/account"];
+  const primaryPaths = ["/dashboard", "/leads", "/clients", "/projects", "/technical-office", "/communications", "/documents", "/videos", "/drive-folders", "/settings/account"];
   const primary = primaryPaths.flatMap(path => all.filter(item => item.href === path));
   // Promote only destinations admitted by both the role view and current permissions.
   const renderItem = ({ label, href }: NavItem, isPrimary = false) => {

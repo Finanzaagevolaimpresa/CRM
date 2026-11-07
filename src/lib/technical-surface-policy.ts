@@ -6,7 +6,7 @@ export function technicalPageMode(route: string): TechnicalPageMode {
   if (['/', '/login', '/settings/account', '/technical-uploads/[kind]/[id]',
     '/notifications/updates', '/notifications/updates/[id]', '/technical-office/integrations',
     '/admin-requests', '/admin-requests/new', '/admin-requests/[id]', '/assignments', '/assignments/[kind]/[id]',
-    '/communications', '/videos', '/videos/[id]', '/videos/drive/[id]'].includes(route)) return 'original';
+    '/communications', '/videos', '/videos/[id]', '/videos/drive/[id]', '/drive-folders', '/drive-folders/[id]'].includes(route)) return 'original';
   if (['/dashboard', '/projects', '/technical-office', '/technical-office/practices',
     '/tasks', '/deadlines', '/documents', '/document-checklists', '/search',
     '/notifications',
@@ -20,6 +20,7 @@ export function technicalPageMode(route: string): TechnicalPageMode {
 const fileRoutes = new Set([
   '/videos/[id]/content',
   '/videos/drive/[id]/access',
+  '/drive-folders/[id]/open',
   '/api/admin-requests/outcome',
   '/documents/[id]/download', '/documents/[id]/view', '/acquired-documents/[id]',
   '/shared-projects/[id]/documents/[versionId]', '/shared-clients/[id]/documents/[versionId]',

@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { ClientDriveFolders } from '@/components/client-drive-folders';
 export const dynamic = 'force-dynamic';
 import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { SecondaryLink } from '@/components/actions';
@@ -12,6 +13,7 @@ import { readClientSharing } from '@/lib/selective-client-access';
   const projection = await readClientSharing(prisma, session, id).catch(() => null);
   return <div className="min-w-0 space-y-6"><PageHeader title="Cliente condiviso" description="Consultazione dei campi e delle versioni selezionati dall’utente personalmente autorizzato." />
     <SecondaryLink href="/shared-clients">Torna alle selezioni</SecondaryLink>
+    {projection && <ClientDriveFolders session={session} clientId={id}/>}
     {projection ? <Card title="Informazioni condivise"><dl className="grid min-w-0 gap-5 sm:grid-cols-2">
       {projection.fields.map(field => <div key={field.key} className="min-w-0"><dt className="font-semibold text-slate-600">{field.label}</dt>
         <dd className="break-words whitespace-pre-wrap text-lg">{field.value}</dd></div>)}
