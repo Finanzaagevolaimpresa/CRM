@@ -3,6 +3,8 @@ import type { RoleCode } from '@prisma/client';
 import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 
 export const permissionCatalog = [
+  { code: 'drive_folders.read', label: 'Aprire Fascicoli Drive', description: 'Abilita la sezione; restano visibili soltanto le cartelle selezionate per la persona.', group: 'fascicoli_drive' },
+  { code: 'drive_folders.manage', label: 'Gestire Fascicoli Drive', description: 'Solo Admin: collega cartelle ai clienti e decide destinatari, attivazione e scadenza.', group: 'fascicoli_drive' },
   { code: 'video.read', label: 'Vedere video', description: 'Consulta solo i video pubblicati per il proprio profilo corrente.', group: 'video' },
   { code: 'video.manage', label: 'Gestire video', description: 'Gestione Admin con conferma personale di pubblicazione e destinatari.', group: 'video' },
   { code: 'communications.internal.read', label: 'Leggere comunicazioni interne', description: 'Consulta soltanto conversazioni interne a cui partecipa attualmente; non concede accesso a clienti o pratiche.', group: 'comunicazioni interne' },
@@ -103,7 +105,7 @@ export function roleHasPermission(role: RoleCode, permission: Permission) {
   if (!technicalPermissionCeiling({ role }, permission)) return false;
   if (isSelectedContentPermission(permission) && isTechnicalAccount({ role })) return false;
   if (permission === 'video.read') return Object.hasOwn(rolePermissions, role);
-  if (permission === 'video.manage') return role === 'admin';
+  if (permission === 'video.manage' || permission === 'drive_folders.manage' || permission === 'drive_folders.read') return role === 'admin';
   if (permission === 'communications.internal.read') return Object.hasOwn(rolePermissions, role);
   if (isFinancialPermission(permission) && !hasFinancialRole({ role })) return false;
   if (permission === 'ai.execution.consume') return false;
