@@ -76,12 +76,13 @@ jobs:
           grep -Fx '# tests 18' "$FOLDER_EVIDENCE/native.tap"
           grep -Fx '# pass 18' "$FOLDER_EVIDENCE/native.tap"
           grep -Fx '# skipped 0' "$FOLDER_EVIDENCE/native.tap"
-      - name: Synthetic UI fixture and supported local runner
+      - name: Synthetic UI fixture and compiled application runner
         if: matrix.target == 'browser'
         run: |
           node --import tsx tests/drive-folders/provision-browser.ts
           npx playwright install --with-deps chromium
-          npx next dev --webpack --hostname 127.0.0.1 --port 3051 > "$FOLDER_EVIDENCE/next.log" 2>&1 &
+          NODE_ENV=production npm run build
+          NODE_ENV=production npx next start --hostname 127.0.0.1 --port 3051 > "$FOLDER_EVIDENCE/next.log" 2>&1 &
           echo $! > "$FOLDER_EVIDENCE/next.pid"
           for i in $(seq 1 120); do
             if curl --max-time 5 -fsS http://127.0.0.1:3051/login >/dev/null; then exit 0; fi

@@ -62,11 +62,11 @@ test('normal Admin path: one reference across library/client, selection, search,
   const admin = await session(browser, 'admin', true), commercial = await session(browser, 'commercial'), technical = await session(browser, 'technical'), outsider = await session(browser, 'outsider'), disabled = await session(browser, 'disabled');
   try {
     await admin.page.goto('/clients/' + f.emptyClientId);
+    await admin.page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
     await expect(admin.page.getByText('Nessun fascicolo collegato', { exact: true })).toBeVisible();
     const clientEntry = admin.page.getByRole('link', { name: 'Collega cartella Drive a questo cliente', exact: true });
     await expect(clientEntry).toHaveAttribute('href', '/drive-folders/manage/new?client=' + f.emptyClientId);
-    // Follow the actual client entry point. Starting a second document navigation
-    // while Next hydrates this client page can abort it before the editor loads.
+    // Exercise the actual client entry after hydration, including its context.
     await clientEntry.click();
     await expect(admin.page).toHaveURL(origin + '/drive-folders/manage/new?client=' + f.emptyClientId);
     await admin.page.locator('[data-testid="drive-folder-editor"][data-interactive-ready="true"]').waitFor();
