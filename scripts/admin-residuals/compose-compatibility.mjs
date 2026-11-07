@@ -83,6 +83,7 @@ const stoppedActions = [
   'src/lib/admin-technical-disclosure-actions.ts',
   'src/lib/ordinary-email-reconciliation-actions.ts',
   'src/lib/drive-video-actions.ts',
+  'src/lib/drive-folder-actions.ts',
 ];
 for (const file of [...omittedPages, ...stoppedActions, 'src/components/ordinary-email-recovery.tsx']) overlay.add(file);
 // Close all missing relative/alias imports against the exact candidate tree.
@@ -149,6 +150,8 @@ try {
       content = "export function OrdinaryEmailRecovery(props: { messageId: string; attemptId: string }) { void props; return null; }\n";
     } else if (path === 'src/components/drive-video-editor.tsx') {
       content = "export function DriveVideoEditor(props: { id: string; current: unknown; people: unknown }) { void props; return <p>Gestione dei riferimenti Drive sospesa durante il recupero applicativo compatibile. Riferimenti e storico sono conservati; la lettura resta soggetta ai permessi correnti.</p>; }\n";
+    } else if (path === 'src/components/drive-folder-editor.tsx') {
+      content = "export function DriveFolderEditor(props: { id: string; current: unknown; people: unknown; clients: unknown; initialClientId?: string }) { void props; return <p>Gestione dei fascicoli Drive sospesa durante il recupero applicativo compatibile. Riferimenti e storico sono conservati; la lettura resta soggetta ai permessi correnti.</p>; }\n";
     }
     const omittedLink = path === 'src/app/clients/[id]/acquired-documents/page.tsx' ? 'Carica o ripristina una versione privata'
       : path === 'src/app/practice-readiness/page.tsx' ? 'Rettifica contratto, versione firmata e servizio collegato' : null;
@@ -174,7 +177,14 @@ try {
   // issue another Drive command through an already open Admin editor.
   for (const path of ['next.config.ts', 'src/lib/drive-video-contract.ts', 'src/lib/drive-video-library.ts',
     'src/lib/selected-internal-communications.ts', 'src/lib/internal-content-disclosure.ts',
-    'src/lib/approved-communication-contract.ts']) assert.equal(source(commit, path), source(candidate, path));
+    'src/lib/approved-communication-contract.ts', 'src/lib/drive-folder-contract.ts',
+    'src/lib/drive-folder-policy.ts', 'src/lib/drive-folder-library.ts',
+    'src/lib/drive-folder-authority.ts', 'src/lib/drive-folder-decision.ts']) assert.equal(source(commit, path), source(candidate, path));
+  const folderActions = ts.createSourceFile('folder-actions.ts', source(commit, 'src/lib/drive-folder-actions.ts'), ts.ScriptTarget.Latest, true);
+  const folderEntries = folderActions.statements.filter(node => ts.isFunctionDeclaration(node) && node.body
+    && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword));
+  assert.equal(folderEntries.length, 3);
+  for (const entry of folderEntries) assert.equal(entry.body.statements[0].getText(folderActions), 'await assertCompatibilityWriterSuspended();');
   for (const path of mandatoryBoundaries) {
     if (omittedPages.includes(path) || stoppedActions.includes(path)) continue;
     const emitted = source(commit, path);
@@ -190,6 +200,7 @@ try {
     accountCreationUsesStoredProfiles: true, smtpRecoveryEditorExposed: false,
     driveReferenceReadersRetained: true, selectedInternalReadersRetained: true,
     googleFramePolicyRetained: true, driveWritersSuspendedServerSide: true,
+    driveFolderReadersRetained: true, driveFolderWritersSuspendedServerSide: true,
     authoritativeObservationWriterRetained: true, effectiveReconciledReceiptReadersRetained: true,
     originalSourceRowsRewritten: false, productionContact: false }));
 } finally {

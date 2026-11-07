@@ -64,6 +64,7 @@ jobs:
           echo "FOLDER_EVIDENCE=$RUNNER_TEMP/drive-folders" >> "$GITHUB_ENV"
           echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/drive-folders/files" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/drive-folders"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/drive-folders/source.txt"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 75
