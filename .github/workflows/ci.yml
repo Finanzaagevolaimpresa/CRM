@@ -1301,6 +1301,18 @@ jobs:
         with: { node-version-file: .nvmrc, cache: npm }
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
+      - name: Prepare the required PHP contract runtime
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, intl, mbstring, mysqli, sodium
+          coverage: none
+      - name: Verify PHP extensions and temporary path identity
+        shell: pwsh
+        run: |
+          php -r 'foreach (["curl", "intl", "mbstring", "mysqli", "sodium"] as $extension) { if (!extension_loaded($extension)) { fwrite(STDERR, "Missing extension: " . $extension); exit(1); } }'
+          if ($LASTEXITCODE -ne 0) { throw 'PHP contract extensions missing' }
+          node -e "const fs=require('node:fs'),os=require('node:os'); console.log(JSON.stringify({temp:os.tmpdir(),physical:fs.realpathSync(os.tmpdir())}));"
       - name: Verify exact source and native Windows contracts
         shell: pwsh
         run: |

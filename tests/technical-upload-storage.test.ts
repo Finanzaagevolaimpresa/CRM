@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, writeFile, mkdir, link } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile, mkdir, link, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { before } from 'node:test';
@@ -12,7 +12,9 @@ let store: typeof import('../src/lib/technical-upload-storage').storeTechnicalUp
 let read: typeof import('../src/lib/technical-upload-storage').readTechnicalUploadPrivateFile;
 let quota: typeof import('../src/lib/technical-upload-storage').readTechnicalUploadPhysicalQuota;
 before(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'fai-technical-upload-test-'));
+  // The storage guard intentionally rejects aliases. Hosted Windows TEMP can
+  // itself resolve through an alias; configure the fixture's physical root.
+  root = await realpath(await mkdtemp(path.join(tmpdir(), 'fai-technical-upload-test-')));
   process.env.LOCAL_DOCUMENT_STORAGE_ROOT = root;
   process.env.STORAGE_PROVIDER = 'local';
   process.env.DOCUMENT_MAX_BYTES = '1024';
