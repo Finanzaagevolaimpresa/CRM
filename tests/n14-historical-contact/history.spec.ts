@@ -155,7 +155,10 @@ test('lost native response retains the command and permits only reconciliation w
 
 test('revocation after native preview denies confirmation and direct URL disclosure in the open session', async ({ browser }) => {
   const x = await ownedLead(browser); await x.owner.goto(x.route); await preview(x.owner);
-  const override = await db.userPermissionOverride.create({ data: { userId: f.commercialId, permission: 'lead.write', allowed: false } });
+  const override = await db.$transaction(async tx => {
+    await lockInternalUser(tx, f.commercialId);
+    return tx.userPermissionOverride.create({ data: { userId: f.commercialId, permission: 'lead.write', allowed: false } });
+  });
   try {
     await x.owner.getByRole('button', { name: 'Registra contatto precedente', exact: true }).click();
     await expect(x.owner.getByRole('button', { name: 'Verifica esito del contatto', exact: true })).toBeVisible();
@@ -164,7 +167,13 @@ test('revocation after native preview denies confirmation and direct URL disclos
     await x.owner.reload(); await expect(x.owner.getByRole('heading', { name: 'Contatto precedente non disponibile', exact: true })).toBeVisible();
     await expect(x.owner.getByText(x.lead.companyName!, { exact: true })).toHaveCount(0);
     await screen(x.owner, 'historical-revoked', 390);
-  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); await x.ac.close(); await x.cc.close(); }
+  } finally {
+    await db.$transaction(async tx => {
+      await lockInternalUser(tx, f.commercialId);
+      await tx.userPermissionOverride.delete({ where: { id: override.id } });
+    });
+    await x.ac.close(); await x.cc.close();
+  }
 });
 
 test('Admin cannot attest for the owner and another commercial or an owner without acceptance cannot read the form', async ({ browser }) => {
