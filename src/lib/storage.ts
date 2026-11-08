@@ -12,7 +12,8 @@ const allowedExtensions = new Set<string>(documentUploadExtensions);
 const blockedExtensions = new Set(['.exe', '.bat', '.cmd', '.com', '.js', '.mjs', '.sh', '.ps1', '.vbs', '.scr', '.jar', '.php']);
 
 export function sanitizeFileName(name: string) {
-  const base = path.basename(name).replace(/[\\/\0]/g, '').replace(/[^\w.() -]+/g, '_').replace(/\s+/g, ' ').trim();
+  // Uploaded names have the same POSIX-basename contract on every host.
+  const base = path.posix.basename(name).replace(/[\\/\0]/g, '').replace(/[^\w.() -]+/g, '_').replace(/\s+/g, ' ').trim();
   return base || 'documento';
 }
 

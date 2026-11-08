@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -28,10 +28,15 @@ function historicalFixtureRef() {
 function fixture(ref?: string) {
   const parent = mkdtempSync(join(tmpdir(), 'vnx03-scope-'));
   const repository = join(parent, 'repo');
-  execFileSync('git', ['clone', '--quiet', '--no-hardlinks', root, repository]);
+  execFileSync('git', ['clone', '--quiet', '--no-hardlinks', '--no-checkout',
+    '-c', 'core.autocrlf=false', root, repository]);
+  const hooks = join(parent, 'empty-hooks');
+  mkdirSync(hooks);
+  execFileSync('git', ['config', 'core.hooksPath', hooks], { cwd: repository });
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: repository });
   execFileSync('git', ['checkout', '--quiet', '--detach', ref ?? historicalFixtureRef()], { cwd: repository });
   const guard = join(repository, 'scripts/vnx03/verify-protected-scope.sh');
-  copyFileSync(join(root, 'scripts/vnx03/verify-protected-scope.sh'), guard);
+  writeFileSync(guard, readFileSync(join(root, 'scripts/vnx03/verify-protected-scope.sh'), 'utf8').replaceAll('\r\n', '\n'));
   chmodSync(guard, 0o755);
   execFileSync('git', ['config', 'user.email', 'vnx03-synthetic@example.invalid'], { cwd: repository });
   execFileSync('git', ['config', 'user.name', 'VNX03 Synthetic'], { cwd: repository });
@@ -58,10 +63,15 @@ function commitMany(repository: string, changes: ReadonlyArray<{ path: string; c
 }
 
 function run(repository: string, guard: string, base: string) {
-  return spawnSync('bash', [guard], {
+  // The Windows system32 bash.exe is a WSL launcher, not this Git checkout's shell.
+  const bash = process.platform === 'win32'
+    ? resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../..', 'bin/bash.exe')
+    : 'bash';
+  if (process.platform === 'win32') assert.equal(existsSync(bash), true, 'Git for Windows Bash is required');
+  return spawnSync(bash, ['--noprofile', '--norc', guard.replaceAll('\\', '/')], {
     cwd: repository,
     env: { ...process.env, VNX03_BASE_SHA: base },
-    encoding: 'utf8',
+    encoding: 'utf8', timeout: 30_000,
   });
 }
 
@@ -69,13 +79,14 @@ test('VNX-03 co-modification guard admits historical qualified N15, harness-only
   {
     const value = fixture(qualifiedHead);
     try {
-      assert.equal(run(value.repository, value.guard, qualifiedBase).status, 0, 'historical qualified N15');
+      const historical = run(value.repository, value.guard, qualifiedBase);
+      assert.equal(historical.status, 0, historical.stderr || historical.error?.message);
       const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: value.repository, encoding: 'utf8' }).trim();
       const harness = 'tests/vnx03/synthetic-scope-marker.txt';
       commit(value.repository, harness, 'synthetic harness-only change\n');
       assert.equal(run(value.repository, value.guard, base).status, 0, 'harness-only');
     } finally {
-      rmSync(value.parent, { recursive: true, force: true });
+      rmSync(value.parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 
@@ -86,7 +97,7 @@ test('VNX-03 co-modification guard admits historical qualified N15, harness-only
       commit(value.repository, 'src/synthetic-vnx03-runtime-only.ts', 'export const runtimeOnly = true;\n');
       assert.equal(run(value.repository, value.guard, base).status, 0, 'runtime-only');
     } finally {
-      rmSync(value.parent, { recursive: true, force: true });
+      rmSync(value.parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -108,7 +119,7 @@ test('VNX-03 co-modification guard rejects unrelated runtime and migration drift
       assert.notEqual(result.status, 0, scenario.path);
       assert.match(result.stderr, new RegExp(scenario.code, 'u'));
     } finally {
-      rmSync(value.parent, { recursive: true, force: true });
+      rmSync(value.parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });

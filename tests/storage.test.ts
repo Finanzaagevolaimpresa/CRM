@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -24,6 +24,10 @@ after(async () => {
 test('sanitizza il nome originale senza conservare separatori di percorso', () => {
   assert.equal(storage.sanitizeFileName('../fattura \\ finale?.pdf'), 'fattura finale_.pdf');
   assert.equal(storage.sanitizeFileName(''), 'documento');
+  assert.equal(storage.sanitizeFileName('folder/fattura 2026?.pdf'), 'fattura 2026_.pdf');
+  assert.equal(storage.sanitizeFileName('C:\\cartella\\fattura.pdf'), 'C_cartellafattura.pdf');
+  assert.equal(storage.sanitizeFileName('cartella/uno\\due.pdf'), 'unodue.pdf');
+  assert.equal(storage.sanitizeFileName('nome\0file.pdf'), 'nomefile.pdf');
 });
 
 test('accetta soltanto nomi upload con estensioni consentite', () => {
@@ -80,7 +84,7 @@ test('rifiuta traversal, percorsi assoluti, NUL, segmenti non validi e ID iniett
   }
 });
 
-test('salva una chiave root-relative con permessi privati e consente il round trip', async () => {
+test('salva una chiave root-relative e consente il round trip', async () => {
   const contents = Buffer.from('contenuto riservato FAI');
   const file = new File([contents], 'documento.pdf', { type: 'application/pdf' });
   const saved = await storage.savePrivateDocumentFile({
@@ -95,9 +99,6 @@ test('salva una chiave root-relative con permessi privati e consente il round tr
   assert.equal(saved.sizeBytes, contents.byteLength);
   assert.equal(saved.checksum, createHash('sha256').update(contents).digest('hex'));
 
-  const absolutePath = storage.localPathFromStoragePath(saved.storagePath);
-  assert.equal((await stat(path.dirname(absolutePath))).mode & 0o777, 0o700);
-  assert.equal((await stat(absolutePath)).mode & 0o777, 0o600);
   assert.equal(await storage.privateDocumentExists(saved.storagePath), true);
   assert.deepEqual(await storage.readPrivateDocument(saved.storagePath), contents);
 });

@@ -22,7 +22,7 @@ const migration = readFileSync(resolve(
   root,
   'prisma/migrations/20260718220000_ai_orchestrator_worker_runtime_foundation/migration.sql',
 ), 'utf8');
-const service = readFileSync(resolve(root, 'src/lib/ai-orchestrator/worker-runtime.ts'), 'utf8');
+const service = readFileSync(resolve(root, 'src/lib/ai-orchestrator/worker-runtime.ts'), 'utf8').replaceAll('\r\n', '\n');
 const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
   scripts?: Record<string, string>;
 };

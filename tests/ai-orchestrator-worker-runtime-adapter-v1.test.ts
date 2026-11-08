@@ -15,7 +15,7 @@ const root = resolve(import.meta.dirname, '..');
 const source = readFileSync(resolve(
   root,
   'src/lib/ai-orchestrator/worker-runtime-adapter-v1.ts',
-), 'utf8');
+), 'utf8').replaceAll('\r\n', '\n');
 
 const validIdentity = {
   workerInstanceId: '12345678-1234-4123-8123-123456789abc',
