@@ -74,8 +74,10 @@ jobs:
           git archive 8dc6a994f0e0ccb8169b1d0b959ddb822b4dac09 prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
           bash scripts/technical-private-items/qualify-migration.sh
+          node scripts/shared-operational/historical-client.mjs
           node --import tsx tests/technical-private-items/historical-observer-state.ts
           python3 -B scripts/technical-private-items/release-observer/qualify_snapshot.py populated
+          npm run prisma:generate
       - name: Qualify current operations on the full schema71
         if: matrix.target != 'historical-observer'
         run: |

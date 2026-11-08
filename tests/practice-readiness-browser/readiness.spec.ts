@@ -814,7 +814,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const exportLink = page.getByRole('link', { name: 'Esporta approvato .md', exact: true });
     await expect(exportLink).toHaveAttribute('download', '');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load');
+    await expect(exportLink).toBeVisible();
     // Merely displaying an approved dossier must not prefetch or audit an export.
     expect(await db.engagementDossierExport.count({ where: { dossierId } })).toBe(exportsBeforeNavigation);
     const [download] = await Promise.all([

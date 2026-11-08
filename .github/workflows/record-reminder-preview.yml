@@ -65,7 +65,10 @@ jobs:
           echo "RECORD_REMINDER_EVIDENCE=$RUNNER_TEMP/reminder-preview" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           if [[ '${{ matrix.target }}' == migration ]]; then
+            node scripts/shared-operational/historical-client.mjs
             RECORD_REMINDER_EVIDENCE="$RUNNER_TEMP/reminder-preview" bash scripts/record-reminders/qualify-migration.sh
+            npm run prisma:generate
+            npm run prisma:migrate:deploy
           else
             npm run prisma:migrate:deploy
           fi

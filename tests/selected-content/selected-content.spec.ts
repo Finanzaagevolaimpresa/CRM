@@ -55,7 +55,7 @@ async function confirm(page: Page, operation: string) {
     expect(created).toHaveLength(priorIds.size + 1);
     const added = created.filter(row => !priorIds.has(row.recordId));
     expect(added).toHaveLength(1);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }))
       .toHaveAttribute('href', '/videos/manage/drive/' + added[0].recordId);
   }

@@ -20,7 +20,9 @@ export async function captureManual(page: Page, id: string, role: string, captio
   assert.match(id, /^S0[1-8]-[a-z0-9-]+$/);
   assert.notEqual(url.pathname, '/login');
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.waitForLoadState('networkidle');
+  // Live notifications legitimately keep fetching; readiness is proven by the
+  // rendered anchors, loaded fonts and unobscured viewport below.
+  await page.waitForLoadState('domcontentloaded');
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   const anchor = focus ?? page.locator('main').getByRole('heading').first();
   await anchor.waitFor({ state: 'visible' });

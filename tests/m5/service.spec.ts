@@ -109,7 +109,8 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await operator.reload();
     const exportLink = operator.getByRole('link', { name: 'Esporta approvato .docx', exact: true });
     await expect(exportLink).toHaveAttribute('download', '');
-    await operator.waitForLoadState('networkidle');
+    await operator.waitForLoadState('load');
+    await expect(exportLink).toBeVisible();
     expect(await db.engagementDossierExport.count({ where: { dossierId: item.dossierId } })).toBe(exportsBeforeNavigation);
     const [download] = await Promise.all([operator.waitForEvent('download', { timeout: 30_000 }), exportLink.click()]);
     expect(await download.failure()).toBeNull();

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import time
@@ -174,6 +175,9 @@ try:
     before_cols = columns('columns75')
     before = snapshot('rows75', before_cols)
     before_catalog = catalog('catalog75')
+    command_check_sql = "SELECT to_json(pg_get_constraintdef(oid)) FROM pg_constraint WHERE conname='RecordUpdateCommand_operation_check'"
+    previous_operations = set(re.findall(r"'([A-Z_]+)'", value('command-operations75', command_check_sql)))
+    assert previous_operations == {'UPDATE', 'RULE', 'REVOKE', 'REMINDER', 'REMINDER_REVOKE'}
     assert len(before_cols) == 179 and len(before['_prisma_migrations']) == 75
     assert migration_bytes.rstrip().endswith(b'COMMIT;') and migration_bytes.count(b'COMMIT;') == 1
     injected = migration_bytes.rsplit(b'COMMIT;', 1)[0] + b'SELECT 1/0;\nCOMMIT;\n'
@@ -184,6 +188,9 @@ try:
     assert snapshot('rollback-rows', before_cols) == before
     receipt['injectedRollbackExact'] = True
     run('apply-schema76', [args.node, prisma, 'migrate', 'deploy'], timeout=300)
+    current_operations = set(re.findall(r"'([A-Z_]+)'", value('command-operations76', command_check_sql)))
+    assert current_operations == previous_operations | {'CLOSE_ATTEMPT'}
+    receipt['allPreviousCommandOperationsPreserved'] = sorted(previous_operations)
     after_cols = columns('columns76')
     assert set(after_cols) == set(before_cols) | {'SharedOperationalUpdate'}
     after_old = snapshot('old-column-rows76', before_cols)

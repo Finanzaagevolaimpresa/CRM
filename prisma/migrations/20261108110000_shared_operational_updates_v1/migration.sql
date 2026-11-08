@@ -26,7 +26,7 @@ ALTER TABLE "Client" ADD COLUMN "operationalState" VARCHAR(24)
 -- A durable negative outcome uses the same unique command key as the write.
 -- It closes an unobserved attempt and cannot grant, edit a record or send.
 ALTER TABLE "RecordUpdateCommand" DROP CONSTRAINT "RecordUpdateCommand_operation_check",
- ADD CONSTRAINT "RecordUpdateCommand_operation_check" CHECK ("operation" IN ('UPDATE','RULE','REVOKE','CLOSE_ATTEMPT')),
+ ADD CONSTRAINT "RecordUpdateCommand_operation_check" CHECK ("operation" IN ('UPDATE','RULE','REVOKE','REMINDER','REMINDER_REVOKE','CLOSE_ATTEMPT')),
  ADD CONSTRAINT "RecordUpdateCommand_closed_attempt" CHECK ("operation"<>'CLOSE_ATTEMPT'
   OR (mode='CRM' AND "emailAuthorityRevision" IS NULL AND recipients='[]'::jsonb
    AND scope='{"protocol":"FAI_SHARED_OPERATIONAL_CLOSED_V1"}'::jsonb));
