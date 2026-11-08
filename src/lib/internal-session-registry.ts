@@ -178,7 +178,9 @@ export async function lockAuthoritativeInternalSession(
     JOIN "User" user_row ON user_row."id" = session_row."userId"
     WHERE session_row."id" = ${input.sessionId}::UUID
       AND session_row."userId" = ${input.userId}
-    ${identityRowLock(options)} OF session_row, user_row
+    ${options.readOnly ? Prisma.sql`FOR SHARE OF session_row, user_row`
+      : options.foreignKeyCompatibleWrite ? Prisma.sql`FOR NO KEY UPDATE OF session_row, user_row`
+        : Prisma.sql`FOR UPDATE OF session_row, user_row`}
   `);
   const session = rows[0];
   if (!session) return null;
