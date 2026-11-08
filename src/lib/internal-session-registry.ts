@@ -140,11 +140,17 @@ export async function resolveInternalSession(
 export async function lockAuthoritativeInternalSession(
   tx: Prisma.TransactionClient,
   input: { sessionId: string; userId: string },
+  options: { readOnly?: boolean } = {},
 ) {
   // Match account/login and selective-access writers: User before session.
   // A joined FOR UPDATE alone may lock the session first and deadlock with
   // a caller that already holds the same User row (for example layout/page).
-  await lockInternalUser(tx, input.userId);
+  // Pure readers still block account/session revocation until their final
+  // admission check. SHARE also permits the KEY SHARE taken by a new notice's
+  // recipient FK, avoiding User -> record -> recipient inversions during polling.
+  // Existing mutation callers keep their exclusive locks by default.
+  if (options.readOnly) await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${input.userId} FOR SHARE`;
+  else await lockInternalUser(tx, input.userId);
   const rows = await tx.$queryRaw<Array<{
     id: string;
     userId: string;
@@ -162,7 +168,7 @@ export async function lockAuthoritativeInternalSession(
     JOIN "User" user_row ON user_row."id" = session_row."userId"
     WHERE session_row."id" = ${input.sessionId}::UUID
       AND session_row."userId" = ${input.userId}
-    FOR UPDATE OF session_row, user_row
+    ${options.readOnly ? Prisma.sql`FOR SHARE OF session_row, user_row` : Prisma.sql`FOR UPDATE OF session_row, user_row`}
   `);
   const session = rows[0];
   if (!session) return null;

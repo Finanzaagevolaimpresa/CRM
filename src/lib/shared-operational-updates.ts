@@ -65,7 +65,7 @@ function admittedTransaction<T>(db: PrismaClient, claimed: AuthSession, target: 
   }
   return withSerializableTransaction(db, async tx => {
     if (write && !proof) deny();
-    const auth = await updateActor(tx, claimed, write ? proof : undefined);
+    const auth = await updateActor(tx, claimed, write ? proof : undefined, { readOnly: !write });
     if (auth.actor.role !== claimed.role) deny();
     const context = await sharedOperationalContext(tx, target, write);
     if (!canReadSharedOperational(auth.actor, context)) deny();

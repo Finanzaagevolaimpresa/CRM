@@ -27,11 +27,12 @@ async function clock(tx: Tx) {
   const [row] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
   return row.now;
 }
-export async function updateActor(tx: Tx, claimed: AuthSession, proof?: UpdateCredentials) {
+export async function updateActor(tx: Tx, claimed: AuthSession, proof?: UpdateCredentials, options: { readOnly?: boolean } = {}) {
   if (internalSessionMode() !== 'registry' || !claimed.sessionId || !claimed.active) deny();
+  if (proof && options.readOnly) deny();
   if (proof && (privilegedAccessMode() !== 'enforced' || !await lockRegisteredPrivilegedStepUpKey(tx, proof.key))) deny();
   await lockCommunicationDirectory(tx);
-  const registry = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId });
+  const registry = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId }, options);
   if (!registry || !registry.active || registry.deletedAt || registry.revokedAt) deny();
   const actor = await currentRecordUpdateUser(tx, registry.userId);
   if (!actor) deny();

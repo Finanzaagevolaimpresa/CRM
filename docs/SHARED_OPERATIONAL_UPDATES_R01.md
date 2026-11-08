@@ -55,6 +55,17 @@ e incarico devono essere ancora validi al termine. Questo budget non prolunga
 un'autorizzazione o una scadenza e non cambia i limiti degli altri comandi tecnici.
 Una lettura ancora in corso non viene interrotta dal successivo controllo periodico.
 
+Le letture pure della coda e del pannello trattengono lock condivisi su account e
+sessione fino all'ultima verifica: revoca e cambi di permesso restano serializzati,
+mentre un nuovo evento può referenziare il destinatario senza un deadlock inverso.
+I comandi di modifica e di marcatura letto mantengono i lock esclusivi precedenti.
+La regressione PostgreSQL forza l'intreccio tra lettura, scrittura della scheda e
+FK del destinatario; verifica anche revoca account, sessione e permesso.
+
+Nel gestore Drive la ricevuta del comando rimane visibile durante la rivalidazione
+della pagina. **Riapri la scheda salvata** ricarica la versione persistita prima del
+comando successivo, senza ripetere il salvataggio o cambiare i destinatari.
+
 Un cambio di contesto/versione richiede di rileggere stato e destinatari prima di
 proseguire, mantenendo il testo. Revoca/scadenza tolgono la proiezione e disabilitano
 il salvataggio; la bozza dell'autore rimane nella pagina. Il browser conserva in

@@ -30,7 +30,7 @@ async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof curr
 }
 export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, limit = 100, unreadOnly = true) {
   return confirmedReadRetry(() => db.$transaction(async tx => {
-    const auth = await updateActor(tx, claimed), directory = await updateDirectory(tx);
+    const auth = await updateActor(tx, claimed, undefined, { readOnly: true }), directory = await updateDirectory(tx);
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     const result: NonNullable<Awaited<ReturnType<typeof visible>>>[] = [];
     // Filter before the result limit. No inaccessible titles, IDs or counts are
@@ -56,7 +56,7 @@ export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, 
 }
 export async function readRecordUpdate(db: PrismaClient, claimed: AuthSession, id: string, markRead = false) {
   const read = () => db.$transaction(async tx => {
-    const auth = await updateActor(tx, claimed);
+    const auth = await updateActor(tx, claimed, undefined, { readOnly: !markRead });
     const work = await tx.recordUpdateDelivery.findFirst({ where: { id, recipientId: auth.actor.id }, include });
     if (!work) return null;
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;

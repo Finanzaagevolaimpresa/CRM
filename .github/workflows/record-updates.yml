@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/record-updates-db.test.ts | tee "$UPDATES_EVIDENCE/postgresql.tap"
-          grep -q '^# tests 33$' "$UPDATES_EVIDENCE/postgresql.tap"
-          grep -q '^# pass 33$' "$UPDATES_EVIDENCE/postgresql.tap"
+          grep -q '^# tests 35$' "$UPDATES_EVIDENCE/postgresql.tap"
+          grep -q '^# pass 35$' "$UPDATES_EVIDENCE/postgresql.tap"
           grep -q '^# skipped 0$' "$UPDATES_EVIDENCE/postgresql.tap"
       - name: PostgreSQL derived email provenance, atomic save and current recipient admission
         if: matrix.target == 'email-postgresql'
