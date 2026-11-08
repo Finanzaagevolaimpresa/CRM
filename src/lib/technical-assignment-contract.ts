@@ -10,10 +10,10 @@ const revision = z.number().int().nonnegative().safe();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const instant = z.string().datetime({ offset: true });
 
-export const technicalAssignmentActions = ['update_fields', 'update_status', 'manage_checklist', 'manage_deadlines', 'request_admin', 'upload_document'] as const;
+export const technicalAssignmentActions = ['update_fields', 'update_status', 'manage_checklist', 'manage_deadlines', 'request_admin', 'upload_document', 'share_update'] as const;
 // Each operation also needs its explicit item selection or bounded upload
 // profile in the retained personal decision and fresh runtime admission.
-export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document'] as const;
+export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document', 'share_update'] as const;
 export const projectTechnicalFields = ['title', 'description', 'status', 'priority', 'technicalOwnerName', 'commercialOwnerName'] as const;
 export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote', 'technicalOwnerName', 'commercialOwnerName'] as const;
 export const projectEditableTechnicalFields = ['title', 'description'] as const;

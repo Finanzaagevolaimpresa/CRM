@@ -1,13 +1,15 @@
 # Anagrafiche di lead, clienti, aziende e referenti
 
-La patch rende compilabili i campi già presenti nel modello, senza migrazioni.
+Il percorso anagrafico originale rende compilabili i campi canonici. Il seguito
+«Aggiornamento condiviso» aggiunge campi facoltativi con lo schema 76; il suo
+rilascio deve essere qualificato separatamente.
 
 | Dove | Azione | Dati |
 | --- | --- | --- |
 | Lead → scheda lead | Modifica anagrafica | Nome, cognome, azienda dichiarata, persona di contatto, email, telefono, regione, provincia, comune. |
 | Clienti → fascicolo → Anagrafica completa | Modifica anagrafica | Denominazione, tipo cliente, note anagrafiche. |
-| Fascicolo → Azienda / Visura / ATECO | Aggiungi azienda; apri azienda → Modifica azienda | P.IVA, CF, REA, PEC, forma giuridica, sedi, territorio, ATECO, date, stato attività, dipendenti, fatturato, DURC, regime fiscale, note. |
-| Azienda → Gestisci referenti | Aggiungi referente / Salva referente | Nome, cognome, email, telefono, CF, ruolo, quota di partecipazione e note. |
+| Fascicolo → Azienda / Visura / ATECO | Aggiungi azienda; apri azienda → Modifica azienda | P.IVA, CF, REA, PEC, SDI, forma giuridica, sedi legale e operativa strutturate (via/piazza, civico, CAP, città, provincia), indirizzi storici, territorio, ATECO, date, stato attività, dipendenti, fatturato, DURC, regime fiscale, note. |
+| Azienda → Gestisci referenti | Aggiungi referente / Salva referente | Nome, cognome, email, telefono, CF personale, ruolo, indicazioni esplicite di amministratore e referente operativo, quota di partecipazione e note. |
 
 La conversione da lead crea il fascicolo, non una visura né una scheda azienda
 già compilata. I contatti del lead e l'identità del cliente rimangono distinti;
@@ -43,9 +45,14 @@ Ogni modifica e il suo audit sono atomici. L'audit registra attore, record,
 operazione e nomi dei campi, senza copiare dati personali. Il controllo di versione
 impedisce la sovrascrittura silenziosa di aggiornamenti concorrenti.
 
-CAP e codice SDI non sono campi del modello corrente e richiedono una proposta
-separata di schema. Non sono aggiunti implicitamente né registrati in campi errati.
-Questa patch non cambia account reali, dati cliente, stato dei servizi o produzione.
+Lo schema 76 aggiunge SDI e indirizzi strutturati a `Company`, e due qualifiche
+indipendenti a `CompanyPerson`. Non interpreta o riscrive gli indirizzi storici;
+non presume che amministratore e referente siano la stessa persona. I valori
+nuovi sono nulli e le qualifiche false finché un operatore autorizzato li compila.
+Il codice SDI, quando presente, ha sette caratteri alfanumerici normalizzati in
+maiuscolo. Un modulo precedente che omette i nuovi campi non ne cancella i valori.
+Nessun campo nuovo è obbligatorio per la conversione del Lead o per un aggiornamento
+operativo. Le note precedenti non entrano nella proiezione tecnica condivisa.
 
 Validazione: unità per null/zero/date/importi e overposting; PostgreSQL sintetico
 per isolamento, revoca, riassegnazione, versione, referenti condivisi e rollback
@@ -55,4 +62,6 @@ includono attese reali PostgreSQL per le scadenze di sessione e per la concorren
 tra creazione e modifica dei contatti lead. Il percorso browser include un lead
 acquisito senza nome e cognome. I controlli standard
 del repository restano obbligatori. Rollback applicativo senza downgrade del
-database: mantenere anagrafiche e audit già salvati. Nessuna migrazione necessaria.
+database: mantenere anagrafiche e audit già salvati. Per l'estensione schema 76
+usare la qualifica e il recupero compatibile descritti in
+[Aggiornamento condiviso](SHARED_OPERATIONAL_UPDATES_R01.md).

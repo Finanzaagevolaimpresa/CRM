@@ -97,7 +97,7 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
       entityType = 'Company'; resultId = command.id; destination = `/companies/${command.id}`;
     } else {
       const parent = await company(tx, fresh, command.companyId);
-      const { role, ownershipPercent, ...personData } = command.data;
+      const { role, ownershipPercent, isAdministrator, isOperationalContact, ...personData } = command.data;
       if (command.kind === 'person') {
         await tx.$queryRaw`SELECT id FROM "CompanyPerson" WHERE id=${command.id} FOR UPDATE`;
         const link = await tx.companyPerson.findFirst({ where: { id: command.id, companyId: parent.id } });
@@ -110,7 +110,7 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
         if (await tx.companyPerson.count({ where: { personId: person.id } }) !== 1) throw new RecordProfileError('SHARED_PERSON');
         await assertUnexpired(tx, fresh);
         await tx.person.update({ where: { id: person.id }, data: personData });
-        await tx.companyPerson.update({ where: { id: link.id }, data: { role, ownershipPercent } });
+        await tx.companyPerson.update({ where: { id: link.id }, data: { role, ownershipPercent, isAdministrator, isOperationalContact } });
       } else {
         const existing = await tx.companyPerson.findUnique({ where: { id: command.id } });
         await assertUnexpired(tx, fresh);
@@ -119,7 +119,7 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
           return `/companies/${parent.id}#referenti`;
         }
         const person = await tx.person.create({ data: personData });
-        await tx.companyPerson.create({ data: { id: command.id, companyId: parent.id, personId: person.id, role, ownershipPercent } });
+        await tx.companyPerson.create({ data: { id: command.id, companyId: parent.id, personId: person.id, role, ownershipPercent, isAdministrator, isOperationalContact } });
       }
       entityType = 'CompanyPerson'; resultId = command.id; destination = `/companies/${parent.id}#referenti`;
     }

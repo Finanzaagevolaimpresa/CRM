@@ -51,7 +51,9 @@ footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 psql "$db" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" ORDER BY migration_name' > "$evidence/prefix74-after-fault.txt"
 cmp "$evidence/prefix74-before.txt" "$evidence/prefix74-after-fault.txt"
-npm run prisma:migrate:deploy
+mkdir -p "$evidence/schema75"
+git archive 1a5195730b1b396354ec405118bcbb8187c72311 prisma | tar -x -C "$evidence/schema75"
+npx prisma migrate deploy --schema "$evidence/schema75/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 75
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261101090000_ordinary_email_reconciliation_v1' ORDER BY migration_name" > "$evidence/prefix74-after.txt"
 cmp "$evidence/prefix74-before.txt" "$evidence/prefix74-after.txt"
@@ -60,7 +62,7 @@ cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "OrdinaryEmailReconciliation"')" = 0
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq ORDINARY_EMAIL_RECONCILIATION_SCHEMA74_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/schema75/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 sha256sum "$ddl" "$evidence/baseline74.dump" > "$evidence/sha256.txt"
 printf '{"synthetic":true,"before":74,"after":75,"prefix74Unchanged":true,"allPriorRowsPreserved":true,"backupAndRestoreEqual":true,"atomicFailureRolledBack":true,"originalGuardRestoredOnFailure":true,"wrongBaseDenied":true,"replayDenied":true,"datamodelDriftUnchanged":true,"newRecoveryTableEmpty":true,"productionContact":false}\n' > "$evidence/proof.json"

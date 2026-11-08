@@ -18,12 +18,20 @@ export const clientProfileSchema = z.object({ displayName: required, type: z.enu
 export const leadProfileSchema = z.object({ firstName: z.string().trim().max(200), lastName: z.string().trim().max(200), companyName: text(), contactPerson: text(),
   email, phone: text(64), region: text(100), province: text(100), city: text(100) }).strict();
 export const companyProfileSchema = z.object({ name: required, vatNumber: text(32), taxCode: text(32), rea: text(64), pec: email,
+  // Omitted new fields preserve values from forms opened before this release.
+  sdiCode: text(7).refine(value => !value || /^[A-Za-z0-9]{7}$/.test(value), 'Il codice SDI contiene sette caratteri').transform(value => value?.toUpperCase() ?? null).optional(),
+  legalStreet: text(200).optional(), legalStreetNumber: text(32).optional(), legalPostalCode: text(12).optional(),
+  legalCity: text(100).optional(), legalProvince: text(100).optional(),
+  operatingStreet: text(200).optional(), operatingStreetNumber: text(32).optional(), operatingPostalCode: text(12).optional(),
+  operatingCity: text(100).optional(), operatingProvince: text(100).optional(),
   legalAddress: text(500), operatingAddress: text(500), region: text(100), province: text(100), city: text(100), legalForm: text(100),
   atecoCode: text(32), atecoDescription: text(500), incorporationDate: date, activityStartDate: date, activityStatus: text(100),
   employees: text(10).refine(value => !value || (/^\d+$/.test(value) && Number(value) <= 2147483647), 'Numero intero non negativo richiesto')
     .transform(value => value === null ? null : Number(value)),
   annualRevenue: amount, durcStatus: text(100), taxRegime: text(100), notes: text(5000) }).strict();
 export const personProfileSchema = z.object({ firstName: required, lastName: required, email, phone: text(64), taxCode: text(32), notes: text(5000),
+  isAdministrator: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  isOperationalContact: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   role: required, ownershipPercent: amount.refine(value => value === null || Number(value) <= 100, 'La quota deve essere tra 0 e 100') }).strict();
 const record = z.object({ id, expectedVersion: z.string().datetime() });
 export const profileCommandSchema = z.discriminatedUnion('kind', [

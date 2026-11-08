@@ -5,7 +5,7 @@ import type { AuthSession } from './auth';
 import { loadActivePrivilegedStepUpKey, lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 import { privilegedAccessMode } from './application-security-policy';
 import { lockCommunicationDirectory } from './communication-directory-lock';
-import { lockAuthoritativeInternalSession, lockInternalUser, tokenDigestFromCookie } from './internal-session-registry';
+import { lockAuthoritativeInternalSession, lockInternalUser, tokenDigestFromCookie, type InternalSessionLockOptions } from './internal-session-registry';
 import { verifiedPrivilegedStepUpExpiry, type PrivilegedStepUpKey } from './privileged-step-up-token';
 import { hasPermission } from './permission-evaluator';
 import { internalSessionMode } from './session';
@@ -66,12 +66,16 @@ async function assertPersonal(tx:Tx,current:CurrentSession,proof:TechnicalAssign
  * document scope and exact command before any projection or mutation. */
 async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,recipientId:string|null,
   mode:'MANAGEMENT_READ'|'PERSONAL_DECISION'|'RECIPIENT'|'ATTEMPT_SETTLEMENT',proof:TechnicalAssignmentPersonalProof|null,
-  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,inactiveRecipientForRevocation=false) {
+  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,inactiveRecipientForRevocation=false,
+  recipientOptions?:InternalSessionLockOptions & {timeout?:30_000}) {
   identifier.parse(claimed.userId);
   if(recipientId) identifier.parse(recipientId);
   if(!['Project','TechnicalPractice'].includes(kind)) deny();
   if(mode==='PERSONAL_DECISION' && !proof) deny();
   if(inactiveRecipientForRevocation && mode==='RECIPIENT') deny();
+  if(recipientOptions!==undefined && (mode!=='RECIPIENT'
+    || (recipientOptions.timeout!==undefined && recipientOptions.timeout!==30_000)
+    || (recipientOptions.readOnly && recipientOptions.foreignKeyCompatibleWrite))) deny();
   return withSerializableTransaction(db,async tx=>{
     // A complete catalogue may need time to read many versions, but a blocked
     // row must release this transaction promptly so the independent history
@@ -88,8 +92,8 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     if(!parsed.success || !parsed.data.enabled) deny();
     const authority=parsed.data;
     for(const id of [...new Set([authority.userId,claimed.userId,...(recipientId?[recipientId]:[])])].sort())
-      await lockInternalUser(tx,id);
-    const live=await lockAuthoritativeInternalSession(tx,{userId:claimed.userId,sessionId:claimed.sessionId!});
+      await lockInternalUser(tx,id,recipientOptions);
+    const live=await lockAuthoritativeInternalSession(tx,{userId:claimed.userId,sessionId:claimed.sessionId!},recipientOptions);
     if(!live || !live.active || live.deletedAt || live.revokedAt || !live.live) deny();
     const current:CurrentSession={...claimed,role:live.role,technicalRestricted:live.technicalRestricted,active:live.active,
       permissionOverrides:[...live.permissionOverrides],registryExpiresAt:live.expiresAt,
@@ -110,10 +114,11 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     if(proof) await assertPersonal(tx,current,proof);
     return result;
   // The bounded management catalogue can inspect 256 exact versions and their
-  // canonical references. Give this read its own finite budget; decisions and
-  // recipient operations retain their existing transaction limits. Session
+  // canonical references. Shared operational work explicitly uses that same
+  // finite budget for its linked views and current recipients; other recipient
+  // operations and personal decisions retain their existing limits. Session
   // validity above is checked again at completion, not extended by this budget.
-  }, mode === 'MANAGEMENT_READ' ? { timeout: 30_000 } : undefined);
+  }, mode === 'MANAGEMENT_READ' ? { timeout: 30_000 } : recipientOptions?.timeout ? { timeout: recipientOptions.timeout } : undefined);
 }
 
 /** Read-only management loaders must keep their callbacks free of writes. */
@@ -135,8 +140,11 @@ export function withTechnicalAssignmentDecision<T>(db:PrismaClient,claimed:AuthS
   return withTransaction(db,claimed,kind,recipientId,'PERSONAL_DECISION',proof,work,options.inactiveRecipientForRevocation);
 }
 export function withTechnicalAssignmentRecipient<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
-  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>) {
-  return withTransaction(db,claimed,kind,claimed.userId,'RECIPIENT',null,work);
+  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,options:InternalSessionLockOptions & {timeout?:30_000}={}) {
+  // A pure callback must opt in to readOnly across ALL identity rows, including
+  // the authority. Reference-only operational writers retain exclusive locks
+  // with FK compatibility; assignment decisions retain the default FOR UPDATE.
+  return withTransaction(db,claimed,kind,claimed.userId,'RECIPIENT',null,work,false,options);
 }
 
 /** Private creation has no recipient and creates no assignment. It still uses

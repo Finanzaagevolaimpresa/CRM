@@ -17,7 +17,9 @@ export function RecordProfileForm({ fields, values, hidden, clientType, submitLa
       {clientType !== undefined && <label className="crm-space-y-1 font-semibold">Tipo cliente *<select name="type" value={draft.type} onChange={event => update('type', event.target.value)} className="block w-full rounded-xl border p-3">{clientTypes.map(type => <option value={type} key={type}>{type.replaceAll('_', ' ')}</option>)}</select></label>}
       {fields.map(field => <label key={field.name} className={`crm-space-y-1 font-semibold ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}>
         {field.label}{field.required ? ' *' : ''}
-        {field.type === 'textarea' ? <textarea className="block min-h-28 w-full rounded-xl border p-3 font-normal" name={field.name} value={draft[field.name] ?? ''} onChange={event => update(field.name, event.target.value)} maxLength={field.max ?? 200} />
+        {field.type === 'boolean' ? <select className="block w-full rounded-xl border p-3 font-normal" name={field.name} value={draft[field.name] || 'false'} onChange={event => update(field.name, event.target.value)}>
+          <option value="false">No / non indicato</option><option value="true">Sì, indicato esplicitamente</option></select>
+          : field.type === 'textarea' ? <textarea className="block min-h-28 w-full rounded-xl border p-3 font-normal" name={field.name} value={draft[field.name] ?? ''} onChange={event => update(field.name, event.target.value)} maxLength={field.max ?? 200} />
           : <input className="block w-full rounded-xl border p-3 font-normal" name={field.name} type={field.type ?? 'text'} value={draft[field.name] ?? ''} onChange={event => update(field.name, event.target.value)} required={field.required}
             maxLength={field.type === 'email' ? 254 : field.max ?? 200} min={field.type === 'number' ? 0 : undefined} step={field.step} />}
       </label>)}

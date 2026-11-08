@@ -9,6 +9,7 @@ import { operationalNavigationAllows } from "@/lib/operational-role-view";
 import Link from "next/link";
 import { DashboardIcon } from "./dashboard-icon";
 import { usePathname } from "next/navigation";
+import { useLiveNotificationCount } from './live-notifications';
 
 export type NavItem = {
   label: string;
@@ -159,6 +160,7 @@ export function NavLinks({
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
+  notificationCount = useLiveNotificationCount(notificationCount);
   const visibleSections = getVisibleNavItems({ role, technicalRestricted, effectivePermissions });
   const all = visibleSections.flatMap(section => section.items);
   const primaryPaths = ["/dashboard", "/leads", "/clients", "/projects", "/technical-office", "/communications", "/documents", "/videos", "/drive-folders", "/settings/account"];

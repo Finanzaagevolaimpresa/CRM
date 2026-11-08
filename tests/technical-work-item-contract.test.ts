@@ -91,5 +91,5 @@ test('deadline fields require separate explicit selection, normalize instants an
   }
 });
 test('implemented operations remain a closed set with separately profiled upload and no dispatch', () => {
-  assert.deepEqual(technicalImplementedActions, ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document']);
+  assert.deepEqual(technicalImplementedActions, ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document', 'share_update']);
 });

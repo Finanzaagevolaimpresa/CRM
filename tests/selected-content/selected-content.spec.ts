@@ -46,6 +46,11 @@ async function confirm(page: Page, operation: string) {
   await page.getByLabel('Confermo il riepilogo esatto', { exact: true }).check();
   await page.getByRole('button', { name: 'Conferma operazione', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true })).toBeVisible();
+  // The successful command must survive the revalidated revision and a later
+  // live notification response. It cannot disappear while the user opens it.
+  await page.waitForResponse(response => new URL(response.url()).pathname === '/api/notifications/count'
+    && response.request().method() === 'GET', { timeout: 15_000 });
+  await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true })).toBeVisible();
   if (creating) {
     // A refreshed /new response allocates another proposed ID. The completed
     // command must still open the one persisted reference, without another save.
@@ -55,7 +60,7 @@ async function confirm(page: Page, operation: string) {
     expect(created).toHaveLength(priorIds.size + 1);
     const added = created.filter(row => !priorIds.has(row.recordId));
     expect(added).toHaveLength(1);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expect(page.getByRole('link', { name: 'Riapri la scheda salvata', exact: true }))
       .toHaveAttribute('href', '/videos/manage/drive/' + added[0].recordId);
   }

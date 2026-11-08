@@ -21,6 +21,9 @@ assert.equal(hash(read('prisma/migrations/' + binding.migration + '/migration.sq
 const recovery = JSON.parse(read('scripts/ordinary-reconciliation/schema-binding.json'));
 assert.equal(recovery.baseline, '562bfae09c73c8d93332630b5381e764488a4cab');
 assert.equal(hash(read('prisma/migrations/' + recovery.migration + '/migration.sql')), recovery.migrationSha256);
+const shared = JSON.parse(read('scripts/shared-operational/schema-binding.json'));
+assert.equal(shared.baseline, '1a5195730b1b396354ec405118bcbb8187c72311');
+assert.equal(hash(read('prisma/migrations/' + shared.migration + '/migration.sql')), shared.migrationSha256);
 const legacyPaths = [
   'prisma/schema.prisma', 'scripts/ordinary-reconciliation/schema-binding.json',
   'prisma/migrations/' + recovery.migration + '/migration.sql',
@@ -84,6 +87,7 @@ const stoppedActions = [
   'src/lib/ordinary-email-reconciliation-actions.ts',
   'src/lib/drive-video-actions.ts',
   'src/lib/drive-folder-actions.ts',
+  'src/lib/shared-operational-actions.ts',
 ];
 for (const file of [...omittedPages, ...stoppedActions, 'src/components/ordinary-email-recovery.tsx']) overlay.add(file);
 // Close all missing relative/alias imports against the exact candidate tree.
@@ -133,7 +137,8 @@ try {
   };
   for (const path of [...overlay].sort()) {
     const original = read(path); let content = original;
-    if (omittedPages.includes(path)) content = "import { notFound } from 'next/navigation';\nexport default async function Page() { notFound(); }\n";
+    if (path === 'src/lib/shared-operational-mode.ts') content = 'export const sharedOperationalWritesEnabled = false;\n';
+    else if (omittedPages.includes(path)) content = "import { notFound } from 'next/navigation';\nexport default async function Page() { notFound(); }\n";
     else if (stoppedActions.includes(path)) {
       const ast = ts.createSourceFile(path, original, ts.ScriptTarget.Latest, true);
       const positions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && node.body
@@ -179,7 +184,16 @@ try {
     'src/lib/selected-internal-communications.ts', 'src/lib/internal-content-disclosure.ts',
     'src/lib/approved-communication-contract.ts', 'src/lib/drive-folder-contract.ts',
     'src/lib/drive-folder-policy.ts', 'src/lib/drive-folder-library.ts',
-    'src/lib/drive-folder-authority.ts', 'src/lib/drive-folder-decision.ts']) assert.equal(source(commit, path), source(candidate, path));
+    'src/lib/drive-folder-authority.ts', 'src/lib/drive-folder-decision.ts',
+    'src/lib/shared-operational-updates.ts', 'src/lib/shared-operational-contacts.ts',
+    'src/lib/shared-operational-context.ts', 'src/lib/shared-operational-notices.ts',
+    'src/components/shared-operational-panel.tsx']) assert.equal(source(commit, path), source(candidate, path));
+  assert.equal(source(commit, 'src/lib/shared-operational-mode.ts'), 'export const sharedOperationalWritesEnabled = false;\n');
+  const sharedActions = ts.createSourceFile('shared-actions.ts', source(commit, 'src/lib/shared-operational-actions.ts'), ts.ScriptTarget.Latest, true);
+  const sharedEntries = sharedActions.statements.filter(node => ts.isFunctionDeclaration(node) && node.body
+    && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword));
+  assert.equal(sharedEntries.length, 2);
+  for (const entry of sharedEntries) assert.equal(entry.body.statements[0].getText(sharedActions), 'await assertCompatibilityWriterSuspended();');
   const folderActions = ts.createSourceFile('folder-actions.ts', source(commit, 'src/lib/drive-folder-actions.ts'), ts.ScriptTarget.Latest, true);
   const folderEntries = folderActions.statements.filter(node => ts.isFunctionDeclaration(node) && node.body
     && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword));
@@ -191,8 +205,8 @@ try {
     assert(emitted.includes('withTechnicalPage') || emitted.includes('assertTechnicalFileRoute') || emitted.includes('assertTechnicalServerAction'));
   }
   console.log(JSON.stringify({ protocol: 'ADMIN_PRIVACY_COMPATIBILITY_SOURCE_V2', baseline, baselineTree, privacyBase,
-    candidate, candidateTree: git(['rev-parse', candidate + '^{tree}']), commit, tree, schema: 75,
-    sqlSha256: recovery.migrationSha256, priorSql74Sha256: binding.migrationSha256,
+    candidate, candidateTree: git(['rev-parse', candidate + '^{tree}']), commit, tree, schema: 76,
+    sqlSha256: shared.migrationSha256, priorSql75Sha256: recovery.migrationSha256, priorSql74Sha256: binding.migrationSha256,
     files, importClosure: dependencies, mandatoryBoundaries, omittedPages, stoppedActions,
     mandatoryTechnicalCeilingRetained: true, unmodifiedHistoricalRecovery: false,
     linkAndPrivateVersionEditorsExposed: false, roleProfileEditorExposed: false,
@@ -201,6 +215,7 @@ try {
     driveReferenceReadersRetained: true, selectedInternalReadersRetained: true,
     googleFramePolicyRetained: true, driveWritersSuspendedServerSide: true,
     driveFolderReadersRetained: true, driveFolderWritersSuspendedServerSide: true,
+    sharedOperationalReadersRetained: true, sharedOperationalWritersSuspendedServerSide: true,
     authoritativeObservationWriterRetained: true, effectiveReconciledReceiptReadersRetained: true,
     originalSourceRowsRewritten: false, productionContact: false }));
 } finally {

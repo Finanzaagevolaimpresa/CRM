@@ -15,7 +15,8 @@ export async function saveRecordProfileAction(_previous: ProfileFormState, form:
   const session = await requireSession();
   const kind = String(form.get('kind') ?? '');
   const fields = kind === 'lead' ? leadProfileFields : kind === 'client' ? clientProfileFields : kind.endsWith('company') ? companyProfileFields : personProfileFields;
-  const data = Object.fromEntries(fields.map(field => [field.name, form.get(field.name) ?? '']));
+  const data = Object.fromEntries(fields.filter(field => !field.preserveIfOmitted || form.has(field.name))
+    .map(field => [field.name, form.get(field.name) ?? '']));
   if (kind === 'client') data.type = form.get('type') ?? '';
   const command = { kind, id: form.get('id'), data,
     ...(kind === 'new-company' ? { clientId: form.get('clientId') } : {}),

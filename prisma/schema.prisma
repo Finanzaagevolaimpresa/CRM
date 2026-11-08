@@ -371,6 +371,7 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  operationalUpdates SharedOperationalUpdate[] @relation("SharedOperationalAuthor")
   ordinaryEmailReconciliations OrdinaryEmailReconciliation[]
   administrativeRevisions AdminRecordRevision[]
   historicalLeadContacts CommercialLeadHistoricalContact[] @relation("HistoricalContactActor")
@@ -691,6 +692,8 @@ model CommercialOffer {
 }
 
 model Client {
+  operationalUpdates SharedOperationalUpdate[]
+  operationalState String? @db.VarChar(24)
   historicalLeadConversion CommercialLeadHistoricalConversion?
   adminRequests AdminRequest[]
   selectiveGrants SelectiveClientGrant[]
@@ -719,6 +722,17 @@ model Client {
 }
 
 model Company {
+  sdiCode             String? @db.VarChar(7)
+  legalStreet         String? @db.VarChar(200)
+  legalStreetNumber   String? @db.VarChar(32)
+  legalPostalCode     String? @db.VarChar(12)
+  legalCity           String? @db.VarChar(100)
+  legalProvince       String? @db.VarChar(100)
+  operatingStreet       String? @db.VarChar(200)
+  operatingStreetNumber String? @db.VarChar(32)
+  operatingPostalCode   String? @db.VarChar(12)
+  operatingCity         String? @db.VarChar(100)
+  operatingProvince     String? @db.VarChar(100)
   id                  String               @id @default(cuid())
   clientId            String
   name                String
@@ -761,6 +775,8 @@ model Person {
 }
 
 model CompanyPerson {
+  isAdministrator Boolean @default(false)
+  isOperationalContact Boolean @default(false)
   id               String   @id @default(cuid())
   companyId        String
   personId         String
@@ -784,6 +800,7 @@ model IncorporationSubject {
 }
 
 model Project {
+  operationalUpdates SharedOperationalUpdate[]
   adminRequests AdminRequest[]
   technicalAssignments TechnicalAssignment[]
   recordUpdateEpoch Int @default(1)
@@ -2442,6 +2459,7 @@ model CorporateFinancingAssessment {
 }
 
 model TechnicalPractice {
+  operationalUpdates SharedOperationalUpdate[]
   adminRequests AdminRequest[]
   technicalAssignments TechnicalAssignment[]
   selectivePracticeGrants SelectivePracticeGrant[]
@@ -3645,6 +3663,7 @@ model RecordUpdateRule {
 }
 
 model RecordUpdateCommand {
+  operationalUpdate SharedOperationalUpdate?
   reminder RecordUpdateReminder? @relation("ReminderCommand")
   reminderCancellation RecordUpdateReminderCancellation? @relation("ReminderCancellationCommand")
   mode String @default("CRM") @db.VarChar(24)
@@ -3667,6 +3686,7 @@ model RecordUpdateCommand {
 }
 
 model RecordUpdateEvent {
+  operationalUpdate SharedOperationalUpdate?
   reminder RecordUpdateReminder?
   id String @id @default(uuid()) @db.Uuid
   kind String @db.VarChar(20)
@@ -3678,6 +3698,43 @@ model RecordUpdateEvent {
   occurredAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
   deliveries RecordUpdateDelivery[]
   @@index([kind, recordId, occurredAt])
+}
+
+// A typed, immutable operational message shares one canonical RecordUpdate event.
+// Existing free/internal notes are never copied or reclassified into this model.
+model SharedOperationalUpdate {
+  id String @id @db.Uuid
+  eventId String @unique @db.Uuid
+  kind String @db.VarChar(20)
+  recordId String
+  clientId String
+  projectId String?
+  practiceId String?
+  authorId String
+  authorName String @db.VarChar(200)
+  sessionId String @db.Uuid
+  assignmentRevisionId String? @db.Uuid
+  classification String @default("SHARED_OPERATIONAL") @db.VarChar(24)
+  text String @db.VarChar(4000)
+  stateBefore String? @db.VarChar(24)
+  stateAfter String? @db.VarChar(24)
+  stateChanged Boolean @default(false)
+  nextAction String? @db.VarChar(500)
+  nextActionDueOn DateTime? @db.Date
+  correctionOfId String? @unique @db.Uuid
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  command RecordUpdateCommand @relation(fields: [id], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  event RecordUpdateEvent @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  author User @relation("SharedOperationalAuthor", fields: [authorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  practice TechnicalPractice? @relation(fields: [practiceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignmentRevision TechnicalAssignmentRevision? @relation(fields: [assignmentRevisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  correctionOf SharedOperationalUpdate? @relation("SharedOperationalCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  correction SharedOperationalUpdate? @relation("SharedOperationalCorrection")
+  @@index([clientId, createdAt, id])
+  @@index([projectId, createdAt, id])
+  @@index([practiceId, createdAt, id])
 }
 
 model RecordUpdateDelivery {
@@ -3837,6 +3894,7 @@ model TechnicalAssignmentDecision {
 }
 
 model TechnicalAssignmentRevision {
+  operationalUpdates SharedOperationalUpdate[]
   id String @id @db.Uuid
   assignmentId String @db.Uuid
   revision Int

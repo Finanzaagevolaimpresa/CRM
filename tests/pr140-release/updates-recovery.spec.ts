@@ -36,7 +36,12 @@ test('schema63 restart preserves selected work, read state and revoked rule deni
   }
   expect((await reader.request.get(origin + '/notifications/updates/' + fixture.records.REVOKED.id)).status()).toBe(404);
   await other.goto(origin + '/notifications/updates');
-  await expect(other.getByText('Nessun aggiornamento disponibile', { exact: true })).toBeVisible();
+  // This Admin may now receive the separately qualified shared operational
+  // notices, but still cannot read these explicitly selected legacy notices.
+  for (const row of Object.values(fixture.records)) {
+    await expect(other.locator('a[href="/notifications/updates/' + row.id + '"]')).toHaveCount(0);
+    expect((await other.request.get(origin + '/notifications/updates/' + row.id)).status()).toBe(404);
+  }
   await login(owner, fixture.ownerEmail);
   await owner.goto(origin + '/communications/updates');
   await expect(owner.locator('a[href*="update=' + fixture.emails.AVAILABLE.id + '"]')).toHaveText('Apri messaggio già salvato');

@@ -67,6 +67,7 @@ jobs:
             ${{ env.R05_EVIDENCE_DIR }}/*-recovery.json
             ${{ env.R05_EVIDENCE_DIR }}/*-epochs.json
             ${{ env.R05_EVIDENCE_DIR }}/after-resume.json
+            ${{ env.R05_EVIDENCE_DIR }}/shared-fixture.json
             ${{ env.R05_EVIDENCE_DIR }}/*session-revocation.json
             ${{ env.R05_EVIDENCE_DIR }}/selective-*.png
             ${{ env.R05_EVIDENCE_DIR }}/release-images.tar.gz

@@ -13,6 +13,7 @@ export const technicalActionLabels = {
   update_fields: 'Modificare i campi scelti', update_status: 'Aggiornare lo stato', manage_checklist: 'Gestire la checklist',
   manage_deadlines: 'Gestire le attività e le scadenze', request_admin: 'Chiedere un intervento all’Admin',
   upload_document: 'Caricare documenti tecnici',
+  share_update: 'Leggere dati cliente e referente e salvare aggiornamenti condivisi',
 } as const;
 export const technicalResponsibilityLabels = {
   responsabile: 'Responsabile', co_responsabile: 'Co-responsabile', supporto: 'Supporto tecnico',

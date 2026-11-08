@@ -10,7 +10,8 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
+import { lockInternalUser } from "../../src/lib/internal-session-registry";
 import { assertSyntheticCatalogDatabase } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
 import { workExportReceiptSchema } from '../../src/lib/engagement-work-package';
@@ -19,6 +20,13 @@ const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN ?? "http://127.0.0.1:3
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD!;
 const evidenceDir = process.env.PRACTICE_READINESS_BROWSER_EVIDENCE_DIR!;
 const db = new PrismaClient();
+async function withFixturePermissions<T>(userId: string, work: (permissions: Prisma.TransactionClient['userPermissionOverride']) => Promise<T>) {
+  // Match native writers while the browser's registry reads remain active.
+  return db.$transaction(async tx => {
+    await lockInternalUser(tx, userId);
+    return work(tx.userPermissionOverride);
+  });
+}
 type CapturedAction = {
   url: string;
   nextAction: string;
@@ -333,7 +341,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         clientId: matching.clientId, projectId: matching.projectId, serviceCatalogId: matching.serviceCatalogId,
         contractId: otherContract.id, status: 'richiesto', operationalStatus: 'nuova', assignedToId: matching.assignedToId,
       } });
-      const override = await db.userPermissionOverride.create({ data: { userId: 'readiness-browser-owner', permission: 'contract.read', allowed: false } });
+      const override = await withFixturePermissions('readiness-browser-owner', permissions => permissions.create({ data: { userId: 'readiness-browser-owner', permission: 'contract.read', allowed: false } }));
       try {
         article = await reloadPractice(page, practice.id);
         const options = await article.locator('[name="clientServiceId"] option').evaluateAll(nodes => nodes.map(node => (node as HTMLOptionElement).value));
@@ -343,7 +351,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         await article.locator('[name="clientServiceId"]').selectOption(matching.id);
         await submitAction(page, article.getByRole('button', { name: 'Collega pratica operativa in attesa' }), 'redacted-service-selector');
         expect((await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } })).clientServiceId).toBe(matching.id);
-      } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+      } finally { await withFixturePermissions('readiness-browser-owner', permissions => permissions.delete({ where: { id: override.id } })); }
     }
 
     article = await reloadPractice(page, practice.id);
@@ -814,7 +822,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const exportLink = page.getByRole('link', { name: 'Esporta approvato .md', exact: true });
     await expect(exportLink).toHaveAttribute('download', '');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load');
+    await expect(exportLink).toBeVisible();
     // Merely displaying an approved dossier must not prefetch or audit an export.
     expect(await db.engagementDossierExport.count({ where: { dossierId } })).toBe(exportsBeforeNavigation);
     const [download] = await Promise.all([
@@ -886,10 +895,10 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   const protectedDossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierIds[0] } });
   const protectedPreanalysis = await db.preAnalysis.findUniqueOrThrow({ where: { id: protectedDossier.preAnalysisId! } });
   const creationUrl = `${app}/engagement-dossiers/new/${protectedDossier.practiceReadinessId}`;
-  const readWriteOverrides = await Promise.all([
-    db.userPermissionOverride.create({ data: { userId: "readiness-browser-owner", permission: "dossier.write", allowed: true } }),
-    db.userPermissionOverride.create({ data: { userId: "readiness-browser-owner", permission: "dossier.read", allowed: false } }),
-  ]);
+  const readWriteOverrides = await withFixturePermissions('readiness-browser-owner', permissions => Promise.all([
+    permissions.create({ data: { userId: "readiness-browser-owner", permission: "dossier.write", allowed: true } }),
+    permissions.create({ data: { userId: "readiness-browser-owner", permission: "dossier.read", allowed: false } }),
+  ]));
   try {
     expect(protectedPreanalysis.internalSummary).toBeTruthy();
     const deniedCreation = await page.request.get(creationUrl, { maxRedirects: 0 });
@@ -904,7 +913,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await page.goto(creationUrl);
     await expect(page).toHaveURL(`${app}/dashboard`);
   } finally {
-    await db.userPermissionOverride.deleteMany({ where: { id: { in: readWriteOverrides.map((row) => row.id) } } });
+    await withFixturePermissions('readiness-browser-owner', permissions => permissions.deleteMany({ where: { id: { in: readWriteOverrides.map((row) => row.id) } } }));
   }
   await page.goto(creationUrl);
   await expect(page).toHaveURL(`${app}/client-dossiers/${protectedDossier.id}`);
@@ -1161,12 +1170,12 @@ test("versioned dossier listings follow current detail access", async ({ page, b
   } });
   await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: true } });
   try {
-    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } });
+    await withFixturePermissions(override.userId, permissions => permissions.update({ where: { id: override.id }, data: { allowed: true } }));
     await assertVisibility(true, "permission_granted");
-    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: false } });
+    await withFixturePermissions(override.userId, permissions => permissions.update({ where: { id: override.id }, data: { allowed: false } }));
     await assertVisibility(false, "permission_revoked");
   } finally {
-    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: override.allowed } });
+    await withFixturePermissions(override.userId, permissions => permissions.update({ where: { id: override.id }, data: { allowed: override.allowed } }));
     await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: material.containsSensitiveData } });
   }
   await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "archiviata" } });
@@ -1313,11 +1322,11 @@ test('financial ceiling and individual denies protect readiness HTML and downloa
   const grants = ['dossier.read', 'dossier.write', 'service.read', 'service.write', 'document.download'];
   const previous = await db.userPermissionOverride.findMany({ where: { userId } });
   try {
-    for (const permission of grants) await db.userPermissionOverride.upsert({ where: { userId_permission: { userId, permission } }, create: { userId, permission, allowed: true }, update: { allowed: true } });
+    for (const permission of grants) await withFixturePermissions(userId, permissions => permissions.upsert({ where: { userId_permission: { userId, permission } }, create: { userId, permission, allowed: true }, update: { allowed: true } }));
     for (const role of ['direzione', 'amministrazione'] as const) {
       await db.user.update({ where: { id: userId }, data: { role } });
       for (const permission of ['contract.read', 'payment.read'] as const) {
-        const override = await db.userPermissionOverride.create({ data: { userId, permission, allowed: false } });
+        const override = await withFixturePermissions(userId, permissions => permissions.create({ data: { userId, permission, allowed: false } }));
         try {
           const response = await page.goto(`${app}/practice-readiness`); expect(response?.status()).toBe(200);
           const article = page.locator(`#practice-${practice.id}`);
@@ -1337,15 +1346,15 @@ test('financial ceiling and individual denies protect readiness HTML and downloa
           expect(manifest.engagement.formalizationId).toBe(role === 'direzione' || permission === 'contract.read' ? null : practice.currentFormalizationId);
           expect(manifest.files.length).toBeGreaterThan(0);
           for (const file of manifest.files) expect(zipEntryText(bytes, file.name).length).toBeGreaterThan(0);
-        } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+        } finally { await withFixturePermissions(userId, permissions => permissions.delete({ where: { id: override.id } })); }
       }
     }
   } finally {
     await db.user.update({ where: { id: userId }, data: { role: user.role } });
     for (const permission of grants) {
       const prior = previous.find(item => item.permission === permission);
-      if (prior) await db.userPermissionOverride.update({ where: { id: prior.id }, data: { allowed: prior.allowed } });
-      else await db.userPermissionOverride.deleteMany({ where: { userId, permission } });
+      if (prior) await withFixturePermissions(userId, permissions => permissions.update({ where: { id: prior.id }, data: { allowed: prior.allowed } }));
+      else await withFixturePermissions(userId, permissions => permissions.deleteMany({ where: { userId, permission } }));
     }
   }
 });

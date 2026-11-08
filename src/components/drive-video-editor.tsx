@@ -1,5 +1,4 @@
 'use client';
-import Link from 'next/link';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { driveVideoAccount, type DriveVideoCommand, type DriveVideoDetails, type DriveVideoSnapshot } from '@/lib/drive-video-contract';
 import { previewDriveVideoAction, confirmDriveVideoAction, verifyDriveVideoAction } from '@/lib/drive-video-actions';
@@ -101,6 +100,8 @@ export function DriveVideoEditor({ id, current, people }: { id: string; current:
     </section>}
     {stepUp && <InlinePrivilegedConfirmation/>}
     {message && <p role="status">{message}</p>}
-    {done && proposal && <Link className="font-bold underline" href={'/videos/manage/drive/' + proposal.command.videoId}>Riapri la scheda salvata</Link>}
+    {/* Keep the command receipt through revalidation; an ordinary navigation
+        then initializes the editor from the persisted revision, even on this URL. */}
+    {done && proposal && <a className="font-bold underline" href={'/videos/manage/drive/' + proposal.command.videoId}>Riapri la scheda salvata</a>}
   </section>;
 }

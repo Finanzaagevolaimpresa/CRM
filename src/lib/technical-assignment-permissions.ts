@@ -21,6 +21,7 @@ export function admitsTechnicalRolePermission(actor: PermissionSession, kind: Te
     update_status: kind === 'Project' ? 'project.write' : 'technical.status',
     manage_checklist: 'service.write', manage_deadlines: 'service.write',
     request_admin: 'practice_communications.write', upload_document: 'document.upload',
+    share_update: kind === 'Project' ? 'project.write' : 'technical.write',
   };
   return Object.hasOwn(permissions, action) && currentPermission(actor, permissions[action]);
 }

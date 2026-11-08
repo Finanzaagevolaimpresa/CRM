@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { RefreshReadOnlyNotices } from '@/components/live-notifications';
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -18,6 +19,7 @@ export const dynamic = 'force-dynamic';
   const row = await readSelectedRecordNotice(prisma, session, await loadActivePrivilegedStepUpKey(prisma), id);
   if (!row) notFound();
   return <div className="crm-space-y-6"><PageHeader title={row.title} description={row.related} />
+    <RefreshReadOnlyNotices />
     <Link className="font-bold underline" href="/notifications/updates">← Aggiornamenti selezionati</Link>
     <p className="text-sm">Orari Europe/Rome.</p>
     <Card title="Aggiornamento disponibile"><p>{formatRecordNoticeTime(row.date)}</p>

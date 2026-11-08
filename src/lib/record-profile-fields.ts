@@ -1,4 +1,4 @@
-export type ProfileField = { name: string; label: string; type?: 'email' | 'date' | 'number' | 'textarea'; required?: boolean; max?: number; step?: string };
+export type ProfileField = { name: string; label: string; type?: 'email' | 'date' | 'number' | 'textarea' | 'boolean'; required?: boolean; max?: number; step?: string; preserveIfOmitted?: boolean };
 export const leadProfileFields: ProfileField[] = [
   { name: 'firstName', label: 'Nome' }, { name: 'lastName', label: 'Cognome' },
   { name: 'companyName', label: 'Azienda dichiarata' }, { name: 'contactPerson', label: 'Persona di contatto' },
@@ -9,6 +9,17 @@ export const clientProfileFields: ProfileField[] = [{ name: 'displayName', label
 export const companyProfileFields: ProfileField[] = [
   { name: 'name', label: 'Ragione sociale / denominazione', required: true }, { name: 'vatNumber', label: 'Partita IVA', max: 32 },
   { name: 'taxCode', label: 'Codice fiscale', max: 32 }, { name: 'rea', label: 'Numero REA', max: 64 }, { name: 'pec', label: 'PEC', type: 'email' },
+  { name: 'sdiCode', label: 'Codice destinatario SDI', max: 7, preserveIfOmitted: true },
+  { name: 'legalStreet', label: 'Sede legale · via / piazza', max: 200, preserveIfOmitted: true },
+  { name: 'legalStreetNumber', label: 'Sede legale · numero civico', max: 32, preserveIfOmitted: true },
+  { name: 'legalPostalCode', label: 'Sede legale · CAP', max: 12, preserveIfOmitted: true },
+  { name: 'legalCity', label: 'Sede legale · città', max: 100, preserveIfOmitted: true },
+  { name: 'legalProvince', label: 'Sede legale · provincia', max: 100, preserveIfOmitted: true },
+  { name: 'operatingStreet', label: 'Sede operativa · via / piazza', max: 200, preserveIfOmitted: true },
+  { name: 'operatingStreetNumber', label: 'Sede operativa · numero civico', max: 32, preserveIfOmitted: true },
+  { name: 'operatingPostalCode', label: 'Sede operativa · CAP', max: 12, preserveIfOmitted: true },
+  { name: 'operatingCity', label: 'Sede operativa · città', max: 100, preserveIfOmitted: true },
+  { name: 'operatingProvince', label: 'Sede operativa · provincia', max: 100, preserveIfOmitted: true },
   { name: 'legalForm', label: 'Forma giuridica', max: 100 }, { name: 'legalAddress', label: 'Indirizzo sede legale', max: 500 },
   { name: 'operatingAddress', label: 'Indirizzo sede operativa', max: 500 }, { name: 'region', label: 'Regione', max: 100 },
   { name: 'province', label: 'Provincia', max: 100 }, { name: 'city', label: 'Comune', max: 100 },
@@ -22,6 +33,8 @@ export const personProfileFields: ProfileField[] = [
   { name: 'firstName', label: 'Nome', required: true }, { name: 'lastName', label: 'Cognome', required: true },
   { name: 'email', label: 'Email', type: 'email' }, { name: 'phone', label: 'Telefono', max: 64 },
   { name: 'taxCode', label: 'Codice fiscale', max: 32 }, { name: 'role', label: 'Ruolo (es. titolare, socio, amministratore, referente)', required: true },
+  { name: 'isAdministrator', label: 'Amministratore di questa azienda', type: 'boolean', preserveIfOmitted: true },
+  { name: 'isOperationalContact', label: 'Referente aziendale responsabile da contattare', type: 'boolean', preserveIfOmitted: true },
   { name: 'ownershipPercent', label: 'Quota di partecipazione (%)', type: 'number', step: '0.01' },
   { name: 'notes', label: 'Note referente', type: 'textarea', max: 5000 },
 ];

@@ -8,7 +8,7 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 head="$(git rev-parse HEAD)"
 tree="$(git rev-parse HEAD^{tree})"
-# The compatible return must preserve schema74 provenance and schema75 reconciled receipts.
+# The compatible return must preserve schema74/75 provenance and schema76 shared operational history.
 # Compose the historical base with exact readers AND the mandatory privacy delta.
 # New residual writers are suspended server-side; this is not the old image.
 node scripts/m4/verify-schema.mjs
@@ -25,7 +25,7 @@ if docker volume inspect "$prefix-documents" >/dev/null 2>&1; then exit 1; fi
 mkdir -p "$evidence" "$source_candidate" "$source_recovery"
 printf 'R05_EVIDENCE_DIR=%s\n' "$evidence" >> "$GITHUB_ENV"
 node scripts/admin-residuals/compose-compatibility.mjs "$head" > "$evidence/compatibility-source.json"
-node -e 'const a=require("node:assert/strict"),r=require(process.argv[1]);a.equal(r.protocol,"ADMIN_PRIVACY_COMPATIBILITY_SOURCE_V2");a.equal(r.mandatoryTechnicalCeilingRetained,true);a.equal(r.newResidualWritersSuspendedServerSide,true);a.equal(r.unmodifiedHistoricalRecovery,false);for(const k of ["driveReferenceReadersRetained","selectedInternalReadersRetained","googleFramePolicyRetained","driveWritersSuspendedServerSide","driveFolderReadersRetained","driveFolderWritersSuspendedServerSide"])a.equal(r[k],true,k)' "$evidence/compatibility-source.json"
+node -e 'const a=require("node:assert/strict"),r=require(process.argv[1]);a.equal(r.protocol,"ADMIN_PRIVACY_COMPATIBILITY_SOURCE_V2");a.equal(r.mandatoryTechnicalCeilingRetained,true);a.equal(r.newResidualWritersSuspendedServerSide,true);a.equal(r.unmodifiedHistoricalRecovery,false);for(const k of ["driveReferenceReadersRetained","selectedInternalReadersRetained","googleFramePolicyRetained","driveWritersSuspendedServerSide","driveFolderReadersRetained","driveFolderWritersSuspendedServerSide","sharedOperationalReadersRetained","sharedOperationalWritersSuspendedServerSide"])a.equal(r[k],true,k)' "$evidence/compatibility-source.json"
 recovery_head="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).commit' "$evidence/compatibility-source.json")"
 recovery_tree="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).tree' "$evidence/compatibility-source.json")"
 [[ "$recovery_head" =~ ^[a-f0-9]{40}$ && "$recovery_tree" =~ ^[a-f0-9]{40}$ && "$recovery_head" != "$head" ]]
@@ -103,6 +103,7 @@ export LOCAL_DOCUMENT_STORAGE_ROOT="$RUNNER_TEMP/$prefix-m1-documents"
 export R05_M1_RECOVERY_FIXTURE="$evidence/m1-fixture.json"
 export R05_SELECTIVE_RECOVERY_FIXTURE="$evidence/selective-fixture.json"
 export R05_CONTEXT_RECOVERY_FIXTURE="$evidence/context-fixture.json"
+export R05_SHARED_RECOVERY_FIXTURE="$evidence/shared-fixture.json"
 export R05_UPDATES_RECOVERY_FIXTURE="$evidence/updates-fixture.json"
 export R05_VIDEO_RECOVERY_FIXTURE="$evidence/video-fixture.json"
 export R05_LEAD_RECOVERY_FIXTURE="$evidence/lead-fixture.json"
@@ -212,6 +213,7 @@ node --import tsx tests/pr140-release/upload-state.ts
 node --import tsx tests/pr140-release/historical-state.ts
 node --import tsx tests/pr140-release/reminder-state.ts
 node --import tsx tests/pr140-release/admin-record-state.ts
+node --import tsx tests/pr140-release/shared-state.ts
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
 run_browser candidate-context tests/pr140-release/playwright.config.ts context-recovery.spec.ts 1
 run_browser candidate-updates tests/pr140-release/playwright.config.ts updates-recovery.spec.ts 1
@@ -224,6 +226,7 @@ run_browser candidate-historical tests/pr140-release/playwright.config.ts histor
 run_browser candidate-reminders tests/pr140-release/playwright.config.ts reminder-recovery.spec.ts 1
 run_browser candidate-admin-records tests/pr140-release/playwright.config.ts admin-record-recovery.spec.ts 1
 run_browser candidate-ordinary-recovery tests/pr140-release/playwright.config.ts ordinary-recovery.spec.ts 1
+run_browser candidate-shared-recovery tests/pr140-release/playwright.config.ts shared-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
 node --import tsx tests/pr140-release/state.ts epochs "$evidence/before-recovery-epochs.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
@@ -259,6 +262,7 @@ run_browser restart-historical tests/pr140-release/playwright.config.ts historic
 run_browser restart-reminders tests/pr140-release/playwright.config.ts reminder-recovery.spec.ts 1
 run_browser restart-admin-records tests/pr140-release/playwright.config.ts admin-record-recovery.spec.ts 1
 run_browser restart-ordinary-recovery tests/pr140-release/playwright.config.ts ordinary-recovery.spec.ts 1
+run_browser restart-shared-recovery tests/pr140-release/playwright.config.ts shared-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-recovery.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
 [[ "$(docker exec "$app" sha256sum /var/lib/fai-crm/documents/r05-synthetic.txt | cut -d ' ' -f1)" == "$document_before" ]]
@@ -291,11 +295,12 @@ run_browser resume-historical tests/pr140-release/playwright.config.ts historica
 run_browser resume-reminders tests/pr140-release/playwright.config.ts reminder-recovery.spec.ts 1
 run_browser resume-admin-records tests/pr140-release/playwright.config.ts admin-record-recovery.spec.ts 1
 run_browser resume-ordinary-recovery tests/pr140-release/playwright.config.ts ordinary-recovery.spec.ts 1
+run_browser resume-shared-recovery tests/pr140-release/playwright.config.ts shared-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-resume.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA75_ORDINARY_RECOVERY_COMPATIBLE_RETURN_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":75,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":false,"schema74CompatibilityReadersQualified":true,"schema75EffectiveReceiptReadersQualified":true,"smtpRecoveryEditorSuspendedDuringReturn":true,"originalUncertainReceiptPreserved":true,"newResidualEditorsSuspendedDuringReturn":true,"mandatoryTechnicalCeilingPreservedDuringReturn":true,"newResidualWritersSuspendedServerSide":true,"unmodifiedHistoricalRecovery":false,"accountCreationUsesStoredProfiles":true,"privateVersionBytesAndIsolationPreserved":true,"correctedFormalizationAndOriginalEvidencePreserved":true,"explicitRoleProfilePermissionsPreserved":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"reminderInstantsReadReceiptsCancellationAndCurrentSourceDenialPreserved":true,"adminCorrectionsRestoreHistoryAndClosedReceiptsPreserved":true,"operationalHoldsRestoreHistoryAndClosedReceiptsPreserved":true,"privateDocumentMetadataCorrectionsAndClosedReceiptsPreserved":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA76_SHARED_OPERATIONAL_COMPATIBLE_RETURN_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":76,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":false,"schema74CompatibilityReadersQualified":true,"schema75EffectiveReceiptReadersQualified":true,"schema76SharedHistoryContactsAndReadReceiptsPreserved":true,"sharedWritersSuspendedDuringCompatibleReturn":true,"smtpRecoveryEditorSuspendedDuringReturn":true,"originalUncertainReceiptPreserved":true,"newResidualEditorsSuspendedDuringReturn":true,"mandatoryTechnicalCeilingPreservedDuringReturn":true,"newResidualWritersSuspendedServerSide":true,"unmodifiedHistoricalRecovery":false,"accountCreationUsesStoredProfiles":true,"privateVersionBytesAndIsolationPreserved":true,"correctedFormalizationAndOriginalEvidencePreserved":true,"explicitRoleProfilePermissionsPreserved":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"reminderInstantsReadReceiptsCancellationAndCurrentSourceDenialPreserved":true,"adminCorrectionsRestoreHistoryAndClosedReceiptsPreserved":true,"operationalHoldsRestoreHistoryAndClosedReceiptsPreserved":true,"privateDocumentMetadataCorrectionsAndClosedReceiptsPreserved":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"

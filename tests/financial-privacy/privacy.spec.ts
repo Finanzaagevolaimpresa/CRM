@@ -4,9 +4,17 @@ import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { savePrivateDocumentFile } from '../../src/lib/storage';
+import { lockInternalUser } from '../../src/lib/internal-session-registry';
 const db = new PrismaClient(), root = process.env.FINANCIAL_PRIVACY_EVIDENCE!, password = process.env.FINANCIAL_PRIVACY_BROWSER_PASSWORD!;
 type Fixture = { role: string; key: string; denied: string | null; userId: string; clientId: string; projectId: string; serviceId: string; contractId: string; paymentId: string; docs: { kind: string; id: string; versionId: string; title: string }[] };
 const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as { synthetic: boolean; fixtures: Fixture[]; overrideDelegationDenied: boolean; blockedDelegationRoles: string[] };
+async function setFixturePermission(userId: string, permission: 'document.download' | 'document.upload', allowed: boolean) {
+  // Use the native lock order while real browser reads remain active.
+  return db.$transaction(async tx => {
+    await lockInternalUser(tx, userId);
+    return tx.userPermissionOverride.update({ where: { userId_permission: { userId, permission } }, data: { allowed } });
+  });
+}
 async function documentContextScreens(page: Page, name: string) {
   for (const [suffix, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
     await page.setViewportSize({ width, height });
@@ -417,7 +425,7 @@ test('practice upload retains exact context and ordinary technician opens the fi
       expect(denied.headers()['cache-control']).toContain('no-store');
     }
     const before = await db.auditLog.count({ where: { actorId: tech.userId, entityId: doc.id, event: { in: ['document_view', 'document_download'] } } });
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: false } });
+    await setFixturePermission(tech.userId, 'document.download', false);
     expect((await viewer.reload())?.status()).toBe(403);
     await expect(viewer.locator('body')).toHaveText('Documento non disponibile');
     const revokedDownload = await t.request.get(`/documents/${doc.id}/download`);
@@ -428,7 +436,7 @@ test('practice upload retains exact context and ordinary technician opens the fi
     writeFileSync(join(root, 'document-context-ordinary-proof.json'), JSON.stringify({ synthetic: true, exactContext: true, persistedOnce: true,
       versionAndAuditOnce: true, unclassifiedDenied: true, exactVersionExplicitlyClassified: true, nativeTechnicianPreview: true, exactDownloadBytes: true, otherTechnicianDenied: true, openSessionRevocation: true, newSelectiveGrants: 0 }));
   } finally {
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: true } });
+    await setFixturePermission(tech.userId, 'document.download', true);
     await ac.close(); await tc.close(); await other.close();
   }
 });
@@ -462,13 +470,13 @@ test('commercial upload uses existing capability and own client only; revoked ca
   await form.locator('input[type=file]').setInputFiles({ ...file, name: 'revoked-commercial-upload.txt' });
   const before = await db.document.count({ where: { clientId: sales.clientId } });
   try {
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: false } });
+    await setFixturePermission(sales.userId, 'document.upload', false);
     await form.getByRole('button', { name: 'Carica in storage privato', exact: true }).click();
     await expect(page.getByRole('list', { name: 'Esito caricamenti' })).toContainText('Risorsa non disponibile');
     expect(await db.document.count({ where: { clientId: sales.clientId } })).toBe(before);
     expect(await db.auditLog.count({ where: { actorId: sales.userId, event: 'document_upload', entityId: { not: docs[0].id } } })).toBe(0);
   } finally {
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: true } });
+    await setFixturePermission(sales.userId, 'document.upload', true);
   }
   writeFileSync(join(root, 'document-context-commercial-proof.json'), JSON.stringify({ synthetic: true, existingPermissionOverride: true,
     ownClientUpload: true, noProjectWriteGranted: true, foreignContextDenied: true, openFormRevocation: true }));
@@ -544,14 +552,14 @@ test('native document versions preserve old bytes, expose exact history and reco
     expect(await (await a.request.get('/documents/' + doc.id + '/download?versionId=' + latest.id)).body()).toEqual(Buffer.from(replacement));
     expect((await o.goto(path))?.status()).toBe(404);
     expect(await o.content()).not.toContain(doc.title);
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: false } });
+    await setFixturePermission(tech.userId, 'document.download', false);
     expect((await view.reload())?.status()).toBe(403);
     expect((await t.goto(path))?.status()).toBe(404);
     expect((await t.request.get(`/documents/${doc.id}/download?versionId=${latest.id}`)).status()).toBe(403);
     expect(await db.documentVersion.count({ where: { documentId: doc.id } })).toBe(2);
     await view.close();
   } finally {
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: tech.userId, permission: 'document.download' } }, data: { allowed: true } });
+    await setFixturePermission(tech.userId, 'document.download', true);
     await ac.close(); await tc.close(); await oc.close();
   }
 });
@@ -572,13 +580,13 @@ test('commercial native version upload remains on the owned client and rejects a
   await region.getByLabel('File della nuova versione', { exact: true }).setInputFiles({ name: 'denied.txt', mimeType: 'text/plain', buffer: Buffer.from('MUST_NOT_PERSIST') });
   await region.getByRole('checkbox').check();
   try {
-    await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: false } });
+    await setFixturePermission(sales.userId, 'document.upload', false);
     await region.getByRole('button', { name: 'Salva nuova versione', exact: true }).click();
     await expect(region).toContainText('Documento non disponibile per questa operazione.');
     expect(await db.documentVersion.count({ where: { documentId: doc.id } })).toBe(2);
     expect(await db.auditLog.count({ where: { entityId: doc.id, event: 'document_version_upload' } })).toBe(1);
     await documentContextScreens(page, 'document-version-revoked');
-  } finally { await db.userPermissionOverride.update({ where: { userId_permission: { userId: sales.userId, permission: 'document.upload' } }, data: { allowed: true } }); }
+  } finally { await setFixturePermission(sales.userId, 'document.upload', true); }
 });
 
 for (const role of ['admin', 'consulente']) for (const action of ['create', 'edit', 'status'] as const) {

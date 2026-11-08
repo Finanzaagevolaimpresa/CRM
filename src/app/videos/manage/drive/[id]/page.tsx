@@ -15,7 +15,7 @@ async function Page({ params }: { params: Promise<{ id: string }> }) {
   return <div className="space-y-6 min-w-0"><PageHeader title={setup.current ? 'Gestisci video Google Drive' : 'Aggiungi da Google Drive'}
     description="Riferimento privato con pubblicazione selettiva; il file rimane su Google Drive."/>
     <Link className="font-bold underline" href="/videos/manage">← Gestione video</Link>
-    <DriveVideoEditor key={setup.current?.revision ?? 0} id={setup.id} current={setup.current} people={setup.people}/>
+    <DriveVideoEditor key={id} id={setup.id} current={setup.current} people={setup.people}/>
     <section><h2 className="font-bold">Storico del riferimento</h2><ul>{setup.history.map(row =>
       <li key={row.commandId}>Versione {row.revision} · {row.state} · {row.createdAt} · autore {row.actorId} · comando {row.commandId}</li>)}</ul></section>
   </div>;

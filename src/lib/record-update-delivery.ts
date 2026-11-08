@@ -7,6 +7,7 @@ import { updateActor, updateDirectory } from './record-updates';
 import { admitCommunicationNotice } from './approved-communications';
 import { admitRecordUpdateWork, recordUpdateWorkInclude, type RecordUpdateWork } from './record-update-admission';
 import { confirmedReadRetry } from './confirmed-read-retry';
+import { visibleSharedOperationalNotice } from './shared-operational-notices';
 
 type Tx = Prisma.TransactionClient;
 const include = recordUpdateWorkInclude;
@@ -14,6 +15,7 @@ type Work = RecordUpdateWork;
 async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof currentRecordUpdateUser>>> & AuthSession, work: Work,
   directory: Awaited<ReturnType<typeof updateDirectory>>, now: Date) {
   if (work.mode === 'EMAIL_DRAFT') return null;
+  if (work.event.sourceKey?.startsWith('shared-update:')) return visibleSharedOperationalNotice(tx, actor, work);
   const admitted = await admitRecordUpdateWork(tx, actor, work, directory, now, admitCommunicationNotice);
   if (!admitted) return null;
   const technical = isTechnicalAccount(actor);
@@ -28,7 +30,7 @@ async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof curr
 }
 export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, limit = 100, unreadOnly = true) {
   return confirmedReadRetry(() => db.$transaction(async tx => {
-    const auth = await updateActor(tx, claimed), directory = await updateDirectory(tx);
+    const auth = await updateActor(tx, claimed, undefined, { readOnly: true }), directory = await updateDirectory(tx);
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     const result: NonNullable<Awaited<ReturnType<typeof visible>>>[] = [];
     // Filter before the result limit. No inaccessible titles, IDs or counts are
@@ -54,7 +56,7 @@ export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, 
 }
 export async function readRecordUpdate(db: PrismaClient, claimed: AuthSession, id: string, markRead = false) {
   const read = () => db.$transaction(async tx => {
-    const auth = await updateActor(tx, claimed);
+    const auth = await updateActor(tx, claimed, undefined, { readOnly: !markRead });
     const work = await tx.recordUpdateDelivery.findFirst({ where: { id, recipientId: auth.actor.id }, include });
     if (!work) return null;
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;

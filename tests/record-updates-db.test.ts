@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test, { before, after } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
-import { previewRecordUpdate, confirmRecordUpdate, readRecordUpdateSetup, readRecordUpdateReceipt } from '../src/lib/record-updates';
+import { previewRecordUpdate, confirmRecordUpdate, readRecordUpdateSetup, readRecordUpdateReceipt, updateActor } from '../src/lib/record-updates';
 import { listRecordUpdates, readRecordUpdate } from '../src/lib/record-update-delivery';
 import { type UpdateCommand, type UpdatePatch } from '../src/lib/record-update-input';
 import { lockLeadForMutation } from '../src/lib/lead-lifecycle-lock';
@@ -71,6 +71,75 @@ async function rule(f: Awaited<ReturnType<typeof fixture>>, overrides: Partial<U
 async function notifyLead(id: string) {
   await db.lead.update({ where: { id }, data: { nextActionNote: 'Private native change ' + randomUUID() } });
 }
+
+function pausePoint() {
+  let release!: () => void;
+  return { promise: new Promise<void>(resolve => { release = resolve; }), release: () => release() };
+}
+async function waitingBehindLeadWriter(pid: number) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+      SELECT EXISTS (SELECT 1 FROM pg_stat_activity a
+        WHERE ${pid}=ANY(pg_blocking_pids(a.pid)) AND a.query LIKE '%"Lead"%'
+          AND a.wait_event_type='Lock') AS waiting`;
+    if (row.waiting) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error('Synthetic notice read did not reach the held Lead row');
+}
+
+test('pure notice polling does not deadlock a native writer and its recipient foreign key', options, async () => {
+  const f = await fixture(); await rule(f); await notifyLead(f.id);
+  const locked = pausePoint(), proceed = pausePoint();
+  let writerPid = 0;
+  const writer = db.$transaction(async tx => {
+    const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+    writerPid = row.pid;
+    // Only this isolated test transaction: expose the former inversion
+    // deterministically, without waiting for the reader's rollback/retry.
+    await tx.$executeRawUnsafe("SET LOCAL deadlock_timeout = '50ms'");
+    await tx.$queryRaw`SELECT id FROM "Lead" WHERE id=${f.id} FOR UPDATE`;
+    locked.release(); await proceed.promise;
+    await tx.lead.update({ where: { id: f.id }, data: { nextActionNote: 'Concurrent synthetic native update' } });
+  }, { timeout: 15_000 });
+  await locked.promise;
+  const read = listRecordUpdates(db, f.reader.session);
+  const completed = Promise.all([writer, read]); void completed.catch(() => {});
+  try {
+    await waitingBehindLeadWriter(writerPid);
+    proceed.release();
+    await completed;
+    assert.equal((await works(f.id)).length, 2);
+    assert.equal((await listRecordUpdates(db, f.reader.session)).length, 2);
+  } finally { proceed.release(); await completed.catch(() => {}); }
+});
+
+test('pure notice admission keeps account, session and permission revocation serialized and effective', options, async () => {
+  for (const change of ['account', 'session', 'permission'] as const) {
+    const f = await fixture(); await rule(f); await notifyLead(f.id);
+    const held = pausePoint(), release = pausePoint();
+    const read = db.$transaction(async tx => {
+      const auth = await updateActor(tx, f.reader.session, undefined, { readOnly: true });
+      held.release(); await release.promise; await auth.finish();
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15_000 });
+    await held.promise;
+    const mutate = (tx: Prisma.TransactionClient) => change === 'account'
+      ? tx.user.update({ where: { id: f.reader.user.id }, data: { active: false } })
+      : change === 'session'
+        ? tx.internalSession.update({ where: { id: f.reader.session.sessionId! }, data: { revokedAt: new Date() } })
+        : tx.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'lead.read', allowed: false } });
+    try {
+      await assert.rejects(db.$transaction(async tx => {
+        await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '150ms'");
+        await mutate(tx);
+      }), /lock timeout/, change + ' cannot change during an admitted read');
+    } finally { release.release(); await read; }
+    await db.$transaction(async tx => { await mutate(tx); });
+    if (change === 'permission') assert.deepEqual(await listRecordUpdates(db, f.reader.session), []);
+    else await assert.rejects(listRecordUpdates(db, f.reader.session));
+  }
+});
 
 async function parameterFixture() {
   const f = await fixture('PROJECT');

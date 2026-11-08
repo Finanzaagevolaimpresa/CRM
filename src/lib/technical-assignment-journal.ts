@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
-import { boundedAssignmentExpiry } from './technical-assignment-contract';
+import { boundedAssignmentExpiry, technicalAssignmentActions } from './technical-assignment-contract';
 import { readTechnicalAssignmentProof, technicalAssignmentPayload, technicalAssignmentProof, type CurrentTechnicalAssignmentProof } from './technical-assignment-proof';
 
 const id=z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
@@ -11,7 +11,7 @@ const hash=z.string().regex(/^[a-f0-9]{64}$/);
 export const technicalAssignmentReceipt=z.object({
   protocol:z.literal('TECHNICAL_ASSIGNMENT_RECEIPT_V1'),commandId:z.string().uuid(),assignmentId:z.string().uuid(),
   revisionId:z.string().uuid(),revision:generation,operation:z.enum(['ASSIGN','REVOKE']),
-  fieldCount:z.number().int().min(1).max(12),actionCount:z.number().int().min(1).max(6),
+  fieldCount:z.number().int().min(1).max(12),actionCount:z.number().int().min(1).max(technicalAssignmentActions.length),
   documentCount:z.number().int().min(0).max(20),keyVersion:generation,
   actorId:id,sessionId:z.string().uuid(),requestDigest:hash,
 }).strict();

@@ -86,8 +86,16 @@ async function main() {
       const bytes = await readPrivateVideoFile(asset.id, asset);
       videoFiles.push({ id: asset.id, sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length });
     }
+    const sharedFixture = JSON.parse(readFileSync(process.env.R05_SHARED_RECOVERY_FIXTURE!, 'utf8')) as {
+      synthetic: boolean; updates: string[]; deliveryIds: string[]; clientId: string; companyId: string;
+    };
+    assert.equal(sharedFixture.synthetic, true); assert.equal(sharedFixture.updates.length, 2);
+    // Existing probes intentionally change some unrelated Admin permission
+    // epochs. Keep the old audience invariant scoped to its original events.
+    // Every user's epoch is still compared immediately across stop/start.
     const updateIdentities = await db.$queryRaw<Array<{ id: string }>>`SELECT "authorId" AS id FROM "RecordUpdateRule"
-      UNION SELECT "actorId" FROM "RecordUpdateCommand" UNION SELECT "recipientId" FROM "RecordUpdateDelivery"`;
+      UNION SELECT "actorId" FROM "RecordUpdateCommand" c WHERE NOT EXISTS(SELECT 1 FROM "SharedOperationalUpdate" s WHERE s.id=c.id)
+      UNION SELECT "recipientId" FROM "RecordUpdateDelivery" d WHERE NOT EXISTS(SELECT 1 FROM "SharedOperationalUpdate" s WHERE s."eventId"=d."eventId")`;
     const selectedPracticeRows = await db.technicalPractice.findMany({
       where: { selectivePracticeGrants: { some: {} } }, orderBy: { id: 'asc' },
     });
@@ -130,6 +138,10 @@ async function main() {
       uploadFiles.push({ commandId: row.commandId, sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
     }
     const data = {
+      sharedUpdates: await db.sharedOperationalUpdate.findMany({ orderBy: { id: 'asc' } }),
+      sharedAudit: await db.auditLog.findMany({ where: { id: { in: sharedFixture.updates.map(id => 'shared-operational:' + id) } }, orderBy: { id: 'asc' } }),
+      sharedClient: await db.client.findUniqueOrThrow({ where: { id: sharedFixture.clientId } }),
+      sharedCompany: await db.company.findUniqueOrThrow({ where: { id: sharedFixture.companyId } }),
       adminRecordRevisions: await db.adminRecordRevision.findMany({ where: { commandId: { in: adminCommandIds } }, orderBy: { commandId: 'asc' } }),
       adminResidualRevisions: await db.adminRecordRevision.findMany({ where: { commandId: { in: adminFixture.residualCommands } }, orderBy: { commandId: 'asc' } }),
       adminResidualAudit: await db.auditLog.findMany({ where: { id: { in: adminFixture.residualCommands.map(id => 'admin-record:' + id) } }, orderBy: { id: 'asc' } }),
@@ -272,7 +284,12 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 75);
+    assert.equal(data.ledger.length, 76);
+    assert.deepEqual(data.sharedUpdates.map(row => row.id).sort(), [...sharedFixture.updates].sort());
+    assert.equal(data.sharedAudit.length, 2);
+    assert.equal(data.sharedUpdates.filter(row => row.correctionOfId).length, 1);
+    assert.equal(data.sharedCompany.sdiCode, 'SYN0001'); assert.equal(data.sharedCompany.legalPostalCode, '00001');
+    assert.equal(data.sharedClient.operationalState, null);
     assert.equal(data.adminRecordRevisions.length, 4); assert.equal(data.adminRecordAudit.length, 4);
     assert.equal(data.adminResidualRevisions.length, 4); assert.equal(data.adminResidualAudit.length, 4);
     assert.equal(data.adminResidualProfile[0].permissionOverrides.find(row => row.permission === 'lead.read')?.allowed, false);
@@ -288,7 +305,7 @@ async function main() {
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261101090000_ordinary_email_reconciliation_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261108110000_shared_operational_updates_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);
@@ -323,13 +340,16 @@ async function main() {
     assert.equal(data.videoUsers.length, 3);
     assert.equal(data.updateRules.length, 5);
     assert.equal(data.updateRules.filter(row => !row.active).length, 2);
-    assert.equal(data.updateCommands.length, 14);
-    assert.equal(data.updateEvents.length, 11);
-    assert.equal(data.updateDeliveries.length, 11);
+    assert.equal(data.updateCommands.filter(row => !sharedFixture.updates.includes(row.id)).length, 14);
+    assert.equal(data.updateEvents.filter(row => !sharedFixture.updates.includes(row.id)).length, 11);
+    assert.equal(data.updateDeliveries.filter(row => !sharedFixture.updates.includes(row.eventId)).length, 11);
+    assert.equal(data.updateCommands.length, 16); assert.equal(data.updateEvents.length, 13);
+    assert.deepEqual(data.updateDeliveries.filter(row => sharedFixture.updates.includes(row.eventId)).map(row => row.id).sort(), [...sharedFixture.deliveryIds].sort());
     assert.equal(data.updateDeliveries.filter(row => row.mode === 'EMAIL_DRAFT').length, 3);
     assert.equal(data.m4Messages.filter(row => row.updateDeliveryId).length, 2);
     assert.equal(data.m4Versions.filter(row => row.updateSourceHash).length, 2);
-    assert.equal(data.updateDeliveries.filter(row => row.readAt).length, 2);
+    assert.equal(data.updateDeliveries.filter(row => row.readAt && !sharedFixture.updates.includes(row.eventId)).length, 2);
+    assert.equal(data.updateDeliveries.filter(row => row.readAt && sharedFixture.updates.includes(row.eventId)).length, 1);
     assert.equal(data.internalThreads.length, 2);
     assert.equal(data.internalParticipants.length, 6);
     assert.equal(data.internalParticipants.filter(row=>!row.active).length, 2);
@@ -365,7 +385,8 @@ async function main() {
     assert.ok(data.m1History.some(row => row.event === 'purchased_service_handoff'));
     assert.ok(data.m1History.some(row => row.event === 'responsibility_accepted'));
     const minimized = Object.fromEntries(Object.entries(data).map(([key, rows]) => [key, {
-      count: rows.length, sha256: createHash('sha256').update(JSON.stringify(rows, (_key, value) => typeof value === 'bigint' ? value.toString() : value)).digest('hex'),
+      count: Array.isArray(rows) ? rows.length : 1,
+      sha256: createHash('sha256').update(JSON.stringify(rows, (_key, value) => typeof value === 'bigint' ? value.toString() : value)).digest('hex'),
     }]));
     writeFileSync(process.argv[3], JSON.stringify(minimized, null, 2) + '\n');
   } else if (mode === 'revoke-sessions') {

@@ -24,14 +24,24 @@ export async function tokenDigestFromCookie(cookie: string | undefined) {
   const bytes = parseRegistrySessionToken(cookie);
   return bytes ? digestRegistrySessionToken(bytes) : null;
 }
+export type InternalSessionLockOptions = { readOnly?: boolean; foreignKeyCompatibleWrite?: boolean };
+function identityRowLock(options: InternalSessionLockOptions) {
+  if (options.readOnly && options.foreignKeyCompatibleWrite) throw new Error('INCOMPATIBLE_IDENTITY_LOCK_MODE');
+  // Reference-only business writers never update account/session keys. NO KEY
+  // UPDATE still excludes every identity mutation and another writer, while
+  // permitting the KEY SHARE required by a notification's recipient FK.
+  return options.readOnly ? Prisma.sql`FOR SHARE`
+    : options.foreignKeyCompatibleWrite ? Prisma.sql`FOR NO KEY UPDATE` : Prisma.sql`FOR UPDATE`;
+}
 export async function lockInternalUser(
   tx: Prisma.TransactionClient,
   userId: string,
+  options: InternalSessionLockOptions = {},
 ) {
   const rows = await tx.$queryRaw<
     Array<{ id: string; active: boolean; deletedAt: Date | null }>
   >(
-    Prisma.sql`SELECT "id","active","deletedAt" FROM "User" WHERE "id"=${userId} FOR UPDATE`,
+    Prisma.sql`SELECT "id","active","deletedAt" FROM "User" WHERE "id"=${userId} ${identityRowLock(options)}`,
   );
   return rows[0] ?? null;
 }
@@ -140,11 +150,17 @@ export async function resolveInternalSession(
 export async function lockAuthoritativeInternalSession(
   tx: Prisma.TransactionClient,
   input: { sessionId: string; userId: string },
+  options: InternalSessionLockOptions = {},
 ) {
   // Match account/login and selective-access writers: User before session.
   // A joined FOR UPDATE alone may lock the session first and deadlock with
   // a caller that already holds the same User row (for example layout/page).
-  await lockInternalUser(tx, input.userId);
+  // Pure readers still block account/session revocation until their final
+  // admission check. SHARE also permits the KEY SHARE taken by a new notice's
+  // recipient FK, avoiding User -> record -> recipient inversions during polling.
+  // Existing callers retain FOR UPDATE by default. Opt-in business writers use
+  // the exclusive, FK-compatible mode; it is never a readOnly mutation.
+  await lockInternalUser(tx, input.userId, options);
   const rows = await tx.$queryRaw<Array<{
     id: string;
     userId: string;
@@ -162,7 +178,9 @@ export async function lockAuthoritativeInternalSession(
     JOIN "User" user_row ON user_row."id" = session_row."userId"
     WHERE session_row."id" = ${input.sessionId}::UUID
       AND session_row."userId" = ${input.userId}
-    FOR UPDATE OF session_row, user_row
+    ${options.readOnly ? Prisma.sql`FOR SHARE OF session_row, user_row`
+      : options.foreignKeyCompatibleWrite ? Prisma.sql`FOR NO KEY UPDATE OF session_row, user_row`
+        : Prisma.sql`FOR UPDATE OF session_row, user_row`}
   `);
   const session = rows[0];
   if (!session) return null;

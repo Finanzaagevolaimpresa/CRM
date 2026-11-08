@@ -33,8 +33,10 @@ footprint "$evidence/after-fault.txt"
 constraint > "$evidence/constraint-after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 cmp "$evidence/constraint-before.txt" "$evidence/constraint-after-fault.txt"
-npm run prisma:migrate:deploy
-test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 75
+mkdir -p "$evidence/schema71"
+git archive 60b7b1ea78c85c945b7637f75c3c5e312a508e04 prisma | tar -x -C "$evidence/schema71"
+npx prisma migrate deploy --schema "$evidence/schema71/prisma/schema.prisma"
+test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261028180000_record_deadline_reminders_v1' ORDER BY migration_name" > "$evidence/prefix70-after.txt"
 cmp "$evidence/prefix70-before.txt" "$evidence/prefix70-after.txt"
 footprint "$evidence/after.txt"
@@ -42,11 +44,11 @@ cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT (SELECT count(*) FROM "RecordUpdateReminder")+(SELECT count(*) FROM "RecordUpdateReminderCancellation")')" = 0
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq RECORD_REMINDER_SCHEMA70_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/schema71/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"
 psql "$db" -X -At -v ON_ERROR_STOP=1 -f scripts/record-reminders/schema71-structure.sql > "$evidence/structure.json"
 node scripts/record-reminders/verify-structure.mjs "$evidence/structure.json"
-printf '{"synthetic":true,"before":70,"after":75,"reminderIntroducedAt":71,"prefix70Unchanged":true,"allPriorRowsAndRelationsPreserved":true,"previousUpdatesAndReadReceiptsPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"previousCommandConstraintRestoredOnFailure":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
+printf '{"synthetic":true,"before":70,"after":71,"reminderIntroducedAt":71,"prefix70Unchanged":true,"allPriorRowsAndRelationsPreserved":true,"previousUpdatesAndReadReceiptsPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"previousCommandConstraintRestoredOnFailure":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
 cat "$evidence/proof.json"
