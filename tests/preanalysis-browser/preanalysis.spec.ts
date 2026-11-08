@@ -2,11 +2,18 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { lockInternalUser } from '../../src/lib/internal-session-registry';
 
 const app = 'http://127.0.0.1:3000';
 const password = process.env.PREANALYSIS_BROWSER_PASSWORD!;
 const evidence = process.env.PREANALYSIS_BROWSER_EVIDENCE_DIR!;
 const db = new PrismaClient();
+async function setFixtureDossierPermission(allowed: boolean) {
+  return db.$transaction(async tx => {
+    await lockInternalUser(tx, 'preanalysis-browser-owner');
+    return tx.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed } });
+  });
+}
 const fields = { internalSummary: 'Sintesi inventata', scenarioA: 'Scenario A inventato', scenarioB: 'Scenario B inventato', blockingConditions: 'Condizione inventata', requiredDocuments: 'Documento inventato' };
 
 async function login(page: import('@playwright/test').Page, email: string) {
@@ -107,7 +114,7 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await waitForPreAnalysisForm(page);
   const beforeRevocation = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
   const auditBeforeRevocation = await db.auditLog.count({ where: { entityId: recordId } });
-  await db.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed: false } });
+  await setFixtureDossierPermission(false);
   await page.locator('textarea[name="internalSummary"]').fill('TESTO DOPO REVOCA');
   await expect(page.locator('textarea[name="internalSummary"]')).toHaveValue('TESTO DOPO REVOCA');
   await page.getByRole('button', { name: 'Salva modifiche' }).click();
@@ -116,7 +123,7 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await expect(page.locator('textarea[name="internalSummary"]')).toHaveValue('TESTO DOPO REVOCA');
   expect((await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } })).internalSummary).toBe(beforeRevocation.internalSummary);
   expect(await db.auditLog.count({ where: { entityId: recordId } })).toBe(auditBeforeRevocation);
-  await db.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed: true } });
+  await setFixtureDossierPermission(true);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
@@ -127,7 +134,7 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   const protectedAuditCount = await db.auditLog.count({ where: { entityId: recordId } });
   // Revocation is independent of the separate commercial read-only owner.
   // Making that reader a technical consultant would correctly deny these notes.
-  await db.userPermissionOverride.update({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } }, data: { allowed: false } });
+  await setFixtureDossierPermission(false);
   await page.reload();
   await expect(page).toHaveURL(`${app}/dashboard`);
   await expect(page.locator('[data-preanalysis-field="internalSummary"]')).toHaveCount(0);

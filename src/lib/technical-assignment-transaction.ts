@@ -66,12 +66,14 @@ async function assertPersonal(tx:Tx,current:CurrentSession,proof:TechnicalAssign
  * document scope and exact command before any projection or mutation. */
 async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,recipientId:string|null,
   mode:'MANAGEMENT_READ'|'PERSONAL_DECISION'|'RECIPIENT'|'ATTEMPT_SETTLEMENT',proof:TechnicalAssignmentPersonalProof|null,
-  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,inactiveRecipientForRevocation=false) {
+  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,inactiveRecipientForRevocation=false,
+  recipientTimeout?:30_000) {
   identifier.parse(claimed.userId);
   if(recipientId) identifier.parse(recipientId);
   if(!['Project','TechnicalPractice'].includes(kind)) deny();
   if(mode==='PERSONAL_DECISION' && !proof) deny();
   if(inactiveRecipientForRevocation && mode==='RECIPIENT') deny();
+  if(recipientTimeout!==undefined && (mode!=='RECIPIENT' || recipientTimeout!==30_000)) deny();
   return withSerializableTransaction(db,async tx=>{
     // A complete catalogue may need time to read many versions, but a blocked
     // row must release this transaction promptly so the independent history
@@ -110,10 +112,11 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     if(proof) await assertPersonal(tx,current,proof);
     return result;
   // The bounded management catalogue can inspect 256 exact versions and their
-  // canonical references. Give this read its own finite budget; decisions and
-  // recipient operations retain their existing transaction limits. Session
+  // canonical references. Shared operational work explicitly uses that same
+  // finite budget for its linked views and current recipients; other recipient
+  // operations and personal decisions retain their existing limits. Session
   // validity above is checked again at completion, not extended by this budget.
-  }, mode === 'MANAGEMENT_READ' ? { timeout: 30_000 } : undefined);
+  }, mode === 'MANAGEMENT_READ' ? { timeout: 30_000 } : recipientTimeout ? { timeout: recipientTimeout } : undefined);
 }
 
 /** Read-only management loaders must keep their callbacks free of writes. */
@@ -135,8 +138,8 @@ export function withTechnicalAssignmentDecision<T>(db:PrismaClient,claimed:AuthS
   return withTransaction(db,claimed,kind,recipientId,'PERSONAL_DECISION',proof,work,options.inactiveRecipientForRevocation);
 }
 export function withTechnicalAssignmentRecipient<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
-  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>) {
-  return withTransaction(db,claimed,kind,claimed.userId,'RECIPIENT',null,work);
+  work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,options:{timeout?:30_000}={}) {
+  return withTransaction(db,claimed,kind,claimed.userId,'RECIPIENT',null,work,false,options.timeout);
 }
 
 /** Private creation has no recipient and creates no assignment. It still uses

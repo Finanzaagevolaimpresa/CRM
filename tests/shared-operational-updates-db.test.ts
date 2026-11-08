@@ -15,6 +15,7 @@ import type { UpdateCommand } from '../src/lib/record-update-input';
 import type { SharedUpdateCommand, SharedUpdateTarget } from '../src/lib/shared-operational-update-contract';
 import { saveRecordProfile } from '../src/lib/record-profiles';
 import { personProfileVersion } from '../src/lib/record-profile-contract';
+import { withTechnicalAssignmentRecipient, TechnicalAssignmentError } from '../src/lib/technical-assignment-transaction';
 const enabled = process.env.RUN_SHARED_OPERATIONAL_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -285,6 +286,23 @@ test('assignment expiry while a form is open denies both reading and writing', o
   await new Promise(resolve => setTimeout(resolve, Math.max(0, expiry.getTime() - Date.now() + 30)));
   await assert.rejects(commit(f.tech, input));
   await assert.rejects(readSharedOperationalPanel(db, f.tech.session, f.target));
+  assert.equal(await db.sharedOperationalUpdate.count({ where: { practiceId: f.practice.id } }), 0);
+});
+test('shared technical transaction budget exceeds five seconds without extending session validity', options, async () => {
+  const f = await fixture();
+  const started = Date.now();
+  const userId = await withTechnicalAssignmentRecipient(db, f.tech.session, 'TechnicalPractice', async (tx, state) => {
+    await tx.$executeRaw`SELECT pg_sleep(6)`;
+    return state.current.userId;
+  }, { timeout: 30_000 });
+  assert.equal(userId, f.tech.user.id); assert(Date.now() - started >= 6000);
+  const expiring = { ...f.tech.session, expiresAt: Math.floor(Date.now() / 1000) + 4 };
+  let entered = false;
+  await assert.rejects(withTechnicalAssignmentRecipient(db, expiring, 'TechnicalPractice', async tx => {
+    entered = true;
+    await tx.$executeRaw`SELECT pg_sleep(6)`;
+  }, { timeout: 30_000 }), error => error instanceof TechnicalAssignmentError && error.code === 'DENIED');
+  assert(entered, 'the session must be admitted before expiring inside the bounded transaction');
   assert.equal(await db.sharedOperationalUpdate.count({ where: { practiceId: f.practice.id } }), 0);
 });
 test('Admin proof is mandatory and a known closed attempt never becomes a later save', options, async () => {

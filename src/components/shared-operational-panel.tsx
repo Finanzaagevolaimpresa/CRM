@@ -35,21 +35,27 @@ export function SharedOperationalPanel({ target, actorId }: { target: SharedUpda
     const current = ++sequence.current;
     controller.current?.abort();
     const abort = new AbortController(); controller.current = abort;
-    const timeout = setTimeout(() => abort.abort(), 10_000);
+    const timeout = setTimeout(() => abort.abort(), 35_000);
     try {
       const response = await fetch('/api/operational-updates?kind=' + target.kind + '&id=' + encodeURIComponent(target.id),
         { cache: 'no-store', credentials: 'same-origin', signal: abort.signal });
       const result = response.ok ? await response.json() as { available: boolean; panel: Panel } : null;
       if (sequence.current === current) setPanel(result?.available ? result.panel : null);
     } catch { if (sequence.current === current) setPanel(null); }
-    finally { clearTimeout(timeout); if (sequence.current === current) setLoading(false); }
+    finally {
+      clearTimeout(timeout);
+      if (sequence.current === current) { controller.current = null; setLoading(false); }
+    }
   }, [target.kind, target.id]);
   const cancelRead = useCallback(() => {
     ++sequence.current;
     controller.current?.abort();
+    controller.current = null;
   }, []);
   useEffect(() => {
-    const poll = () => { if (!document.hidden && !busy.current) void refresh(); };
+    // A slow but still valid read must finish instead of being cancelled at
+    // every polling tick. Explicit refreshes still replace stale requests.
+    const poll = () => { if (!document.hidden && !busy.current && !controller.current) void refresh(); };
     poll();
     const timer = setInterval(poll, 3000);
     document.addEventListener('visibilitychange', poll);

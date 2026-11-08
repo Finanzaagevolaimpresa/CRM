@@ -149,6 +149,38 @@ test('response loss, reload, outcome reconciliation and captured replay retain o
   await context.close();
 });
 
+test('a read slower than the polling period finishes without cancellation or overlapping requests', async ({ browser }) => {
+  const context = await browser.newContext(), page = await context.newPage();
+  await login(page, f.second); await open(page);
+  let first = true, active = 0, peak = 0, requests = 0, failed = 0;
+  let start!: (value: { at: number; previous: string }) => void;
+  const delayed = new Promise<{ at: number; previous: string }>(resolve => { start = resolve; });
+  page.on('requestfailed', request => { if (request.url().includes('/api/operational-updates?')) failed++; });
+  await page.route('**/api/operational-updates?**', async route => {
+    requests++; active++; peak = Math.max(peak, active);
+    try {
+      if (first) {
+        first = false;
+        start({ at: performance.now(), previous: (await panel(page).getAttribute('data-server-time'))! });
+        await new Promise(resolve => setTimeout(resolve, 7500));
+      }
+      await route.continue();
+    } finally { active--; }
+  });
+  // Start after the initial mount: React's development effect replay may
+  // intentionally cancel that first read, which is unrelated to polling.
+  const started = await delayed;
+  await expect(panel(page)).not.toHaveAttribute('data-server-time', started.previous);
+  await expect(panel(page)).toHaveAttribute('data-server-time', /.+/);
+  expect(performance.now() - started.at).toBeGreaterThanOrEqual(7500);
+  expect(peak).toBe(1); expect(failed).toBe(0);
+  await expect(panel(page).getByLabel('Testo operativo condiviso', { exact: true })).toBeEnabled();
+  writeFileSync(path.join(evidence, 'slow-read.json'), JSON.stringify({ synthetic: true, delayMilliseconds: 7500,
+    periodMilliseconds: 3000, peakConcurrentRequests: peak, failedRequests: failed, requests,
+    completedMilliseconds: Math.round(performance.now() - started.at) }, null, 2));
+  await context.close();
+});
+
 test('an open technical draft loses its access after nominal revocation; the retained audit remains available to Admin', async ({ browser }) => {
   const context = await browser.newContext(), page = await context.newPage();
   await login(page, f.tech); await open(page);

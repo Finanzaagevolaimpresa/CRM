@@ -48,6 +48,13 @@ si aggiorna subito il controllo. Il periodo non è una promessa di latenza: le p
 registrano il tempo dal clic alla comparsa dell'evento e della notifica. Le bozze
 non vengono sostituite dall'aggiornamento automatico.
 
+Le transazioni del pannello hanno un budget finito di 30 secondi anche per il
+tecnico, necessario a ricontrollare le viste collegate e tutti i destinatari sul
+database completo. Il browser attende fino a 35 secondi per una lettura; sessione
+e incarico devono essere ancora validi al termine. Questo budget non prolunga
+un'autorizzazione o una scadenza e non cambia i limiti degli altri comandi tecnici.
+Una lettura ancora in corso non viene interrotta dal successivo controllo periodico.
+
 Un cambio di contesto/versione richiede di rileggere stato e destinatari prima di
 proseguire, mantenendo il testo. Revoca/scadenza tolgono la proiezione e disabilitano
 il salvataggio; la bozza dell'autore rimane nella pagina. Il browser conserva in

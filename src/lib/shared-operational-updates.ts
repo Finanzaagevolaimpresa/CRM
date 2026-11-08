@@ -61,7 +61,7 @@ function admittedTransaction<T>(db: PrismaClient, claimed: AuthSession, target: 
   if (claimed.role !== 'admin' && claimed.role !== 'commerciale') {
     const ref = technicalTarget(target);
     return withTechnicalAssignmentRecipient(db, claimed, ref.kind, async (tx, state) =>
-      work(tx, await technicalAdmission(tx, state, target, write)));
+      work(tx, await technicalAdmission(tx, state, target, write)), { timeout: 30_000 });
   }
   return withSerializableTransaction(db, async tx => {
     if (write && !proof) deny();

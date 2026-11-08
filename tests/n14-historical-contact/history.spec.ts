@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page, type Browser } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { lockInternalUser } from '../../src/lib/internal-session-registry';
 
 const db = new PrismaClient(), evidence = process.env.UPDATES_EVIDENCE!, password = process.env.UPDATES_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
@@ -229,12 +230,24 @@ test('native conversion rejects a changed source after preview without copying s
 
 test('native conversion rechecks client permission after preview in the open session', async ({ browser }) => {
   const x = await conversionPreview(browser);
-  const override = await db.userPermissionOverride.create({ data: { userId: f.commercialId, permission: 'client.write', allowed: false } });
+  const override = await db.$transaction(async tx => {
+    await lockInternalUser(tx, f.commercialId);
+    return tx.userPermissionOverride.create({ data: { userId: f.commercialId, permission: 'client.write', allowed: false } });
+  });
   try {
     await x.owner.getByRole('button', { name: 'Registra cliente da contatto precedente', exact: true }).click();
     await expect(x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true })).toBeVisible();
     expect(await db.client.count({ where: { leadId: x.lead.id } })).toBe(0);
     await x.owner.reload(); await expect(x.owner.getByRole('heading', { name: 'Conversione storica non disponibile', exact: true })).toBeVisible();
     await screen(x.owner, 'conversion-revoked', 390);
-  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); await x.ac.close(); await x.cc.close(); }
+  } finally {
+    // Match account writers and registry readers: User before permission row.
+    // The epoch trigger also locks User; deleting the fixture in reverse order
+    // can deadlock with the live notification poll left open by this test.
+    await db.$transaction(async tx => {
+      await lockInternalUser(tx, f.commercialId);
+      await tx.userPermissionOverride.delete({ where: { id: override.id } });
+    });
+    await x.ac.close(); await x.cc.close();
+  }
 });
