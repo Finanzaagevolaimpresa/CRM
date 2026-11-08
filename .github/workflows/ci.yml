@@ -999,7 +999,7 @@ jobs:
             echo "systemd-analyze not available; skipping unit verification"
           fi
 
-      - name: Docker production application and worker packaging smoke test — historical schema44
+      - name: Docker production application and worker packaging smoke test â€” historical schema44
         run: |
           historical_source="$RUNNER_TEMP/pr137-smoke-schema44"
           git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
@@ -1285,3 +1285,41 @@ jobs:
             -f "$context/Dockerfile.prod.example" -t "$N05_RECOVERY_APP_IMAGE" "$context"
           docker build -f tests/n05/recovery-runner.Dockerfile -t "$N05_RECOVERY_RUNNER_IMAGE" tests/n05
           bash tests/n05/run-recovery-drill.sh
+
+  windows-unit-contracts:
+    name: Windows native unit contracts (POSIX companion in CI)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      NEXT_TELEMETRY_DISABLED: "1"
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha || github.sha }}", fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Verify exact source and native Windows contracts
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne '${{ github.event.pull_request.head.sha || github.sha }}') { throw 'Candidate mismatch' }
+          $files = @(git ls-files 'tests/*.test.ts' | Where-Object { $_ -match '^tests/[^/]+\.test\.ts$' } | Sort-Object)
+          if ($files.Count -eq 0) { throw 'No native unit tests' }
+          $evidence = Join-Path $env:RUNNER_TEMP 'windows-unit-contracts'
+          New-Item -ItemType Directory -Path $evidence -ErrorAction Stop | Out-Null
+          node --version | Set-Content (Join-Path $evidence 'node.txt')
+          git rev-parse HEAD | Set-Content (Join-Path $evidence 'head.txt')
+          $files | Set-Content (Join-Path $evidence 'files.txt')
+          node --import tsx --test --test-reporter=tap --test-concurrency=4 @files 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'native.tap')
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native unit contracts failed' }
+          # The existing Ubuntu CI npm test also executes every tests/posix case.
+          # This Windows job is not a replacement for that mandatory companion.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "windows-unit-contracts-${{ github.run_id }}-${{ github.run_attempt }}"
+          path: "${{ runner.temp }}/windows-unit-contracts"
+          if-no-files-found: error
+          retention-days: 14

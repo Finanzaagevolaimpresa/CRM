@@ -4,5 +4,6 @@ import test from 'node:test';
 
 test('N05 persistent key mounts reject unsafe configuration, files and provenance', () => {
   const result = spawnSync('python3', ['-B', 'tests/n05/test_key_mounts.py'], { encoding: 'utf8' });
+  assert.equal(result.error, undefined, result.error?.message);
   assert.equal(result.status, 0, result.stderr);
 });
