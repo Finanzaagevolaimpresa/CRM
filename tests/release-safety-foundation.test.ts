@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 
 test('N05 stays migration-free and introduces the complete release-safety surface', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 75);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 76);
   const expected = [
     '.env.staging.example',
     'docker-compose.prod.legacy-resources.yml',
