@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { RefreshReadOnlyNotices } from '@/components/live-notifications';
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from "next/link";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
@@ -19,6 +20,7 @@ const priorityTone = {
 
   return (
     <div className="crm-space-y-6">
+      <RefreshReadOnlyNotices />
       <PageHeader
         title="Notifiche"
         description="Priorità operative, aggiornamenti selezionati dall’Admin e richieste AI, con accesso verificato per ogni scheda. Orari Europe/Rome."

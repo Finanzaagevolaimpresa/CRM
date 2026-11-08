@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { SharedOperationalPanel } from '@/components/shared-operational-panel';
 import { RomeDateTimeInput } from '@/components/rome-date-time-input';
 import { mayManagePracticeSharing } from '@/lib/selective-practice-access';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
@@ -137,6 +138,7 @@ const isRedundantOperationalAudit = (event: { category: string; type: string; en
   const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' ? !isRedundantOperationalAudit(event, allTimelineEvents) : event.category === activeTimelineFilter).slice(0, 60);
 
   return <div className="crm-space-y-6"><PageHeader title={practice.title} description="Dettaglio pratica tecnica interna. Gli aggiornamenti al cliente vanno verificati prima dell’invio: il CRM non invia email, PEC o WhatsApp automatici." />
+    <SharedOperationalPanel target={{ kind: 'PRACTICE', id: practice.id }} actorId={session.userId} />
     {sharingAvailable && <SecondaryLink href={`/technical-office/practices/${practice.id}/sharing`}>Condividi accesso selettivo</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/technical-office/practices/${practice.id}/assignments`}>Gestisci incarichi tecnici e perimetri</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/PRACTICE/${practice.id}`}>Chi aggiornare</SecondaryLink>}

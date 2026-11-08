@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { SharedOperationalPanel } from '@/components/shared-operational-panel';
 export const dynamic = 'force-dynamic';
 
 import { SecondaryLink } from '@/components/actions';
@@ -55,6 +56,7 @@ import { ProjectLifecycleControls } from '@/components/project-lifecycle-control
 
   return <div className="crm-space-y-6">
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
+    <SharedOperationalPanel target={{ kind: 'PROJECT', id: project.id }} actorId={session.userId} />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
     {session.role === 'admin' && <SecondaryLink href={`/admin/records/Project/${project.id}`}>Correggi tutti i dati operativi</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/PROJECT/${project.id}`}>Chi aggiornare</SecondaryLink>}

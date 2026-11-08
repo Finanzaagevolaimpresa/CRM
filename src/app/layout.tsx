@@ -5,6 +5,7 @@ import { Nav } from "@/components/ui";
 import { InteractiveReadyMarker } from "@/components/interactive-ready-marker";
 import { getEffectivePermissions, getSession } from "@/lib/auth";
 import { getInternalNotificationCount } from "@/lib/internal-notifications";
+import { LiveNotifications, NotificationCountText } from "@/components/live-notifications";
 export default async function RootLayout({
   children,
 }: {
@@ -18,6 +19,7 @@ export default async function RootLayout({
   return (
     <html lang="it" data-scroll-behavior="smooth">
       <body>
+        <LiveNotifications key={session?.userId ?? 'anonymous'} actorId={session?.userId ?? null} initialCount={notificationCount}>
         <InteractiveReadyMarker />
         <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
           <Nav effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={session?.role} technicalRestricted={session?.technicalRestricted} />
@@ -30,7 +32,7 @@ export default async function RootLayout({
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Link href="/search" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-compat focus:ring-2 focus:ring-fai-lime">Ricerca</Link>
-                  <Link href="/notifications" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-compat focus:ring-2 focus:ring-fai-lime">Notifiche{notificationCount > 0 ? ` · ${notificationCount > 99 ? "99+" : notificationCount}` : ""}</Link>
+                  <Link href="/notifications" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-compat focus:ring-2 focus:ring-fai-lime">Notifiche<NotificationCountText initialCount={notificationCount} /></Link>
                   <span className="rounded-xl bg-fai-green/10 px-4 py-2 text-sm font-extrabold capitalize text-fai-green ring-1 ring-fai-green/15">
                     {session ? session.role.replaceAll("_", " ") : "Utente interno"}
                   </span>
@@ -40,6 +42,7 @@ export default async function RootLayout({
             </AppHeader><main className="crm-page-main p-4 md:p-6 xl:p-8">{children}</main>
           </div>
         </div>
+        </LiveNotifications>
       </body>
     </html>
   );

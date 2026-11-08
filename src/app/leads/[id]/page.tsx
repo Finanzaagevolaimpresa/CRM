@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { SharedOperationalPanel } from '@/components/shared-operational-panel';
 import { mayManageLeadSharing } from '@/lib/selective-lead-access';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { readableLeadClient } from '@/lib/lead-client-access';
@@ -52,6 +53,14 @@ const money = (value: unknown) => `€ ${Number(value).toLocaleString('it-IT', {
         <SecondaryLink href={`/clients/${client.id}`}>Apri fascicolo cliente</SecondaryLink></div>
         : <p>Il fascicolo collegato non è disponibile nel tuo perimetro.</p>}
     </Card>}
+    {client ? <SharedOperationalPanel target={{ kind: 'CLIENT', id: client.id }} actorId={session.userId} />
+      : <Card title="Dati cliente e referente">
+        <p>Origine: anagrafica Lead · {lead.companyName || 'Denominazione da completare'}</p>
+        <p>{lead.firstName} {lead.lastName} · Contatto dichiarato: {lead.contactPerson || 'Da completare'}</p>
+        <p>Telefono: {lead.phone || 'Da completare'} · Email: {lead.email || 'Da completare'}</p>
+        <p>Amministratore, referente aziendale responsabile, codici fiscali distinti, PIVA, PEC, SDI e indirizzi strutturati: da completare nelle anagrafiche collegate, quando disponibili. Nessuna identità o qualifica è dedotta dal nome del Lead.</p>
+        <p>I dati mancanti non impediscono la normale conversione del Lead.</p>
+      </Card>}
     <SecondaryLink href="/leads">← Torna alla lista</SecondaryLink><SecondaryLink href={`/assignments/Lead/${lead.id}`}>Responsabilità e presa in carico</SecondaryLink><SecondaryLink href={`/leads/${lead.id}/requests`}>Richieste e provenienza</SecondaryLink>{canWrite && <SecondaryLink href={`/leads/${lead.id}/edit`}>Modifica anagrafica</SecondaryLink>}
     {inboxEnabled && inboxItem && <SecondaryLink href={`/leads/inbox?lead=${encodeURIComponent(lead.id)}`}>Apri coda e assegnazione del referente</SecondaryLink>}
     {inboxEnabled && inboxItem?.originKind === 'MANUAL_CRM' && inboxItem.state === 'OPEN' && !inboxCycle?.firstResponseAt

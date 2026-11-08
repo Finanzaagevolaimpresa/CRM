@@ -40,6 +40,9 @@ export async function admitRecordUpdateCommunication(tx: Tx, current: Communicat
 export async function admitRecordUpdateWork(tx: Tx, recipient: RecordUpdatePerson, work: RecordUpdateWork,
   directory: Awaited<ReturnType<typeof updateDirectory>>, now: Date, admitMessage: CommunicationNoticeAdmission) {
   if (work.recipientId !== recipient.id || work.recipientEpoch !== recipient.recordUpdateEpoch) return null;
+  // Shared operational messages have their own current scoped admission. They
+  // cannot be consumed by the generic email-draft preparer or Admin rule path.
+  if (work.event.sourceKey?.startsWith('shared-update:')) return null;
   try {
     const context = await recordUpdateContext(tx, work.event.kind as 'LEAD' | 'CLIENT' | 'PRACTICE' | 'PROJECT', work.event.recordId);
     // Native policy writers hold the context first. Re-read the locked rule:

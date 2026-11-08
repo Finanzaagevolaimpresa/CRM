@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { SharedOperationalPanel } from '@/components/shared-operational-panel';
 import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
@@ -32,6 +33,8 @@ const dateFields = new Set(['dueDate', 'submittedAt', 'nextClientUpdateAt']);
   return <div className="min-w-0 space-y-6"><PageHeader title={data.fields.find(field => field.key === 'title')?.value ?? 'Incarico tecnico'}
     description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza dell’accesso ${operationalRomeTime(data.expiresAt)}`} />
     <SecondaryLink href={`/technical-work?kind=${target.data.kind}`}>Torna ai miei incarichi</SecondaryLink>
+    <SharedOperationalPanel target={{ kind: target.data.kind === 'Project' ? 'PROJECT' : 'PRACTICE',
+      id: target.data.targetId }} actorId={session.userId} />
     {data.actions.includes('upload_document') && <SecondaryLink href={technicalUploadPath(target.data)}>Deposita un documento per l’Admin</SecondaryLink>}
     {data.actions.includes('request_admin') && <SecondaryLink href={`/admin-requests/new?kind=${target.data.kind}&id=${encodeURIComponent(target.data.targetId)}`}>Richiedi documento o integrazione all’Admin</SecondaryLink>}
     <Card title="Informazioni disponibili"><dl className="grid min-w-0 gap-4 sm:grid-cols-2">{data.fields.map(field => <div key={field.key} className="min-w-0">

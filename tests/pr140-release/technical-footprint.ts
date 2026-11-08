@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { PrismaClient } from '@prisma/client';
 import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
@@ -43,14 +44,20 @@ export async function readTechnicalRecoveryFootprint(db: PrismaClient, fixture: 
     technicalClassifications: classifications,
     technicalClassificationAudit: await db.auditLog.findMany({ where: { id: { in: classifications.map(row => 'admin-record:' + row.commandId) } }, orderBy: { id: 'asc' } }),
   };
-  // Four technical-state assignments (including support), two upload-state
-  // assignments, two revocations and one work/item command each.
-  assert.equal(data.technicalAuthority.length, 1); assert.equal(assignments.length, 6);
+  const shared = JSON.parse(readFileSync(process.env.R05_SHARED_RECOVERY_FIXTURE!, 'utf8')) as {
+    synthetic: boolean; practiceId: string; techId: string; secondId: string;
+  };
+  assert.equal(shared.synthetic, true);
+  const sharedAssignments = assignments.filter(row => row.practiceId === shared.practiceId);
+  assert.deepEqual(sharedAssignments.map(row => row.recipientId).sort(), [shared.techId, shared.secondId].sort());
+  // Original six assignments plus two explicit shared-update assignments.
+  // The footprint still includes every row, command and revision unchanged.
+  assert.equal(data.technicalAuthority.length, 1); assert.equal(assignments.length, 8);
   assert.equal(assignments.filter(row => row.revokedAt).length, 2);
-  assert.equal(data.technicalDecisions.length, 8); assert.equal(data.technicalRevisions.length, 8);
-  assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 10);
+  assert.equal(data.technicalDecisions.length, 10); assert.equal(data.technicalRevisions.length, 10);
+  assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 12);
   assert.equal(data.technicalItemCommands.length, 1); assert(data.technicalItemGenerations.length > 0);
-  assert.equal(files.length, 7); assert.equal(data.technicalUsers.length, 5);
+  assert.equal(files.length, 7); assert.equal(data.technicalUsers.length, 7);
   assert.equal(data.technicalUsers.find(row => row.email === fixture.supportEmail)?.role, 'backoffice');
   assert.equal(mixed.role, 'amministrazione'); assert(!assignments.some(row => row.recipientId === mixed.id));
   assert.equal(data.technicalMembershipProjects.length, 1);

@@ -7,6 +7,7 @@ import { updateActor, updateDirectory } from './record-updates';
 import { admitCommunicationNotice } from './approved-communications';
 import { admitRecordUpdateWork, recordUpdateWorkInclude, type RecordUpdateWork } from './record-update-admission';
 import { confirmedReadRetry } from './confirmed-read-retry';
+import { visibleSharedOperationalNotice } from './shared-operational-notices';
 
 type Tx = Prisma.TransactionClient;
 const include = recordUpdateWorkInclude;
@@ -14,6 +15,7 @@ type Work = RecordUpdateWork;
 async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof currentRecordUpdateUser>>> & AuthSession, work: Work,
   directory: Awaited<ReturnType<typeof updateDirectory>>, now: Date) {
   if (work.mode === 'EMAIL_DRAFT') return null;
+  if (work.event.sourceKey?.startsWith('shared-update:')) return visibleSharedOperationalNotice(tx, actor, work);
   const admitted = await admitRecordUpdateWork(tx, actor, work, directory, now, admitCommunicationNotice);
   if (!admitted) return null;
   const technical = isTechnicalAccount(actor);

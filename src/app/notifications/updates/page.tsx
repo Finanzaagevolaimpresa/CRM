@@ -1,4 +1,5 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { RefreshReadOnlyNotices } from '@/components/live-notifications';
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from 'next/link';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
@@ -10,6 +11,7 @@ export const dynamic = 'force-dynamic';
   async function Page() {
   const rows = await listSelectedRecordNotices(prisma, await requireSession(), await loadActivePrivilegedStepUpKey(prisma), 100, false);
   return <div className="crm-space-y-6"><PageHeader title="Aggiornamenti selezionati" description="Aggiornamenti e promemoria CRM disponibili, destinati a te e ammessi dai permessi correnti. La lettura non rappresenta un invio email. Orari Europe/Rome." />
+    <RefreshReadOnlyNotices />
     <Link href="/notifications" className="font-bold underline">← Notifiche</Link>
     <Card title="Disponibili e letti">{rows.length ? <div className="crm-space-y-3">{rows.map(row => <article key={row.id} className="rounded-xl border p-4">
       <p className="break-words font-bold">{row.related}</p><p>{row.title} · {formatRecordNoticeTime(row.date)}</p>

@@ -6,7 +6,8 @@ export function technicalPageMode(route: string): TechnicalPageMode {
   if (['/', '/login', '/settings/account', '/technical-uploads/[kind]/[id]',
     '/notifications/updates', '/notifications/updates/[id]', '/technical-office/integrations',
     '/admin-requests', '/admin-requests/new', '/admin-requests/[id]', '/assignments', '/assignments/[kind]/[id]',
-    '/communications', '/videos', '/videos/[id]', '/videos/drive/[id]', '/drive-folders', '/drive-folders/[id]'].includes(route)) return 'original';
+    '/communications', '/videos', '/videos/[id]', '/videos/drive/[id]', '/drive-folders', '/drive-folders/[id]',
+    '/operational-updates/[kind]/[id]'].includes(route)) return 'original';
   if (['/dashboard', '/projects', '/technical-office', '/technical-office/practices',
     '/tasks', '/deadlines', '/documents', '/document-checklists', '/search',
     '/notifications',
@@ -18,6 +19,8 @@ export function technicalPageMode(route: string): TechnicalPageMode {
   return 'denied';
 }
 const fileRoutes = new Set([
+  '/api/operational-updates',
+  '/api/notifications/count',
   '/videos/[id]/content',
   '/videos/drive/[id]/access',
   '/drive-folders/[id]/open',
@@ -28,6 +31,7 @@ const fileRoutes = new Set([
 ]);
 export function technicalFileRouteAllowed(route: string) { return fileRoutes.has(route); }
 const allowedActions = new Set([
+  'shared-operational-actions:saveSharedOperationalAction', 'shared-operational-actions:settleSharedOperationalAction',
   'login-actions:loginAction', 'login-actions:logoutAction',
   'user-account-actions:saveAccountProfile', 'user-account-actions:saveOwnPassword',
   // The account service restricts this command to self, or an admitted Admin.

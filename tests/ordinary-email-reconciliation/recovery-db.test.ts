@@ -51,9 +51,9 @@ function fault(event:string):Pick<PrismaClient,'$transaction'>{
     await tx.$queryRaw`SELECT set_config('fai.recovery_test_fault',${event},true)`;return work(tx);
   },opts)} as Pick<PrismaClient,'$transaction'>;
 }
-test('schema75 exposes the append-only recovery surface and binding guards',options,async()=>{
+test('schema76 retains the append-only recovery surface and binding guards',options,async()=>{
   const [r]=await db.$queryRaw<Array<{n:bigint}>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(r.n,75n);
+  assert.equal(r.n,76n);
   const [guards]=await db.$queryRaw<Array<{n:bigint}>>`SELECT count(*) AS n FROM pg_trigger WHERE tgname IN
     ('OrdinaryEmailReconciliation_immutable','OrdinaryEmailReconciliation_no_truncate','OrdinaryEmailReconciliation_binding') AND tgenabled='O'`;
   assert.equal(guards.n,3n);
