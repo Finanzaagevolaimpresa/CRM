@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test, { before, after } from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { leadProof, type Person } from './selective-leads/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
@@ -16,6 +16,7 @@ import type { SharedUpdateCommand, SharedUpdateTarget } from '../src/lib/shared-
 import { saveRecordProfile } from '../src/lib/record-profiles';
 import { personProfileVersion } from '../src/lib/record-profile-contract';
 import { withTechnicalAssignmentRecipient, TechnicalAssignmentError } from '../src/lib/technical-assignment-transaction';
+import { requireTechnicalPracticeMutationAccess } from '../src/lib/write-access';
 const enabled = process.env.RUN_SHARED_OPERATIONAL_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -36,6 +37,184 @@ async function fixture() {
   await shareAssignment(db, admin, target, f.second);
   return { ...f, target };
 }
+function barrier() {
+  let release!: () => void;
+  return { promise: new Promise<void>(resolve => { release = resolve; }), release: () => release() };
+}
+// Execute the real service and every real SQL statement. Only pause an already
+// acquired lock; never substitute authorization, trigger or database results.
+function observedDatabase(afterQuery: (sql: string, tx: Prisma.TransactionClient) => Promise<void>) {
+  return { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, opts: object) =>
+    db.$transaction(async tx => {
+      await tx.$executeRawUnsafe("SET LOCAL deadlock_timeout = '50ms'");
+      return work(new Proxy(tx, { get(target, property, receiver) {
+        if (property !== '$queryRaw' && property !== '$executeRaw') return Reflect.get(target, property, receiver);
+        return async (query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]) => {
+          const result = property === '$queryRaw' ? await target.$queryRaw(query, ...values) : await target.$executeRaw(query, ...values);
+          await afterQuery('sql' in query ? query.sql : Array.from(query).join('?'), tx);
+          return result;
+        };
+      } }));
+    }, { ...opts, timeout: 25_000 }),
+    sharedOperationalUpdate: db.sharedOperationalUpdate } as unknown as PrismaClient;
+}
+async function waitForBlockedPractice(pid: number) {
+  for (let attempt = 0; attempt < 250; attempt++) {
+    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+      SELECT EXISTS(SELECT 1 FROM pg_stat_activity a WHERE ${pid}=ANY(pg_blocking_pids(a.pid))
+        AND a.query LIKE '%"TechnicalPractice"%' AND a.wait_event_type='Lock') AS waiting`;
+    if (row.waiting) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error('Technical panel did not reach the held practice');
+}
+async function waitAt(point: ReturnType<typeof barrier>, work: Promise<unknown>) {
+  await Promise.race([point.promise, work.then(() => { throw new Error('Missing native barrier'); })]);
+}
+function failureChain(error: unknown): string {
+  if (!error || typeof error !== 'object') return String(error);
+  return String(error) + ('meta' in error ? ' ' + JSON.stringify(error.meta) : '')
+    + ('cause' in error ? '\nCaused by ' + failureChain(error.cause) : '');
+}
+async function deadlocks() {
+  const [row] = await db.$queryRaw<Array<{ n: bigint }>>`SELECT deadlocks AS n FROM pg_stat_database WHERE datname=current_database()`;
+  return Number(row.n);
+}
+test('technical polling and the native practice writer complete without a recipient FK deadlock', options, async () => {
+  const f = await fixture(), otherAdmin = await syntheticPerson(db, 'Secondo Admin nativo');
+  const setup = await readRecordUpdateSetup(db, admin.session, 'PRACTICE', f.practice.id);
+  const rule: UpdateCommand = { commandId: randomUUID(), kind: 'PRACTICE', recordId: f.practice.id, operation: 'RULE',
+    expectedVersion: setup.expectedVersion, ruleVersion: 0, selection: { people: [admin.user.id], groups: [] },
+    events: ['STATE_CHANGED'], persistent: false, expiresAt: null, patch: null };
+  const preview = await previewRecordUpdate(db, admin.session, rule);
+  await confirmRecordUpdate(db, admin.session, rule, preview.digest, leadProof(admin));
+  const initialDeadlocks = await deadlocks();
+  const held = barrier(), proceed = barrier(); let writerPid = 0;
+  const writer = db.$transaction(async tx => {
+    writerPid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+    await tx.$executeRawUnsafe("SET LOCAL deadlock_timeout = '50ms'");
+    await requireTechnicalPracticeMutationAccess(otherAdmin.session, f.practice.id, tx, 'edit', ['technical.status']);
+    held.release(); await proceed.promise;
+    await tx.technicalPractice.update({ where: { id: f.practice.id }, data: { status: 'in_progettazione' } });
+  }, { timeout: 20_000 });
+  void writer.catch(() => {});
+  await waitAt(held, writer);
+  const read = readSharedOperationalPanel(db, f.tech.session, f.target);
+  const completed = Promise.all([writer, read]); void completed.catch(() => {});
+  try {
+    await waitForBlockedPractice(writerPid); proceed.release();
+    await completed;
+    const deliveries = await db.recordUpdateDelivery.findMany({ where: { event: { recordId: f.practice.id } } });
+    assert.equal(deliveries.length, 1); assert.equal(deliveries[0].recipientId, admin.user.id);
+    assert.equal((await readSharedOperationalPanel(db, f.tech.session, f.target)).currentState, 'in_progettazione');
+    assert.equal(await deadlocks(), initialDeadlocks, 'a read retry must not hide a database deadlock');
+  } catch (error) { assert.fail(failureChain(error)); }
+  finally { proceed.release(); await completed.catch(() => {}); }
+});
+for (const firstRole of ['admin', 'technical'] as const) test(`two shared writers (${firstRole} and Admin) retain all notices without cross-recipient deadlock`, options, async () => {
+  const a = await fixture(), b = await fixture(), secondAdmin = await syntheticPerson(db, 'Admin concorrente');
+  const first = firstRole === 'admin' ? admin : a.tech;
+  const inputA = await sharedInput(db, first, a.target), inputB = await sharedInput(db, secondAdmin, b.target);
+  const initialDeadlocks = await deadlocks();
+  const readyA = barrier(), readyB = barrier(), proceed = barrier();
+  const observer = (ready: ReturnType<typeof barrier>) => {
+    let paused = false;
+    return observedDatabase(async sql => {
+      if (!paused && sql.includes('pg_advisory_xact_lock(hashtextextended(')) {
+        paused = true; ready.release(); await proceed.promise;
+      }
+    });
+  };
+  const saveA = saveSharedOperationalUpdate(observer(readyA), first.session, inputA, firstRole === 'admin' ? leadProof(first) : undefined);
+  const saveB = saveSharedOperationalUpdate(observer(readyB), secondAdmin.session, inputB, leadProof(secondAdmin));
+  const completed = Promise.all([saveA, saveB]); void completed.catch(() => {});
+  try {
+    await Promise.all([waitAt(readyA, saveA), waitAt(readyB, saveB)]); proceed.release();
+    await completed;
+    assert.equal(await deadlocks(), initialDeadlocks, 'serialization retry must not hide a database deadlock');
+    const adminIds = (await db.user.findMany({ where: { role: 'admin', active: true, deletedAt: null }, select: { id: true } })).map(u => u.id);
+    for (const [f, input] of [[a, inputA], [b, inputB]] as const) {
+      assert.equal(await db.sharedOperationalUpdate.count({ where: { id: input.commandId } }), 1);
+      assert.equal(await db.recordUpdateEvent.count({ where: { id: input.commandId } }), 1);
+      const deliveries = await db.recordUpdateDelivery.findMany({ where: { eventId: input.commandId } });
+      assert.deepEqual(deliveries.map(d => d.recipientId).sort(), [...adminIds, f.sales.user.id].sort());
+      assert.equal(await db.auditLog.count({ where: { id: 'shared-operational:' + input.commandId } }), 1);
+    }
+  } catch (error) { assert.fail(failureChain(error)); }
+  finally { proceed.release(); await completed.catch(() => {}); }
+});
+test('pure technical admission holds account, authority, session, permission and assignment revocations until completion', options, async () => {
+  for (const change of ['account', 'authority-account', 'session', 'permission', 'authority', 'assignment'] as const) {
+    const f = await fixture(), held = barrier(), proceed = barrier(); let paused = false;
+    const observed = observedDatabase(async sql => {
+      if (!paused && sql.includes('FROM "TechnicalAssignment"') && sql.includes('FOR SHARE')) {
+        paused = true; held.release(); await proceed.promise;
+      }
+    });
+    const read = readSharedOperationalPanel(observed, f.tech.session, f.target); void read.catch(() => {});
+    await waitAt(held, read);
+    const mutate = async (tx: Prisma.TransactionClient) => {
+      if (change === 'account' || change === 'authority-account')
+        await tx.user.update({ where: { id: change === 'account' ? f.tech.user.id : admin.user.id }, data: { active: false } });
+      else if (change === 'session') await tx.internalSession.update({ where: { id: f.tech.session.sessionId! }, data: { revokedAt: new Date() } });
+      else if (change === 'permission') await tx.userPermissionOverride.create({ data: { userId: f.tech.user.id, permission: 'technical.write', allowed: false } });
+      else if (change === 'authority') await tx.$executeRaw`UPDATE "TechnicalAssignmentAuthority" SET enabled=false,revision=revision+1 WHERE id='technical-assignment'`;
+      else await tx.$queryRaw`SELECT id FROM "TechnicalAssignment" WHERE "practiceId"=${f.practice.id} AND "recipientId"=${f.tech.user.id} FOR UPDATE`;
+    };
+    try {
+      await assert.rejects(db.$transaction(async tx => {
+        await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '150ms'"); await mutate(tx);
+      }), /lock timeout/, change + ' cannot pass an admitted technical reader');
+    } finally { proceed.release(); await read; }
+    try {
+      if (change === 'assignment') await revokeTechnical(db, admin, { kind: 'TechnicalPractice', targetId: f.practice.id }, f.tech);
+      else await db.$transaction(mutate);
+      await assert.rejects(readSharedOperationalPanel(db, f.tech.session, f.target), change + ' must deny the next read');
+    } finally {
+      if (change === 'authority-account') await db.user.update({ where: { id: admin.user.id }, data: { active: true } });
+      if (change === 'authority') await db.$executeRaw`UPDATE "TechnicalAssignmentAuthority" SET enabled=true,revision=revision+1 WHERE id='technical-assignment'`;
+    }
+  }
+});
+test('reference-only Admin and technical writers still exclude identity mutations and enforce subsequent revocation', options, async () => {
+  for (const role of ['admin', 'technical'] as const) for (const change of ['account', 'session', 'permission'] as const) {
+    const f = await fixture(), actor = role === 'admin' ? await syntheticPerson(db, 'Admin con revoca concorrente') : f.tech;
+    const input = await sharedInput(db, actor, f.target), held = barrier(), proceed = barrier(); let paused = false;
+    const observed = observedDatabase(async sql => {
+      if (!paused && sql.includes('pg_advisory_xact_lock(hashtextextended(')) {
+        paused = true; held.release(); await proceed.promise;
+      }
+    });
+    const save = saveSharedOperationalUpdate(observed, actor.session, input, role === 'admin' ? leadProof(actor) : undefined);
+    void save.catch(() => {}); await waitAt(held, save);
+    const mutate = async (tx: Prisma.TransactionClient) => {
+      if (change === 'account') await tx.user.update({ where: { id: actor.user.id }, data: { active: false } });
+      else if (change === 'session') await tx.internalSession.update({ where: { id: actor.session.sessionId! }, data: { revokedAt: new Date() } });
+      else await tx.userPermissionOverride.create({ data: { userId: actor.user.id, permission: 'technical.write', allowed: false } });
+    };
+    try {
+      await assert.rejects(db.$transaction(async tx => {
+        await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '150ms'"); await mutate(tx);
+      }), /lock timeout/, `${role}/${change} cannot pass an admitted writer`);
+    } finally { proceed.release(); await save; }
+    await db.$transaction(mutate);
+    await assert.rejects(commit(actor, input), `${role}/${change} denies even a replay after revocation`);
+    assert.equal(await db.sharedOperationalUpdate.count({ where: { id: input.commandId } }), 1);
+  }
+});
+test('assignment expiry during a pure technical panel read prevents returning the admitted content', options, async () => {
+  const f = await fixture(), expiry = new Date(Date.now() + 5000);
+  await shareAssignment(db, admin, f.target, f.tech, { expiresAt: expiry.toISOString() });
+  let paused = false;
+  const observed = observedDatabase(async sql => {
+    if (!paused && sql.includes('FROM "TechnicalAssignment"') && sql.includes('FOR SHARE')) {
+      paused = true;
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, expiry.getTime() - Date.now() + 30)));
+    }
+  });
+  await assert.rejects(readSharedOperationalPanel(observed, f.tech.session, f.target));
+  assert(paused); assert.equal(await db.sharedOperationalUpdate.count({ where: { practiceId: f.practice.id } }), 0);
+});
 test('one assigned save produces one canonical event, three coherent views and only Admin/current commercial notices', options, async () => {
   const f = await fixture(), input = await sharedInput(db, f.tech, f.target, { state: 'in_progettazione' });
   const saved = await commit(f.tech, input);
@@ -47,7 +226,8 @@ test('one assigned save produces one canonical event, three coherent views and o
     assert.equal(panel.history[0].text, input.text);
   }
   const deliveries = await db.recordUpdateDelivery.findMany({ where: { eventId: saved.eventId } });
-  assert.deepEqual(deliveries.map(row => row.recipientId).sort(), [admin.user.id, f.sales.user.id].sort());
+  const admins = await db.user.findMany({ where: { role: 'admin', active: true, deletedAt: null }, select: { id: true } });
+  assert.deepEqual(deliveries.map(row => row.recipientId).sort(), [...admins.map(a => a.id), f.sales.user.id].sort());
   const notices = await listRecordUpdates(db, f.sales.session);
   const notice = notices.find(row => row.recordHref.endsWith(f.practice.id))!;
   assert(notice); assert.equal(notice.readAt, null);
@@ -294,14 +474,14 @@ test('shared technical transaction budget exceeds five seconds without extending
   const userId = await withTechnicalAssignmentRecipient(db, f.tech.session, 'TechnicalPractice', async (tx, state) => {
     await tx.$executeRaw`SELECT pg_sleep(6)`;
     return state.current.userId;
-  }, { timeout: 30_000 });
+  }, { timeout: 30_000, readOnly: true });
   assert.equal(userId, f.tech.user.id); assert(Date.now() - started >= 6000);
   const expiring = { ...f.tech.session, expiresAt: Math.floor(Date.now() / 1000) + 4 };
   let entered = false;
   await assert.rejects(withTechnicalAssignmentRecipient(db, expiring, 'TechnicalPractice', async tx => {
     entered = true;
     await tx.$executeRaw`SELECT pg_sleep(6)`;
-  }, { timeout: 30_000 }), error => error instanceof TechnicalAssignmentError && error.code === 'DENIED');
+  }, { timeout: 30_000, readOnly: true }), error => error instanceof TechnicalAssignmentError && error.code === 'DENIED');
   assert(entered, 'the session must be admitted before expiring inside the bounded transaction');
   assert.equal(await db.sharedOperationalUpdate.count({ where: { practiceId: f.practice.id } }), 0);
 });

@@ -4,7 +4,7 @@ import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
 import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 import { privilegedAccessMode } from './application-security-policy';
-import { lockAuthoritativeInternalSession, tokenDigestFromCookie } from './internal-session-registry';
+import { lockAuthoritativeInternalSession, tokenDigestFromCookie, type InternalSessionLockOptions } from './internal-session-registry';
 import { internalSessionMode } from './session';
 import { verifyPrivilegedStepUpToken, type PrivilegedStepUpKey } from './privileged-step-up-token';
 import { lockCommunicationDirectory } from './communication-directory-lock';
@@ -27,7 +27,7 @@ async function clock(tx: Tx) {
   const [row] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
   return row.now;
 }
-export async function updateActor(tx: Tx, claimed: AuthSession, proof?: UpdateCredentials, options: { readOnly?: boolean } = {}) {
+export async function updateActor(tx: Tx, claimed: AuthSession, proof?: UpdateCredentials, options: InternalSessionLockOptions = {}) {
   if (internalSessionMode() !== 'registry' || !claimed.sessionId || !claimed.active) deny();
   if (proof && options.readOnly) deny();
   if (proof && (privilegedAccessMode() !== 'enforced' || !await lockRegisteredPrivilegedStepUpKey(tx, proof.key))) deny();

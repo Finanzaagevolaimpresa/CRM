@@ -75,13 +75,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --import tsx --test --test-reporter=tap tests/shared-operational-update-contract.test.ts | tee "$SHARED_EVIDENCE/unit.tap"
-          grep -q '^# tests 8$' "$SHARED_EVIDENCE/unit.tap"
-          grep -q '^# pass 8$' "$SHARED_EVIDENCE/unit.tap"
+          node --import tsx --test --test-reporter=tap tests/shared-operational-update-contract.test.ts tests/shared-operational-retry.test.ts tests/record-update-read-retry.test.ts | tee "$SHARED_EVIDENCE/unit.tap"
+          grep -q '^# tests 13$' "$SHARED_EVIDENCE/unit.tap"
+          grep -q '^# pass 13$' "$SHARED_EVIDENCE/unit.tap"
           grep -q '^# skipped 0$' "$SHARED_EVIDENCE/unit.tap"
           node --import tsx --test --test-reporter=tap --test-concurrency=1 tests/shared-operational-updates-db.test.ts | tee "$SHARED_EVIDENCE/database.tap"
-          grep -q '^# tests 23$' "$SHARED_EVIDENCE/database.tap"
-          grep -q '^# pass 23$' "$SHARED_EVIDENCE/database.tap"
+          grep -q '^# tests 29$' "$SHARED_EVIDENCE/database.tap"
+          grep -q '^# pass 29$' "$SHARED_EVIDENCE/database.tap"
           grep -q '^# skipped 0$' "$SHARED_EVIDENCE/database.tap"
       - name: Prepare native browser fixture through the current registry
         if: matrix.target == 'browser'

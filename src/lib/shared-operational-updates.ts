@@ -19,6 +19,7 @@ import { sharedOperationalContext, sharedOperationalRecipients, canReadSharedOpe
   sharedOperationalHref, sharedOperationalLinksMatch, type SharedOperationalContext, type SharedUpdatePerson } from './shared-operational-context';
 import { sharedOperationalContacts } from './shared-operational-contacts';
 import { sharedOperationalWritesEnabled } from './shared-operational-mode';
+import { confirmedSharedWriteRetry } from './shared-operational-retry';
 
 type Tx = Prisma.TransactionClient;
 function deny(): never { throw new SharedOperationalUpdateError('DENIED'); }
@@ -61,11 +62,13 @@ function admittedTransaction<T>(db: PrismaClient, claimed: AuthSession, target: 
   if (claimed.role !== 'admin' && claimed.role !== 'commerciale') {
     const ref = technicalTarget(target);
     return withTechnicalAssignmentRecipient(db, claimed, ref.kind, async (tx, state) =>
-      work(tx, await technicalAdmission(tx, state, target, write)), { timeout: 30_000 });
+      work(tx, await technicalAdmission(tx, state, target, write)),
+    { timeout: 30_000, readOnly: !write, foreignKeyCompatibleWrite: write });
   }
   return withSerializableTransaction(db, async tx => {
     if (write && !proof) deny();
-    const auth = await updateActor(tx, claimed, write ? proof : undefined, { readOnly: !write });
+    const auth = await updateActor(tx, claimed, write ? proof : undefined,
+      { readOnly: !write, foreignKeyCompatibleWrite: write });
     if (auth.actor.role !== claimed.role) deny();
     const context = await sharedOperationalContext(tx, target, write);
     if (!canReadSharedOperational(auth.actor, context)) deny();
@@ -95,7 +98,7 @@ async function priorReceipt(tx: Tx, actorId: string, input: SharedUpdateCommand)
 export async function saveSharedOperationalUpdate(db: PrismaClient, claimed: AuthSession, raw: unknown, proof?: UpdateCredentials) {
   if (!sharedOperationalWritesEnabled) deny();
   const input = sharedUpdateCommand.parse(raw);
-  const saved = await admittedTransaction(db, claimed, input.target, true, proof, async (tx, a) => {
+  const saved = await confirmedSharedWriteRetry(() => admittedTransaction(db, claimed, input.target, true, proof, async (tx, a) => {
     await commandLock(tx, input.commandId);
     const prior = await priorReceipt(tx, a.actor.id, input);
     if (prior) { await a.finish(); return prior; }
@@ -160,7 +163,7 @@ export async function saveSharedOperationalUpdate(db: PrismaClient, claimed: Aut
     await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     await a.finish();
     return receipt(row, false);
-  });
+  }));
   const persisted = await db.sharedOperationalUpdate.findUnique({ where: { id: input.commandId },
     select: { id: true, eventId: true, createdAt: true, authorId: true } });
   if (!persisted || persisted.authorId !== claimed.userId || persisted.eventId !== saved.eventId)
@@ -175,7 +178,7 @@ export async function settleSharedOperationalReceipt(db: PrismaClient, claimed: 
   if (!sharedOperationalWritesEnabled) deny();
   const input = z.object({ commandId: z.string().uuid(), target: sharedUpdateTarget }).strict().parse(raw);
   return db.$transaction(async tx => {
-    const auth = await updateActor(tx, claimed);
+    const auth = await updateActor(tx, claimed, undefined, { foreignKeyCompatibleWrite: true });
     await commandLock(tx, input.commandId);
     const old = await tx.recordUpdateCommand.findUnique({ where: { id: input.commandId }, include: { operationalUpdate: true } });
     if (old && (old.actorId !== auth.actor.id || old.kind !== input.target.kind || old.recordId !== input.target.id)) deny();

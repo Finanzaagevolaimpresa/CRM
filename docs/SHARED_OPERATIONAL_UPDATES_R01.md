@@ -58,9 +58,23 @@ Una lettura ancora in corso non viene interrotta dal successivo controllo period
 Le letture pure della coda e del pannello trattengono lock condivisi su account e
 sessione fino all'ultima verifica: revoca e cambi di permesso restano serializzati,
 mentre un nuovo evento può referenziare il destinatario senza un deadlock inverso.
-I comandi di modifica e di marcatura letto mantengono i lock esclusivi precedenti.
-La regressione PostgreSQL forza l'intreccio tra lettura, scrittura della scheda e
-FK del destinatario; verifica anche revoca account, sessione e permesso.
+La lettura tecnica applica questa disciplina anche all'Admin autorità e al tecnico,
+senza acquisire prima lock esclusivi residui. I soli writer del nuovo servizio
+usano `FOR NO KEY UPDATE` sulle identità: è un lock esclusivo che blocca modifiche,
+revoche e altri writer sulla stessa identità, ma consente le FK dei destinatari.
+Non modificano chiavi di account/sessione e non sono classificati `readOnly`.
+Decisioni sugli incarichi, altri writer e marcatura letto conservano il precedente
+`FOR UPDATE`. Target, comando, incarico, directory e verifica finale restano protetti.
+La regressione PostgreSQL forza l'intreccio con il writer nativo, due Admin su
+target distinti e tecnico contro Admin, oltre a revoche ed expiry durante la lettura.
+Riferimento: [matrice dei lock PostgreSQL 16](https://www.postgresql.org/docs/16/explicit-locking.html#LOCKING-ROWS).
+
+Una serializzazione annullata può essere rivalutata al massimo tre volte: solo
+rollback confermato `40001`/Prisma `P2034`, stesso comando immutabile e nuova
+ammissione completa. Un conflitto sulla versione resta `STALE`. Errori di trasporto,
+timeout, COMMIT incerto e dinieghi non fanno ripartire la scrittura; la ricevuta
+persistita resta fuori dal retry. Le prove concorrenti controllano anche il
+contatore PostgreSQL dei deadlock, per non nasconderli dietro un nuovo tentativo.
 
 Nel gestore Drive la ricevuta del comando rimane visibile durante la rivalidazione
 della pagina. **Riapri la scheda salvata** ricarica la versione persistita prima del
