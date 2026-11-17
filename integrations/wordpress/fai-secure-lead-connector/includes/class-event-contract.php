@@ -94,6 +94,7 @@ final class EventContract
         'serviceInterestText' => 1000,
         'message' => 4000,
         'sourcePagePath' => 500,
+        'campaignPlatform' => 7,
         'campaignCode' => 80,
         'adCode' => 80,
         'requestedAmount' => null,
@@ -123,7 +124,9 @@ final class EventContract
         int $entryId,
         array $formConfig,
         ?\DateTimeImmutable $occurredAt = null,
-        ?callable $randomBytes = null
+        ?callable $randomBytes = null,
+        ?string $sanitizedPageUrl = null,
+        ?string $siteUrl = null
     ): EventEnvelope {
         RuntimeRequirements::assertContractRuntime();
         if ($formId < 1 || $entryId < 0) {
@@ -146,6 +149,12 @@ final class EventContract
             $formConfig['field_map'] ?? null,
             $formConfig['requested_amount_mode'] ?? null
         );
+        foreach (VaeCampaignAttribution::fromPageUrl($formId, $sanitizedPageUrl, $siteUrl) as $name => $value) {
+            if (isset($payload[$name]) && $payload[$name] !== $value) {
+                throw new ConnectorException(ConnectorException::FORM_MAPPING_INVALID);
+            }
+            $payload[$name] = $value;
+        }
         $now = ($occurredAt ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->setTimezone(new \DateTimeZone('UTC'));
         $core = array(
@@ -769,6 +778,10 @@ final class EventContract
                     throw new ConnectorException(ConnectorException::LEAD_EVENT_INVALID);
                 }
             }
+        }
+        if (isset($payload['campaignPlatform'])
+            && !in_array($payload['campaignPlatform'], array('META', 'CHATGPT'), true)) {
+            throw new ConnectorException(ConnectorException::LEAD_EVENT_INVALID);
         }
         foreach (array('campaignCode', 'adCode') as $name) {
             if (isset($payload[$name]) && preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}\z/D', $payload[$name]) !== 1) {

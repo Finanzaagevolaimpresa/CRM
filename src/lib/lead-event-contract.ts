@@ -79,6 +79,7 @@ export interface LeadEventPayloadV1 {
   readonly serviceInterestText?: string;
   readonly message?: string;
   readonly sourcePagePath?: string;
+  readonly campaignPlatform?: 'META' | 'CHATGPT';
   readonly campaignCode?: string;
   readonly adCode?: string;
   readonly requestedAmount?: LeadEventRequestedAmountV1;
@@ -380,7 +381,7 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
     value,
     [
       'firstName', 'lastName', 'companyName', 'email', 'phone', 'city', 'region',
-      'interestText', 'serviceInterestText', 'message', 'sourcePagePath', 'requestedAmount', 'campaignCode', 'adCode',
+      'interestText', 'serviceInterestText', 'message', 'sourcePagePath', 'requestedAmount', 'campaignPlatform', 'campaignCode', 'adCode',
     ],
     [],
     'LEAD_EVENT_FIELD_INVALID',
@@ -419,6 +420,11 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
   }
   const requestedAmount = normalizeRequestedAmount(payload.requestedAmount);
   if (requestedAmount) output.requestedAmount = requestedAmount;
+  const platform = optionalText(payload.campaignPlatform, 7);
+  if (platform !== undefined) {
+    if (platform !== 'META' && platform !== 'CHATGPT') fail('LEAD_EVENT_FIELD_INVALID');
+    output.campaignPlatform = platform;
+  }
   for (const key of ['campaignCode', 'adCode'] as const) {
     const code = optionalText(payload[key], 80);
     if (code !== undefined) {

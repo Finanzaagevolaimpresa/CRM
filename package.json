@@ -7,7 +7,7 @@
     "test:marketing-preferences:r13": "node scripts/r13/run-local-tests.mjs",
     "test:mobile-nav": "playwright test --config tests/mobile-nav/playwright.config.ts",
     "test:build-context-guard": "node --test tests/vnx00a-build-context-guard.test.mjs",
-    "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
+    "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php && php tests/php/vae-campaign-attribution.test.php",
     "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",
     "package:wordpress-connector": "node tools/package-vnx02-wordpress-connector.mjs",
     "lint": "eslint . --max-warnings 0",

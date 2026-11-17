@@ -46,7 +46,7 @@ async function main() {
   for (let i = 1; i <= 3; i += 1) {
     const event = createLeadSubmittedEventV1({ ...base, eventId: randomUUID(), businessCorrelationId: randomUUID(),
       source: { ...base.source, formCode: 'M3_BROWSER_SYNTHETIC', submissionId: `M3-BROWSER-${i}` },
-      payload: { ...base.payload, campaignCode: `M3-CAMPAIGN-${i}`, adCode: `AD-${i}`, message: `Richiesta sintetica M3 numero ${i}` } });
+      payload: { ...base.payload, ...(i === 1 ? { campaignPlatform: 'META' as const } : i === 2 ? { campaignPlatform: 'CHATGPT' as const } : {}), campaignCode: `M3-CAMPAIGN-${i}`, adCode: `AD-${i}`, message: `Richiesta sintetica M3 numero ${i}` } });
     const receipt = await admitBusinessInboxEvent(db, event);
     assert.equal((await admitBusinessInboxEvent(db, event)).outcome, 'REPLAY');
     const lease = await claimBusinessQueueEvent(db, { queueKind: 'INBOX', leaseOwnerId: randomUUID(), inboxEventIds: [receipt.inboxEventId] });
