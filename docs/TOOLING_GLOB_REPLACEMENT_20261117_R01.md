@@ -49,7 +49,11 @@ resolver deliberately excludes that directory). It exercises actual TypeScript
 project discovery and parsing, two real import aliases, missing-import denial
 through the CRM ESLint configuration, directory links, exclusions, deterministic
 results, source-drift rejection and bounded repeated-extglob counterexamples.
-Windows and Linux CI run the same consumer checks. Optional
+Windows and Linux CI run the same consumer checks. The fresh fixture path is
+canonicalized with fs.realpathSync.native: Windows TEMP can contain ancestor
+casing that differs from the filesystem. The original import rule correctly
+rejects that mismatch. A reproduced before/after counterexample qualifies the
+fixture correction; a wrong-case import remains denied on both platforms. Optional
 FAI_TOOLING_GLOB_TRACE=1 emits stage timestamps to stderr for diagnosis.
 
 The preexisting genuine Next-rule counterproofs, minimatch parity checks, CSS

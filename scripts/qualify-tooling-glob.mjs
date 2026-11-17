@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -15,7 +15,9 @@ const packageFile = require.resolve('@typescript-eslint/typescript-estree/packag
 const parserRequire = createRequire(packageFile);
 const glob = parserRequire('tinyglobby');
 const cache = join(tmpdir(), 'fai-tooling-glob'); mkdirSync(cache, { recursive: true });
-const fixture = mkdtempSync(join(cache, 'synthetic-'));
+// Windows TEMP may have non-canonical ancestor casing; preserve the real rule,
+// and address the synthetic fixture by the filesystem's canonical path.
+const fixture = realpathSync.native(mkdtempSync(join(cache, 'synthetic-')));
 const slash = p => p.replaceAll('\\', '/');
 function put(name, contents = 'export const synthetic = 1;\n') {
   const path = join(fixture, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, contents);
@@ -99,6 +101,8 @@ assert.ok(!valid.messages.some(m => m.ruleId === 'import/no-unresolved'), JSON.s
 trace('eslint bad');
 const [invalid] = await lint.lintText('import "@local/missing";', { filePath: join(fixture, 'app/src/a.ts') });
 assert.ok(invalid.messages.some(m => m.ruleId === 'import/no-unresolved')); assertions++;
+const [wrongCase] = await lint.lintText('import "@local/B";', { filePath: join(fixture, 'app/src/a.ts') });
+assert.ok(wrongCase.messages.some(m => m.ruleId === 'import/no-unresolved')); assertions++;
 trace('bounded');
 const bounded = spawnSync(process.execPath, ['--input-type=module', '-e', `
   import assert from 'node:assert/strict';
