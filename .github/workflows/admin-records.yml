@@ -7,7 +7,7 @@ permissions: { contents: read }
 jobs:
   qualify:
     name: Admin records ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -54,6 +54,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
+      - name: Bind PostgreSQL clients to the isolated PostgreSQL 16 service
+        shell: bash
+        run: |
+          set -euo pipefail
+          pg_bin=/usr/lib/postgresql/16/bin
+          for tool in psql pg_dump pg_restore; do
+            test -x "$pg_bin/$tool"
+            "$pg_bin/$tool" --version | grep -E 'PostgreSQL\) 16\.'
+          done
+          echo "$pg_bin" >> "$GITHUB_PATH"
       - name: Bind source and prepare only the isolated database
         shell: bash
         run: |
