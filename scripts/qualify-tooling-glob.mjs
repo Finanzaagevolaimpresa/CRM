@@ -95,7 +95,7 @@ const lint = new ESLint({ cwd: fixture, overrideConfigFile: true, overrideConfig
 }] });
 trace('eslint good');
 const [valid] = await lint.lintText('import { synthetic } from "@local/b"; export const value = synthetic;', { filePath: join(fixture, 'app/src/a.ts') });
-assert.ok(!valid.messages.some(m => m.ruleId === 'import/no-unresolved')); assertions++;
+assert.ok(!valid.messages.some(m => m.ruleId === 'import/no-unresolved'), JSON.stringify(valid.messages)); assertions++;
 trace('eslint bad');
 const [invalid] = await lint.lintText('import "@local/missing";', { filePath: join(fixture, 'app/src/a.ts') });
 assert.ok(invalid.messages.some(m => m.ruleId === 'import/no-unresolved')); assertions++;
