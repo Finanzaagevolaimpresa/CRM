@@ -33,3 +33,7 @@ After attributed receipts exist, the pre-change CRM cannot parse their new field
 ## Tests
 
 PHP parser edge cases, organic byte identity, original mapping conflict, signed PHP/TypeScript interoperability, hash tampering and replay; guarded ephemeral PostgreSQL persistence and scope denial; synthetic browser Admin panel after reload and operator exclusion. Existing connector queue/retry/privacy tests, full unit, lint, typecheck and required CI remain gates. Live form submissions and real Admin inspection are separate acceptance evidence, not substituted by synthetic tests.
+
+## Dependency security prerequisite
+
+The existing CI scanner identified [GHSA-mfr8-8qww-v76h](https://github.com/vercel/next.js/security/advisories/GHSA-mfr8-8qww-v76h) in the previous Next.js 16.4.2 dependency. This candidate uses the patched 16.4.5 release and aligns eslint-config-next and the scoped lint-plugin override. The installed get-root-dirs consumer retains SHA256 886677432990a735e5ebdfb345ff1cbd40e264f9947a8432eeeb254b3a926bde. Its default-root contract, modified-consumer rejection, custom-root counterproofs and genuine lint rule are requalified. Scanner versions, inventory checks and failure thresholds remain unchanged.
