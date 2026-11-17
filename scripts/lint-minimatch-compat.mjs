@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 export function installLegacyMinimatchCall() {
-  if (require('minimatch/package.json').version !== '11.0.1') throw new Error('Requalify the pinned lint matcher');
+  if (require('minimatch/package.json').version !== '11.0.5') throw new Error('Requalify the pinned lint matcher');
   const id = require.resolve('minimatch');
   const current = require(id);
   if (typeof current === 'function') return;

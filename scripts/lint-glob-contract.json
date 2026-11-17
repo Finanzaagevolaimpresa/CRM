@@ -1,0 +1,51 @@
+{
+  "replacement": "glob@14.0.6",
+  "matcher": "minimatch@11.0.5",
+  "scope": "Canonical ESLint CommonJS consumers; no generic tinyglobby equivalence",
+  "consumers": [
+    {
+      "package": "@next/eslint-plugin-next",
+      "version": "16.4.5",
+      "request": "fast-glob",
+      "scanDirectory": "dist",
+      "importers": [
+        {
+          "path": "dist/utils/get-root-dirs.js",
+          "sha256": "886677432990a735e5ebdfb345ff1cbd40e264f9947a8432eeeb254b3a926bde"
+        }
+      ]
+    },
+    {
+      "package": "@typescript-eslint/typescript-estree",
+      "version": "8.66.0",
+      "request": "tinyglobby",
+      "scanDirectory": "dist",
+      "importers": [
+        {
+          "path": "dist/parseSettings/resolveProjectList.js",
+          "sha256": "da84438270411903b76bb14f2cf0d885af6498328d6f1382ab2cdfbdd4df91d6"
+        }
+      ]
+    },
+    {
+      "package": "eslint-import-resolver-typescript",
+      "version": "3.10.1",
+      "request": "tinyglobby",
+      "scanDirectory": "lib",
+      "importers": [
+        {
+          "path": "lib/index.cjs",
+          "sha256": "d345e1fa4a65609ef01140a3a4be6c545c158157bf60b0c9585fe8069403c193"
+        },
+        {
+          "path": "lib/index.es2020.mjs",
+          "sha256": "dc649b50ff71483e627e80a589512de12f688ee0a209593d4f8719b307833655"
+        },
+        {
+          "path": "lib/index.js",
+          "sha256": "69b5ee57f060cc4487bdf6485edc851ae1f18817b248bc66e2ad1a3dfc07680f"
+        }
+      ]
+    }
+  ]
+}

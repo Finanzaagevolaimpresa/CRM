@@ -6,18 +6,18 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The published replacement is intentionally qualified for this single-root CRM.
-// tinyglobby is NOT a general drop-in replacement for fast-glob's directory API.
+// The scoped adapter is NOT a general drop-in replacement for fast-glob's directory API.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(join(root, 'package.json'));
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-assert.equal(manifest.overrides?.['@next/eslint-plugin-next@16.4.5']?.['fast-glob'], 'npm:tinyglobby@0.2.17', 'The qualified scoped replacement override has changed.');
+assert.equal(manifest.overrides?.['@next/eslint-plugin-next@16.4.5']?.['fast-glob'], 'npm:glob@14.0.6', 'The qualified scoped replacement override has changed.');
 const pluginFile = require.resolve('@next/eslint-plugin-next/package.json');
 const pluginRequire = createRequire(pluginFile);
 const plugin = JSON.parse(readFileSync(pluginFile, 'utf8'));
 assert.equal(plugin.version, '16.4.5', 'Requalify the scoped glob replacement before upgrading the Next lint plugin.');
 const replacement = pluginRequire('fast-glob/package.json');
-assert.equal(replacement.name, 'tinyglobby', 'The old fast-glob implementation must not be installed for the Next lint plugin.');
-assert.equal(replacement.version, '0.2.17');
+assert.equal(replacement.name, 'glob', 'The old fast-glob implementation must not be installed for the Next lint plugin.');
+assert.equal(replacement.version, '14.0.6');
 
 const dist = join(dirname(pluginFile), 'dist');
 const consumers = [];
@@ -39,10 +39,10 @@ export function verifyConsumerSource(source = readFileSync(consumerFile)) {
 verifyConsumerSource();
 
 const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
-const forbidden = ['braces', 'micromatch', 'chokidar'];
+const forbidden = ['braces', 'micromatch', 'chokidar', 'picomatch', 'fdir'];
 for (const [path, metadata] of Object.entries(lock.packages)) {
   assert.ok(!forbidden.some(name => metadata.name === name || path.endsWith(`/node_modules/${name}`) || path === `node_modules/${name}`), `Vulnerable dependency path remains: ${path}`);
-  if (path.endsWith('/fast-glob')) assert.equal(metadata.name, 'tinyglobby', 'A genuine replacement, not a renamed vulnerable implementation, is required.');
+  if (path.endsWith('/fast-glob')) assert.equal(metadata.name, 'glob', 'A genuine replacement, not a renamed vulnerable implementation, is required.');
 }
 
 export const receipt = { status: 'PASS', nextPlugin: plugin.version, replacement: `${replacement.name}@${replacement.version}`, consumerSha256: consumerHash, rootMode: 'default-only', removedPackages: forbidden };

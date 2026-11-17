@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 test('the lock retains only the patched matcher and legacy lint calls use the same implementation', () => {
   const lock = JSON.parse(readFileSync('package-lock.json', 'utf8')) as { packages: Record<string, { version: string }> };
   const matchers = Object.entries(lock.packages).filter(([path]) => path.endsWith('/minimatch'));
-  assert.equal(matchers.length, 1); assert.equal(matchers[0][1].version, '11.0.1');
+  assert.equal(matchers.length, 1); assert.equal(matchers[0][1].version, '11.0.5');
   execFileSync(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import { createRequire } from 'node:module';
