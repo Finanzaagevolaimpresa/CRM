@@ -79,7 +79,7 @@ WORDPRESS_IMAGE='wordpress:7.1.3-php8.4-apache@sha256:c74a0947d65b4cf20071d4324e
 WP_CLI_SHA256=ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c
 mkdir "$runtime_dir/connector"
 node tools/package-vnx02-wordpress-connector.mjs --output "$runtime_dir/connector" >/dev/null
-VNX03_CONNECTOR_SHA256="$(sha256sum "$runtime_dir/connector/fai-secure-lead-connector-1.2.1.zip" | cut -d' ' -f1)"
+VNX03_CONNECTOR_SHA256="$(sha256sum "$runtime_dir/connector/fai-secure-lead-connector-1.3.0.zip" | cut -d' ' -f1)"
 export VNX03_WPFORMS_SHA256="$WPFORMS_SHA256" VNX03_WORDPRESS_IMAGE="$WORDPRESS_IMAGE"
 export VNX03_WP_CLI_SHA256="$WP_CLI_SHA256" VNX03_CONNECTOR_SHA256
 pro_stage_build_input
