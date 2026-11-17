@@ -15,7 +15,10 @@ def ref(path,kind):return {'path':str(path),'sha256':n05.sha(json.loads(path.rea
 def image(tag,c,t):
  raw=inspect('image',tag); return {'tag':tag,'id':raw['Id'],'oci_commit':c,'oci_tree':t}
 def build(tag,c,t,context,command='while :; do sleep 60; done',health='true',start_period='0s'):
- docker=(f'FROM alpine:3.20\nLABEL org.opencontainers.image.revision={c}\n'
+ # Keep the fixture's existing root identity explicit: newer OCI metadata can
+ # omit User while container inspect reports an empty string. Runtime equality
+ # stays strict; only these synthetic images declare their intended identity.
+ docker=(f'FROM alpine:3.20\nUSER 0:0\nLABEL org.opencontainers.image.revision={c}\n'
          f'LABEL it.finanzaagevolaimpresa.source-tree={t}\n'
          f'CMD {json.dumps(["sh","-c",command])}\n'
          f'HEALTHCHECK --interval=1s --timeout=1s --retries=2 --start-period={start_period} CMD {json.dumps(["sh","-c",health])}\n')

@@ -12,6 +12,7 @@ on:
       - 'scripts/*glob*'
       - 'scripts/lint-minimatch-compat.mjs'
       - 'tests/lint-minimatch-compat.test.ts'
+      - 'tests/tooling-glob-compat.test.ts'
       - 'scripts/qualify-tooling-css.mjs'
       - 'scripts/qualify-lock-inventory.ts'
       - 'scripts/npm-audit-gate.ts'
@@ -44,6 +45,8 @@ jobs:
       - run: node scripts/qualify-next-glob-guard.mjs
       - name: Qualify patched minimatch with the installed legacy lint rules
         run: node --import tsx --test tests/lint-minimatch-compat.test.ts
+      - name: Qualify published glob against the real parser and import resolver
+        run: node --import tsx --test tests/tooling-glob-compat.test.ts
       - name: Qualify actual alias and bundle inventory with the unchanged pinned OSV scanner
         if: runner.os == 'Linux'
         run: node --import tsx scripts/qualify-lock-inventory.ts

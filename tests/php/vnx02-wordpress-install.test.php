@@ -137,12 +137,12 @@ wp_install('VNX02 Synthetic Test', 'vnx02_synthetic_admin', 'admin@synthetic.inv
 wp_set_current_user(1);
 
 $zip = new ZipArchive();
-vnx02_install_assert($zip->open('/workspace/dist/fai-secure-lead-connector-1.2.1.zip') === true);
+vnx02_install_assert($zip->open('/workspace/dist/fai-secure-lead-connector-1.3.0.zip') === true);
 vnx02_install_assert($zip->extractTo(WP_PLUGIN_DIR));
 $zip->close();
 $plugin = 'fai-secure-lead-connector/fai-secure-lead-connector.php';
 $headers = get_plugin_data(WP_PLUGIN_DIR . '/' . $plugin, false, false);
-vnx02_install_assert($headers['Version'] === '1.2.1');
+vnx02_install_assert($headers['Version'] === '1.3.0');
 vnx02_install_assert(activate_plugin($plugin, '', false, false) === null);
 vnx02_install_assert(is_plugin_active($plugin));
 $queue = new FAI\VNX02\QueueStore(new FAI\VNX02\WordPressDatabase($wpdb));
@@ -154,6 +154,8 @@ vnx02_install_assert(!$queue->hasOutstanding());
 
 require_once __DIR__ . '/vnx02-bootstrap.php';
 $configuration = vnx02_synthetic_config();
+$configuration['forms'][4] = $configuration['forms'][900001];
+$configuration['forms'][4]['form_code'] = 'VAE_SYNTHETIC';
 $configuration['queue_key_file'] = '/tmp/vnx02-queue-key';
 $configuration['gateway_key_files']['synthetic-wordpress-v1'] = '/tmp/vnx02-gateway-key';
 file_put_contents('/tmp/vnx02-queue-key', base64_encode(str_repeat("\x22", 32)));
@@ -230,6 +232,28 @@ do_action('wpforms_process_complete', vnx02_synthetic_fields(), array(), array('
 vnx02_install_assert((int) $wpdb->get_var("SELECT COUNT(*) FROM {$queueTable}") === 1 && vnx02_cron_count() === 0);
 vnx02_install_assert(!$queue->hasOutstanding());
 echo "VNX02 WordPress resumed cron preserves identity, retry budget and terminal replay PASS\n";
+
+// Exercise the installed hook, encrypted queue and replay with the sanitized
+// WPForms context. Poisoned raw POST context must never replace entry_meta.
+foreach (array('meta' => 700004, 'chatgpt' => 700005) as $source => $entryId) {
+    $context = array('id' => 4, 'entry_meta' => array('page_url' => home_url('/valutazione/')
+        . '?utm_source=' . $source . '&utm_campaign=VAE-TEST&utm_content=AD-01'));
+    $raw = array('page_url' => home_url('/valutazione/?utm_source=other&utm_campaign=FORGED'));
+    do_action('wpforms_process_complete', vnx02_synthetic_fields(), $raw, $context, $entryId);
+    $key = FAI\VNX02\EventContract::create(vnx02_synthetic_fields(), 4, $entryId, $configuration['forms'][4])->businessKeyDigest;
+    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$queueTable} WHERE business_key_digest=%s", $key), ARRAY_A);
+    vnx02_install_assert(is_array($row) && $row['status'] === 'PENDING');
+    $body = FAI\VNX02\QueueCipher::decrypt($row['encrypted_body'], $row['business_key_digest'],
+        $row['body_hash'], $row['gateway_key_id'], str_repeat("\x22", 32));
+    $event = FAI\VNX02\EventContract::parseAndVerify($body)->event;
+    vnx02_install_assert($event['payload']['campaignPlatform'] === strtoupper($source));
+    vnx02_install_assert($event['payload']['campaignCode'] === 'VAE-TEST' && $event['payload']['adCode'] === 'AD-01');
+    vnx02_install_assert($event['source']['systemCode'] === 'WORDPRESS' && $event['privacy']['marketing']['decision'] === 'DENIED');
+    do_action('wpforms_process_complete', vnx02_synthetic_fields(), $raw, $context, $entryId);
+    vnx02_install_assert($wpdb->get_row($wpdb->prepare("SELECT * FROM {$queueTable} WHERE id=%s", $row['id']), ARRAY_A) === $row);
+}
+vnx02_install_assert((int) $wpdb->get_var("SELECT COUNT(*) FROM {$queueTable}") === 3);
+echo "VAE installed hook preserves sanitized attribution, encrypted queue, marketing denial and replay PASS\n";
 
 deactivate_plugins($plugin, false, false);
 vnx02_install_assert(!is_plugin_active($plugin));

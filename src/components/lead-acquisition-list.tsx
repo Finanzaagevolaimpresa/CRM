@@ -12,6 +12,7 @@ export function LeadAcquisitionList({ items }: { items: Awaited<ReturnType<typeo
         <p>Fonte: {row.event.source.systemCode} · modulo {row.event.source.formCode} · invio {row.event.source.submissionId}</p>
         <p>Evento {row.event.eventId} · richiesta del {formatDateTime(new Date(row.event.occurredAt))}</p>
         <p>Campagna: {row.event.payload.campaignCode ?? 'Non disponibile'} · annuncio: {row.event.payload.adCode ?? 'Non disponibile'}</p>
+        <p>Piattaforma dichiarata dal link: {row.event.payload.campaignPlatform === 'META' ? 'Meta' : row.event.payload.campaignPlatform === 'CHATGPT' ? 'ChatGPT' : 'Non disponibile'}</p>
         <p>Pagina: {row.event.payload.sourcePagePath ?? 'Non disponibile'}</p>
         <p>Servizio richiesto: {row.event.payload.serviceInterestText ?? row.event.catalogReference?.serviceCode ?? row.event.payload.interestText ?? 'Non specificato'}</p>
         {row.event.payload.message && <p className="whitespace-pre-wrap">{row.event.payload.message}</p>}

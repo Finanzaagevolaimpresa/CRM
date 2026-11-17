@@ -34,7 +34,7 @@ const legacyPaths = [
   'src/lib/admin-role-profile-contract.ts', 'src/lib/admin-role-profile-store.ts',
   'src/lib/admin-user-command-contract.ts', 'src/lib/admin-user-commands.ts', 'src/lib/user-actions.ts',
   'src/components/admin-role-profile-account.tsx', 'src/app/settings/users/page.tsx',
-  'package.json', 'package-lock.json', 'next.config.ts', 'eslint.config.mjs', 'scripts/lint-minimatch-compat.mjs',
+  'package.json', 'package-lock.json', 'next.config.ts', 'eslint.config.mjs', 'scripts/lint-minimatch-compat.mjs', 'scripts/lint-glob-compat.mjs', 'scripts/lint-glob-contract.json',
   'src/lib/private-document-versions.ts', 'src/lib/technical-document-acquisition-persistence.ts',
   'src/lib/technical-document-acquired-access.ts', 'src/lib/selective-client-documents.ts',
   'src/lib/admin-practice-formalization-store.ts', 'src/lib/admin-operational-link-contract.ts',

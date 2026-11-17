@@ -1,9 +1,11 @@
 import { defineConfig, globalIgnores } from "eslint/config";
+import { installToolingGlobCompatibility } from "./scripts/lint-glob-compat.mjs";
 import { installLegacyMinimatchCall } from "./scripts/lint-minimatch-compat.mjs";
 
 // Legacy lint plugins still call the CommonJS export. All matching is performed
 // by the patched minimatch release; no vulnerable matcher is retained.
 installLegacyMinimatchCall();
+installToolingGlobCompatibility();
 const { default: nextVitals } = await import("eslint-config-next/core-web-vitals");
 const { default: nextTypeScript } = await import("eslint-config-next/typescript");
 

@@ -9,6 +9,7 @@ $pluginRoot = $vnx02FixturePluginRoot ?? dirname(__DIR__, 2) . '/integrations/wo
 foreach (array(
     'class-connector-error.php',
     'class-runtime-requirements.php',
+    'class-vae-campaign-attribution.php',
     'class-event-contract.php',
     'class-connector-config.php',
     'class-secret-store.php',

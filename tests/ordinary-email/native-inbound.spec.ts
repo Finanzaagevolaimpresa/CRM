@@ -63,9 +63,33 @@ test('native received reply becomes a separately approved draft with current sco
   expect(downloaded.headers()['x-content-type-options']).toBe('nosniff');
   expect(downloaded.headers()['cache-control']).toBe('private, no-store');
   expect(downloaded.headers()['content-security-policy']).toBe("sandbox; default-src 'none'");
-  const actualDownload=reader.waitForEvent('download');
+  // Preserve bounded synthetic diagnostics if the browser cannot start the
+  // download. A correct direct HTTP response does not replace the UI assertion.
+  const downloadResponses:Array<{status:number;type:string|null;length:string|null}>=[];
+  const downloadFailures:string[]=[];
+  reader.on('response',response=>{
+    if(new URL(response.url()).pathname===attachmentUrl && response.request().method()==='POST') {
+      const headers=response.headers();
+      downloadResponses.push({status:response.status(),type:headers['content-type']??null,length:headers['content-length']??null});
+    }
+  });
+  reader.on('requestfailed',request=>{
+    if(new URL(request.url()).pathname===attachmentUrl) downloadFailures.push(request.failure()?.errorText??'UNKNOWN');
+  });
+  const actualDownload=reader.waitForEvent('download').then(download=>({download}),()=>({download:null}));
   await attachmentForm.getByRole('button',{name:'Scarica allegato 1',exact:true}).click();
-  const download=await actualDownload; expect(download.suggestedFilename()).toBe('ricevuto-sintetico.txt');
+  const {download}=await actualDownload;
+  if(!download) {
+    const diagnostic={synthetic:true,downloadResponses,downloadFailures,
+      alert:await attachmentForm.getByRole('alert').allTextContents(),
+      browser:await reader.evaluate(()=>({secure:window.isSecureContext,subtle:typeof window.crypto?.subtle,
+        createObjectURL:typeof URL.createObjectURL}))};
+    await writeFile(path.join(evidence,'native-inbound-download-diagnostic.json'),JSON.stringify(diagnostic,null,2));
+    await reader.screenshot({path:path.join(evidence,'native-inbound-download-failure.png'),fullPage:true});
+    console.log('ORDINARY_NATIVE_DOWNLOAD_DIAGNOSTIC',JSON.stringify(diagnostic));
+    throw new Error('NATIVE_ATTACHMENT_DOWNLOAD_NOT_OBSERVED');
+  }
+  expect(download.suggestedFilename()).toBe('ricevuto-sintetico.txt');
   const chunks:Buffer[]=[]; for await(const chunk of (await download.createReadStream())!) chunks.push(Buffer.from(chunk));
   expect(Buffer.concat(chunks)).toEqual(f.attachmentBytes);
   expect(await db.document.count({where:{clientId:f.client.id}})).toBe(1);

@@ -6,7 +6,7 @@ namespace FAI\VNX02;
 
 final class Plugin
 {
-    public const VERSION = '1.2.1';
+    public const VERSION = '1.3.0';
     public const CRON_HOOK = 'fai_vnx02_secure_lead_queue';
     public const CAPTURE_ERROR_MESSAGE = 'Non è stato possibile confermare la ricezione della richiesta. Verifica i dati e riprova, oppure contatta FAI.';
     /** @var array<int, true> Request-local failures; never persist submitted fields here. */
@@ -85,7 +85,12 @@ final class Plugin
                 $fields,
                 (int) $formId,
                 $entryId,
-                $formConfig
+                $formConfig,
+                null,
+                null,
+                isset($formData['entry_meta']['page_url']) && is_string($formData['entry_meta']['page_url'])
+                    ? $formData['entry_meta']['page_url'] : null,
+                (int) $formId === 4 && function_exists('home_url') ? home_url('/') : null
             );
             $queueSecret = SecretStore::readKey($config->queueKeyFile, ABSPATH);
             try {

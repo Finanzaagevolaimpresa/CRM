@@ -30,6 +30,8 @@ const phpProbe = spawnSync(phpBinary, ['-r', 'echo PHP_VERSION;'], {
 const phpAvailable = phpProbe.status === 0;
 // Local offline Docker runs can supply the output of the same PHP fixture.
 const offlinePhpFixture = process.env.VNX02_PHP_FIXTURE_JSON;
+const offlineExtraFixtures = process.env.VNX02_EXTRA_FIXTURES_JSON
+  ? JSON.parse(process.env.VNX02_EXTRA_FIXTURES_JSON) as Record<string, unknown> : {};
 
 function filesBelow(directory: string): string[] {
   return readdirSync(directory).flatMap((name) => {
@@ -88,9 +90,9 @@ test('VNX-02 PHP fixture is accepted byte-for-byte by N10 and N12 TypeScript', {
 });
 
 test('M3 PHP campaign fields remain byte-identical at the N12 gateway boundary', {
-  skip: phpAvailable ? false : 'PHP runtime unavailable; the dedicated CI PHP gate remains mandatory.',
+  skip: phpAvailable || offlineExtraFixtures.campaign ? false : 'PHP runtime unavailable; the dedicated CI PHP gate remains mandatory.',
 }, () => {
-  const execution = spawnSync(phpBinary, ['tests/php/vnx02-cross-language-fixture.php', 'campaign'], {
+  const execution = offlineExtraFixtures.campaign ? { status: 0, stdout: JSON.stringify(offlineExtraFixtures.campaign), stderr: '' } : spawnSync(phpBinary, ['tests/php/vnx02-cross-language-fixture.php', 'campaign'], {
     cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32_768,
   });
   assert.equal(execution.status, 0, execution.stderr);
@@ -105,6 +107,34 @@ test('M3 PHP campaign fields remain byte-identical at the N12 gateway boundary',
   assert.equal(createSecureLeadGatewaySignature(Buffer.from('11'.repeat(32), 'hex'), signedBytes), fixture.signature);
 });
 
+for (const platform of ['META', 'CHATGPT'] as const) {
+  const variant = 'vae-' + platform.toLowerCase();
+  test('VAE ' + platform + ' PHP event and HMAC verify at the CRM boundary', {
+    skip: phpAvailable || offlineExtraFixtures[variant] ? false : 'PHP runtime unavailable; dedicated CI PHP gate mandatory.',
+  }, () => {
+    const execution = offlineExtraFixtures[variant]
+      ? { status: 0, stdout: JSON.stringify(offlineExtraFixtures[variant]), stderr: '' }
+      : spawnSync(phpBinary, ['tests/php/vnx02-cross-language-fixture.php', variant], {
+        cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32_768,
+      });
+    assert.equal(execution.status, 0, execution.stderr);
+    const fixture = JSON.parse(execution.stdout);
+    const bytes = Buffer.from(fixture.body, 'utf8');
+    const event = parseCanonicalSecureLeadGatewayEnvelope(bytes);
+    assert.equal(canonicalJson(event), fixture.body);
+    assert.equal(event.source.systemCode, 'WORDPRESS');
+    assert.equal(event.source.submissionId, 'WPFORM:4:ENTRY:700001');
+    assert.equal(event.payload.campaignPlatform, platform);
+    assert.equal(event.payload.campaignCode, 'VAE-TEST');
+    assert.equal(event.payload.adCode, 'AD-01');
+    assert.equal(event.privacy.marketing.decision, 'DENIED');
+    assert.equal(event.idempotency.keyDigest, fixture.businessKeyDigest);
+    assert.equal(event.idempotency.payloadHash, fixture.payloadHash);
+    const signed = createSecureLeadGatewaySignedBytes(fixture, bytes);
+    assert.equal(createSecureLeadGatewaySignature(Buffer.from('11'.repeat(32), 'hex'), signed), fixture.signature);
+  });
+}
+
 test('VNX-02 is an isolated installable plugin with no browser or CRM runtime surface', () => {
   const files = filesBelow(pluginRoot);
   const relative = files.map((path) => path.slice(pluginRoot.length + 1).replaceAll('\\', '/')).sort();
@@ -118,7 +148,7 @@ test('VNX-02 is an isolated installable plugin with no browser or CRM runtime su
     .map((path) => readFileSync(path, 'utf8'))
     .join('\n');
   assert.match(source, /Plugin Name: FAI Secure Lead Connector/u);
-  assert.match(source, /Version: 1\.2\.1/u);
+  assert.match(source, /Version: 1\.3\.0/u);
   assert.match(source, /wpforms_process_complete/u);
   assert.match(source, /FAI_VNX02_CONNECTOR_CONFIG/u);
   assert.match(source, /enabled' => false/u);
@@ -175,7 +205,7 @@ test('VNX-02 packaging creates one deterministic installable ZIP without key mat
       'tools/package-vnx02-wordpress-connector.mjs', '--output', output,
     ], { cwd: root, encoding: 'utf8', windowsHide: true });
     assert.equal(first.status, 0, first.stderr || 'First packaging run failed.');
-    const artifactPath = join(output, 'fai-secure-lead-connector-1.2.1.zip');
+    const artifactPath = join(output, 'fai-secure-lead-connector-1.3.0.zip');
     const firstBytes = readFileSync(artifactPath);
     assert.equal(firstBytes.readUInt32LE(0), 0x04034b50);
     const firstDigest = createHash('sha256').update(firstBytes).digest('hex');

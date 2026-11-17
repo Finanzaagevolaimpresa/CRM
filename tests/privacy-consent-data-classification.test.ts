@@ -45,7 +45,7 @@ const leadBusinessEventFields = [
   'catalogReference.serviceVersion', 'payload.firstName', 'payload.lastName',
   'payload.companyName', 'payload.email', 'payload.phone', 'payload.city', 'payload.region',
   'payload.interestText', 'payload.serviceInterestText', 'payload.message',
-  'payload.sourcePagePath', 'payload.campaignCode', 'payload.adCode', 'payload.requestedAmount.currency',
+  'payload.sourcePagePath', 'payload.campaignPlatform', 'payload.campaignCode', 'payload.adCode', 'payload.requestedAmount.currency',
   'payload.requestedAmount.minorUnits', 'idempotency.canonicalizationVersion',
   'idempotency.keyDigest', 'idempotency.payloadHash',
 ] as const;
@@ -119,6 +119,8 @@ test('classification catalog v1 covers the complete lead contract and denies unk
     [...leadBusinessEventFields].sort(),
   );
   assert.equal(dataClassificationCatalog.external_ai_payload_v1.context.classification, 'CONFIDENTIAL');
+  assert.deepEqual(dataClassificationCatalog.lead_business_event_v1['payload.campaignPlatform'],
+    dataClassificationCatalog.lead_business_event_v1['payload.campaignCode']);
   assert.deepEqual(dataClassificationCatalog.website_lead_intake_v2.marketingAccepted, {
     classification: 'PERSONAL', purposeCode: 'DIRECT_MARKETING', legalBasisCode: 'CONSENT',
   });

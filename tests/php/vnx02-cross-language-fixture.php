@@ -10,6 +10,9 @@ require_once __DIR__ . '/vnx02-bootstrap.php';
 
 $configuration = vnx02_synthetic_config();
 $fields = vnx02_synthetic_fields();
+$vae = in_array($argv[1] ?? '', array('vae-meta', 'vae-chatgpt'), true);
+$site = 'https://intake.synthetic.invalid/';
+$page = $vae ? $site . 'valutazione/?utm_source=' . substr($argv[1], 4) . '&utm_campaign=VAE-TEST&utm_content=AD-01' : null;
 if (($argv[1] ?? '') === 'campaign') {
     $configuration['forms'][900001]['field_map']['campaignCode'] = 15;
     $configuration['forms'][900001]['field_map']['adCode'] = 16;
@@ -22,11 +25,13 @@ $fields[5]['value'] = "+39\u{FEFF}333\u{00A0}000\t0010";
 $fields[10]['value'] = '90071992547409,91';
 $envelope = EventContract::create(
     $fields,
-    900001,
+    $vae ? 4 : 900001,
     700001,
     $config->form(900001),
     new DateTimeImmutable('2026-08-21T12:00:00.000Z'),
-    vnx02_deterministic_random()
+    vnx02_deterministic_random(),
+    $page,
+    $vae ? $site : null
 );
 $keyId = 'synthetic-wordpress-v1';
 $timestamp = '1787313600';

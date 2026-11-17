@@ -20,10 +20,10 @@ async function authority(tx: Prisma.TransactionClient, actor: Actor, adminOnly: 
   return { ...fresh, ...await loadSelectiveProjectScope(tx, actor.userId) };
 }
 
-export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input: { page?: string; leadId?: string; queue?: string }) {
+export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input: { page?: string; leadId?: string; queue?: string }, adminOnly = false) {
   const page = parseCoreQueryPage(input.page);
   return db.$transaction(async (tx) => {
-    const fresh = await authority(tx, actor, !input.leadId);
+    const fresh = await authority(tx, actor, adminOnly || !input.leadId);
     if (input.leadId) {
       const rows = await tx.$queryRaw<Array<{ id: string; assignedToId: string | null }>>(Prisma.sql`
         SELECT id, "assignedToId" FROM "Lead" WHERE id=${input.leadId} AND "deletedAt" IS NULL FOR SHARE`);
@@ -64,6 +64,20 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
           : row.state === 'PROCESSED' ? null : row.lastFailureCode ?? row.terminalReasonCode };
     }), page);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 8_000, maxWait: 2_000 });
+}
+
+/** Fresh Admin admission and signed receipt verification for the embedded lead panel. */
+export async function readAdminLeadAttribution(db: PrismaClient, actor: Actor, leadId: string) {
+  const page = await readLeadAcquisitions(db, actor, { leadId }, true);
+  return page.items.map((row) => ({
+    id: row.id, createdAt: row.createdAt, verified: row.verified,
+    event: row.event ? {
+      source: row.event.source,
+      campaignPlatform: row.event.payload.campaignPlatform ?? null,
+      campaignCode: row.event.payload.campaignCode ?? null,
+      adCode: row.event.payload.adCode ?? null,
+    } : null,
+  }));
 }
 
 export async function readLeadAcquisitionSummary(db: PrismaClient, actor: Actor) {

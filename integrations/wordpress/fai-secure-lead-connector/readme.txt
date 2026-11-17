@@ -3,7 +3,7 @@ Contributors: fai
 Tags: wpforms, crm, webhook
 Requires at least: 6.5
 Requires PHP: 8.1
-Stable tag: 1.2.1
+Stable tag: 1.3.0
 
 Server-side, fail-closed WPForms producer for fai.lead-event.v1 and the FAI N12 gateway.
 
@@ -118,3 +118,10 @@ single scheduled hook. Deactivation does not drop the queue table, erase keys, o
 Rollback is the same disable/deactivate sequence followed by restoring the previously approved plugin
 artifact. This package intentionally has no uninstall deletion path; destructive cleanup requires a
 separate reviewed action.
+
+Version 1.3.0 adds optional form-4 VAE campaign attribution from the sanitized
+WPForms entry_meta.page_url at the configured HTTPS home origin. utm_source maps
+to META/CHATGPT campaignPlatform; utm_campaign and utm_content map to validated
+campaignCode and adCode. Missing/invalid optional values do not prevent organic
+intake. Codes remain unverified link declarations. Deploy the compatible CRM
+parser first; preserve queue, signatures, privacy decisions and replay identity.

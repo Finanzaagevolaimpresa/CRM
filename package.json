@@ -7,7 +7,7 @@
     "test:marketing-preferences:r13": "node scripts/r13/run-local-tests.mjs",
     "test:mobile-nav": "playwright test --config tests/mobile-nav/playwright.config.ts",
     "test:build-context-guard": "node --test tests/vnx00a-build-context-guard.test.mjs",
-    "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
+    "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php && php tests/php/vae-campaign-attribution.test.php",
     "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",
     "package:wordpress-connector": "node tools/package-vnx02-wordpress-connector.mjs",
     "lint": "eslint . --max-warnings 0",
@@ -31,7 +31,7 @@
   "dependencies": {
     "@prisma/client": "5.22.0",
     "bcryptjs": "^2.4.3",
-    "next": "16.4.2",
+    "next": "16.4.5",
     "postal-mime": "4.0.8",
     "prisma": "5.22.0",
     "react": "^19.0.0",
@@ -46,7 +46,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.0.0",
-    "eslint-config-next": "16.4.2",
+    "eslint-config-next": "16.4.5",
     "postcss": "^8.5.23",
     "tailwindcss": "4.3.3",
     "typescript": "^5.6.3",
@@ -56,9 +56,10 @@
     "seed": "tsx prisma/seed.ts"
   },
   "overrides": {
-    "minimatch": "11.0.1",
-    "@next/eslint-plugin-next@16.4.2": {
-      "fast-glob": "npm:tinyglobby@0.2.17"
-    }
+    "minimatch": "11.0.5",
+    "@next/eslint-plugin-next@16.4.5": {
+      "fast-glob": "npm:glob@14.0.6"
+    },
+    "tinyglobby": "npm:glob@14.0.6"
   }
 }

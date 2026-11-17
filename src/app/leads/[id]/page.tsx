@@ -1,4 +1,7 @@
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { LeadCampaignAttribution } from '@/components/lead-campaign-attribution';
+import { LeadAcquisitionDenied, readAdminLeadAttribution } from '@/lib/lead-acquisition';
+import { notFound } from 'next/navigation';
 import { SharedOperationalPanel } from '@/components/shared-operational-panel';
 import { mayManageLeadSharing } from '@/lib/selective-lead-access';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
@@ -28,6 +31,10 @@ const money = (value: unknown) => `€ ${Number(value).toLocaleString('it-IT', {
   const lead = await prisma.lead.findFirst({where:{id,deletedAt:null,AND:[leadVisibilityWhere(session)]}});
   if(!lead || !canViewLead(session, lead)) return <PageHeader title="Lead non trovato" description="Il record richiesto non esiste o non è accessibile."/>;
   const mayShare = await mayManageLeadSharing(prisma, session);
+  const attribution = session.role === 'admin' ? await readAdminLeadAttribution(prisma, session, id).catch((error: unknown) => {
+    if (error instanceof LeadAcquisitionDenied) notFound();
+    throw error;
+  }) : null;
   const [users, client, offers, inboxItem] = await Promise.all([
     prisma.user.findMany({where:{active:true}, select:{id:true,name:true,role:true}}),
     readableLeadClient(prisma, session, lead.clientId),
@@ -48,6 +55,7 @@ const money = (value: unknown) => `€ ${Number(value).toLocaleString('it-IT', {
     ? await listN15SyntheticAssignmentsForLead(prisma, session, lead)
     : [];
   return <div className="lead-detail-page crm-space-y-6"><PageHeader title={`Lead — ${lead.companyName || `${lead.firstName} ${lead.lastName}`}`} description="Scheda commerciale con stato vendita, assegnazione, prossima azione, note, offerte e collegamento al cliente."/>
+    {attribution !== null && <LeadCampaignAttribution items={attribution} />}
     {lead.clientId && <Card title="Cliente già collegato">
       {client ? <div className="crm-space-y-2"><p>{client.displayName}</p>
         <SecondaryLink href={`/clients/${client.id}`}>Apri fascicolo cliente</SecondaryLink></div>
