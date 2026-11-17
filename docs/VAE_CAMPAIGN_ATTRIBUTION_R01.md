@@ -28,7 +28,7 @@ The embedded Admin panel reads the last bounded page of verified receipts linked
 4. Observe the natural acquisition cycle. Do not replay earlier submissions.
 5. Run only the separately authorized live synthetic acceptance cases and observe both the signed receipt and Admin lead.
 
-After attributed receipts exist, the pre-change CRM cannot parse their new field. Recovery must retain an application image that understands the extended contract; do not roll back to an incompatible parser or erase receipts. Reverting producer code can stop adding attribution while leaving already recorded requests intact.
+After attributed receipts exist, the pre-change CRM cannot parse their new field. Recovery must retain an application image that understands the extended contract; do not roll back to an incompatible parser or erase receipts. The producer worker also parses queued envelopes. Therefore the whole 1.2.1 connector must not be restored after attributed events enter its queue: that parser would reject them. Recovery retains the verified 1.3.0 connector and the compatible CRM parser, with no queue/receipt deletion. A producer fault requires scoped quiescence and reconciliation; restoring its verified 1.3.0 code must preserve pending work. A pre-change code backup is only a valid rollback before new-format events exist.
 
 ## Tests
 
