@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState, useSyncExternalStore } from 'react';
+import { verifiedOrdinaryAttachmentBytes } from '@/lib/ordinary-email-attachment-integrity';
 
 const subscribe=()=>()=>{};
 
@@ -14,11 +15,7 @@ export function OrdinaryEmailAttachmentDownload({ replyId, file, downloadName }:
       const data=new FormData(event.currentTarget);
       try {
         const response=await fetch(event.currentTarget.action,{method:'POST',body:data,cache:'no-store'});
-        if(!response.ok || response.headers.get('content-type')!=='application/octet-stream'
-          || response.headers.get('content-length')!==String(file.bytes)) throw new Error('UNAVAILABLE');
-        const bytes=await response.arrayBuffer();
-        const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(byte=>byte.toString(16).padStart(2,'0')).join('');
-        if(bytes.byteLength!==file.bytes||hash!==file.sha256)throw new Error('INTEGRITY');
+        const bytes=await verifiedOrdinaryAttachmentBytes(response,file);
         const url=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'})),link=document.createElement('a');
         link.href=url;link.download=downloadName;link.click();setTimeout(()=>URL.revokeObjectURL(url),30_000);
       }catch{setError('Download non riuscito. Aggiorna la pratica prima di riprovare.');}

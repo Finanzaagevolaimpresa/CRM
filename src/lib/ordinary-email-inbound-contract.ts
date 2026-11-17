@@ -14,7 +14,8 @@ export const inboundDescriptorSchema = z.object({
   authenticationReference: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
 }).strict();
 export type InboundDescriptor = z.infer<typeof inboundDescriptorSchema>;
-export const INBOUND_MIME_MAX_BYTES = 1024 * 1024;
+export { ORDINARY_ATTACHMENT_MAX_BYTES as INBOUND_MIME_MAX_BYTES } from './ordinary-email-attachment-integrity';
+import { ORDINARY_ATTACHMENT_MAX_BYTES as INBOUND_MIME_MAX_BYTES } from './ordinary-email-attachment-integrity';
 const privateMimeSchema = z.object({
   format: z.literal('RFC822_V1'),
   rawBase64: z.string().min(4).max(4 * Math.ceil(INBOUND_MIME_MAX_BYTES / 3)),
