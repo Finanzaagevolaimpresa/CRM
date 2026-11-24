@@ -13,6 +13,7 @@ import { extname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { canonicalJson } from '../src/lib/canonical-json';
 import { parseLeadSubmittedEventV1 } from '../src/lib/lead-event-contract';
+import { mapLeadSubmittedEventToLead } from '../src/lib/lead-projection';
 import {
   createSecureLeadGatewaySignature,
   createSecureLeadGatewaySignedBytes,
@@ -135,6 +136,50 @@ for (const platform of ['META', 'CHATGPT'] as const) {
   });
 }
 
+for (const variant of ['evaluation-existing', 'evaluation-planned', 'evaluation-legacy']) {
+  test('WPForms 4 signed receipt projects declared fields: ' + variant, {
+    skip: phpAvailable || offlineExtraFixtures[variant] ? false : 'PHP runtime unavailable; covered by the PHP CI job.',
+  }, () => {
+    const result = offlineExtraFixtures[variant]
+      ? { status: 0, stdout: JSON.stringify(offlineExtraFixtures[variant]), stderr: '' }
+      : spawnSync(phpBinary, ['tests/php/vnx02-cross-language-fixture.php', variant],
+        { cwd: root, encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    const fixture = JSON.parse(result.stdout);
+    const bytes = Buffer.from(fixture.body, 'utf8');
+    const event = parseCanonicalSecureLeadGatewayEnvelope(bytes);
+    assert.equal(canonicalJson(event), fixture.body);
+    assert.equal(createSecureLeadGatewaySignature(Buffer.from('11'.repeat(32), 'hex'),
+      createSecureLeadGatewaySignedBytes(fixture, bytes)), fixture.signature);
+    assert.equal(event.privacy.marketing.decision, 'DENIED');
+    const projected = mapLeadSubmittedEventToLead(event);
+    const description = 'Descrizione originale.\nSeconda riga.';
+    assert.equal(event.payload.message, description);
+    assert.equal(projected.interest, 'Servizio di prova');
+    assert.equal(projected.status, 'nuovo');
+    if (variant === 'evaluation-legacy') {
+      assert.equal(projected.notes, description);
+      assert.equal(projected.city, null);
+      assert.equal(projected.province, null);
+      assert.equal(event.payload.businessStatus, undefined);
+      assert.equal(event.payload.applicantAge, undefined);
+      assert.equal(event.payload.sourcePagePath, undefined);
+      return;
+    }
+    const existing = variant === 'evaluation-existing';
+    assert.equal(projected.city, 'Comune sintetico');
+    assert.equal(projected.province, 'Provincia sintetica');
+    assert.equal(event.payload.businessStatus, existing ? 'Già costituita' : 'Da costituire');
+    assert.equal(event.payload.applicantAge, '39');
+    assert.equal(event.payload.legalForm, existing ? 'Forma di prova' : undefined);
+    assert.equal(event.payload.sourcePagePath, existing ? '/valutazione/' : undefined);
+    assert.equal(event.payload.campaignCode, existing ? 'TEST-4' : undefined);
+    assert.equal(event.payload.campaignPlatform, existing ? 'META' : undefined);
+    assert.equal(projected.notes, description + '\n\nStato impresa dichiarato: ' + event.payload.businessStatus
+      + (existing ? '\nForma giuridica dichiarata: Forma di prova' : '') + '\nEtà dichiarata del richiedente o referente: 39');
+  });
+}
+
 test('VNX-02 is an isolated installable plugin with no browser or CRM runtime surface', () => {
   const files = filesBelow(pluginRoot);
   const relative = files.map((path) => path.slice(pluginRoot.length + 1).replaceAll('\\', '/')).sort();
@@ -148,7 +193,7 @@ test('VNX-02 is an isolated installable plugin with no browser or CRM runtime su
     .map((path) => readFileSync(path, 'utf8'))
     .join('\n');
   assert.match(source, /Plugin Name: FAI Secure Lead Connector/u);
-  assert.match(source, /Version: 1\.3\.0/u);
+  assert.match(source, /Version: 1\.4\.0/u);
   assert.match(source, /wpforms_process_complete/u);
   assert.match(source, /FAI_VNX02_CONNECTOR_CONFIG/u);
   assert.match(source, /enabled' => false/u);
@@ -205,7 +250,7 @@ test('VNX-02 packaging creates one deterministic installable ZIP without key mat
       'tools/package-vnx02-wordpress-connector.mjs', '--output', output,
     ], { cwd: root, encoding: 'utf8', windowsHide: true });
     assert.equal(first.status, 0, first.stderr || 'First packaging run failed.');
-    const artifactPath = join(output, 'fai-secure-lead-connector-1.3.0.zip');
+    const artifactPath = join(output, 'fai-secure-lead-connector-1.4.0.zip');
     const firstBytes = readFileSync(artifactPath);
     assert.equal(firstBytes.readUInt32LE(0), 0x04034b50);
     const firstDigest = createHash('sha256').update(firstBytes).digest('hex');

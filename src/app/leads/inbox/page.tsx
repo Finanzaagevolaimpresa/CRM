@@ -22,6 +22,7 @@ import {
   toCoreQueryPage,
 } from '@/lib/core-query-policy';
 import { prisma } from '@/lib/prisma';
+import { openLeadDuplicateReviewWhere } from '@/lib/lead-duplicate-review';
 import { privilegedAccessReadiness } from '@/lib/privileged-access';
 
 const queues = ['open', 'unassigned', 'mine', 'due', 'closed'] as const;
@@ -66,7 +67,8 @@ function queueValue(value: string | undefined): Queue {
     where.slaCycles = { some: { closedAt: null, firstResponseAt: null, dueAt: { lte: dueThreshold } } };
   }
 
-  const [rows, userRows, readiness] = await Promise.all([
+  const canReview = hasPermission(session, 'lead.duplicate.resolve');
+  const [rows, userRows, readiness, reviewCount] = await Promise.all([
     prisma.commercialLeadInboxItem.findMany({
       where,
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
@@ -84,6 +86,7 @@ function queueValue(value: string | undefined): Queue {
       select: { id: true, name: true },
     }),
     privilegedAccessReadiness(session),
+    canReview ? prisma.leadDuplicateCase.count({ where: openLeadDuplicateReviewWhere(session.userId) }) : null,
   ]);
   const page = toCoreQueryPage(rows, pageNumber);
   const users = new Map(userRows.map((user) => [user.id, user.name]));
@@ -96,9 +99,11 @@ function queueValue(value: string | undefined): Queue {
     <AdminRecordShortcut session={session} model="CommercialLeadSlaPolicyVersion" />
     <div className="flex flex-wrap gap-3">
       <SecondaryLink href="/leads">← Pipeline</SecondaryLink>
+      {reviewCount !== null && <SecondaryLink href="/leads/duplicates">Richieste da verificare ({reviewCount})</SecondaryLink>}
       {queues.map((queue) => <SecondaryLink key={queue} href={`/leads/inbox?queue=${queue}`}>{queue}</SecondaryLink>)}
     </div>
     {params.lead && <SecondaryLink href="/leads/inbox">Mostra tutti i lead della coda</SecondaryLink>}
+    {!canReview && <p className="text-sm text-slate-600">Le richieste con identità da verificare entrano in coda dopo la decisione di un operatore abilitato.</p>}
     {assignmentAuthority && <Card title="Assegnazione del referente commerciale">
       {canManage ? <p>Conferma personale attiva. Scegli il referente nella scheda del lead e premi Assegna. L’assegnazione non registra una risposta e non converte il lead.</p>
         : readiness.mode === 'enforced' && readiness.keyReady ? <div className="crm-space-y-3">

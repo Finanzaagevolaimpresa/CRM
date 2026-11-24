@@ -89,6 +89,10 @@ final class EventContract
         'email' => 254,
         'phone' => 100,
         'city' => 1000,
+        'province' => 1000,
+        'businessStatus' => 1000,
+        'legalForm' => 1000,
+        'applicantAge' => 100,
         'region' => 1000,
         'interestText' => 1000,
         'serviceInterestText' => 1000,
@@ -149,7 +153,12 @@ final class EventContract
             $formConfig['field_map'] ?? null,
             $formConfig['requested_amount_mode'] ?? null
         );
-        foreach (VaeCampaignAttribution::fromPageUrl($formId, $sanitizedPageUrl, $siteUrl) as $name => $value) {
+        $evaluation = $formId === 4 && $source['formCode'] === 'FAI_GENERAL_REQUEST'
+            && $source['formVersion'] === 'public-intake-2026-10-r01';
+        if ($evaluation) {
+            $payload = self::withEvaluationFields($payload, $fields);
+        }
+        foreach (VaeCampaignAttribution::fromPageUrl($formId, $sanitizedPageUrl, $siteUrl, $evaluation) as $name => $value) {
             if (isset($payload[$name]) && $payload[$name] !== $value) {
                 throw new ConnectorException(ConnectorException::FORM_MAPPING_INVALID);
             }
@@ -563,6 +572,28 @@ final class EventContract
         return $field[$expectedPart]; // Sanitized WPForms properties, not the raw POST or a split full name.
     }
 
+    /** Capture only the public evaluation profile from WPForms' validated submission. */
+    private static function withEvaluationFields(array $payload, array $fields): array
+    {
+        $mapping = array('city' => 9, 'province' => 10, 'businessStatus' => 11, 'legalForm' => 12, 'applicantAge' => 13);
+        foreach ($mapping as $name => $id) {
+            if (!array_key_exists($id, $fields)) {
+                continue;
+            }
+            if ($name === 'legalForm' && ($payload['businessStatus'] ?? null) !== 'Già costituita') {
+                continue;
+            }
+            $value = self::optionalText(self::fieldValue($fields, $id, false), self::PAYLOAD_FIELDS[$name]);
+            if ($value !== null) {
+                if (isset($payload[$name]) && $payload[$name] !== $value) {
+                    throw new ConnectorException(ConnectorException::FORM_MAPPING_INVALID);
+                }
+                $payload[$name] = $value;
+            }
+        }
+        return $payload;
+    }
+
     private static function fieldValue(array $fields, mixed $fieldId, bool $privacy): string
     {
         if (!is_int($fieldId) || $fieldId < 1 || !array_key_exists($fieldId, $fields)) {
@@ -743,6 +774,9 @@ final class EventContract
      */
     private static function normalizePayload(array $payload): array
     {
+        if (isset($payload['legalForm']) && ($payload['businessStatus'] ?? null) !== 'Già costituita') {
+            throw new ConnectorException(ConnectorException::LEAD_EVENT_INVALID);
+        }
         if (isset($payload['email'])) {
             $email = (string) $payload['email'];
             if (

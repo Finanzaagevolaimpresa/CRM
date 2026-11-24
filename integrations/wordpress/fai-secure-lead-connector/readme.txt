@@ -3,7 +3,7 @@ Contributors: fai
 Tags: wpforms, crm, webhook
 Requires at least: 6.5
 Requires PHP: 8.1
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 
 Server-side, fail-closed WPForms producer for fai.lead-event.v1 and the FAI N12 gateway.
 
@@ -125,3 +125,12 @@ to META/CHATGPT campaignPlatform; utm_campaign and utm_content map to validated
 campaignCode and adCode. Missing/invalid optional values do not prevent organic
 intake. Codes remain unverified link declarations. Deploy the compatible CRM
 parser first; preserve queue, signatures, privacy decisions and replay identity.
+
+Version 1.4.0 captures the public evaluation fields for WPForms 4, FAI_GENERAL_REQUEST,
+public-intake-2026-10-r01. Fields 9 and 10 supply city and province, 11 the declared
+business status, 12 the legal form when 11 is “Già costituita”, and 13 the declared
+applicant age. Service and original description retain their configured mappings.
+The verified evaluation URL contributes only its path and admitted campaign values.
+Install the compatible CRM receiver before updating the producer. Existing signed
+envelopes keep their original representation. Once new-format receipts exist,
+any recovery image for the receiver and queue worker must support these fields.
