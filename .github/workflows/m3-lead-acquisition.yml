@@ -56,6 +56,7 @@ jobs:
       - name: Verify WPForms 4 projection, duplicate review and receipt replay on PostgreSQL
         run: node --import tsx --test --test-name-pattern="WPForms 4 preserves the signed request" tests/db/lead-projection-normalization-manual-duplicate-resolution-db.test.ts
       - name: Qualify the new read views with Chromium
+        env: { COMMERCIAL_LEAD_INBOX_MODE: enforced }
         shell: bash
         run: |
           set -euo pipefail

@@ -31,6 +31,15 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   await admin.goto(`${app}/leads/acquisition`);
   await expect(admin.getByRole('heading', { name: 'Acquisizione lead', exact: true })).toBeVisible();
   await expect(admin.getByText('WORDPRESS / M3_BROWSER_SYNTHETIC', { exact: true })).toBeVisible();
+  for (const value of ['Comune dichiarato: Comune sintetico', 'Provincia dichiarata: Provincia sintetica',
+    'Stato impresa dichiarato: Già costituita', 'Forma giuridica dichiarata: Forma sintetica',
+    'Età dichiarata del richiedente o referente: 39', 'Valutazione sintetica da verificare']) {
+    await expect(admin.getByText(value, { exact: true })).toBeVisible();
+  }
+  await admin.getByRole('link', { name: 'Coda e assegnazioni', exact: true }).click();
+  await admin.getByRole('link', { name: 'Richieste da verificare (1)', exact: true }).click();
+  await expect(admin.getByRole('heading', { name: 'Revisione possibili duplicati', exact: true })).toBeVisible();
+  await admin.goto(`${app}/leads/acquisition`);
   await admin.getByRole('link', { name: 'Errori e retry' }).click();
   await expect(admin.getByRole('heading', { name: 'Tentativo successivo previsto', exact: true })).toBeVisible();
   await expect(admin.getByText('Richiesta sintetica M3 numero 3', { exact: true })).toBeVisible();
@@ -50,6 +59,10 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   await expect(admin.getByText(/M3-CAMPAIGN-1/)).toBeVisible();
   await expect(admin.getByText(/M3-CAMPAIGN-2/)).toBeVisible();
   await login(operator, 'm3-operator@invalid.test');
+  await operator.goto(`${app}/leads/inbox`);
+  await expect(operator.getByText('Le richieste con identità da verificare entrano in coda dopo la decisione di un operatore abilitato.', { exact: true })).toBeVisible();
+  await expect(operator.getByRole('link', { name: /Richieste da verificare/ })).toHaveCount(0);
+  await expect(operator.getByText('Valutazione sintetica da verificare', { exact: true })).toHaveCount(0);
   await operator.goto(`${app}/leads/${fixture.leadId}`);
   await expect(operator.getByRole('heading', { name: 'Attribuzione campagne', exact: true })).toHaveCount(0);
   await operator.goto(`${app}/leads/${fixture.leadId}/requests`);
@@ -65,6 +78,7 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   await expect(operator.getByText('Richiesta sintetica M3 numero 2', { exact: true })).toHaveCount(0);
   writeFileSync(join(evidence, 'browser-proof.json'), JSON.stringify({ status: 'PASS', synthetic: true,
     requestsPreserved: 2, retryVisible: true, replayDuplicated: false, reassignmentDenied: true,
-    adminOnlyGlobalView: true, attributionPanel: { platforms: ['META', 'CHATGPT'], reloadPersisted: true, adminOnly: true }, productionConnected: false }));
+    adminOnlyGlobalView: true, wpforms4: { declaredFieldsVisible: true, pendingReviewCount: 1, restrictedOperatorView: true },
+    attributionPanel: { platforms: ['META', 'CHATGPT'], reloadPersisted: true, adminOnly: true }, productionConnected: false }));
   await adminContext.close(); await operatorContext.close();
 });

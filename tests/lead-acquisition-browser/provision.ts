@@ -66,6 +66,18 @@ async function main() {
         selectedLeadId: leadId, reasonCode: 'M3_SYNTHETIC_NEW_REQUEST', actorUserId: admin.id, actorSessionId: session.id }, options);
     }
   }
+  const evaluation = createLeadSubmittedEventV1({ ...base, eventId: randomUUID(), businessCorrelationId: randomUUID(),
+    source: { ...base.source, formCode: 'FAI_GENERAL_REQUEST', formVersion: 'public-intake-2026-10-r01',
+      submissionId: 'WPFORM:4:ENTRY:24190' },
+    payload: { ...base.payload, city: 'Comune sintetico', province: 'Provincia sintetica', businessStatus: 'Già costituita',
+      legalForm: 'Forma sintetica', applicantAge: '39', message: 'Valutazione sintetica da verificare' } });
+  const pending = await admitBusinessInboxEvent(db, evaluation);
+  const lease = await claimBusinessQueueEvent(db, { queueKind: 'INBOX', leaseOwnerId: randomUUID(), inboxEventIds: [pending.inboxEventId] });
+  assert.ok(lease);
+  assert.equal((await projectClaimedLeadInboxEvent(db, lease, options)).result.state, 'REVIEW_REQUIRED');
+  await db.commercialLeadSlaPolicyVersion.create({
+    data: { version: 1, status: 'ACTIVE', responseTargetSeconds: 3600, createdById: admin.id },
+  });
   await db.$transaction((tx) => revokeInternalSession(tx, session.id, 'INTERNAL_SINGLE', admin.id));
   assert.equal(await db.internalSession.count({ where: { revokedAt: null } }), 0);
   writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, leadId, readerId: reader.id }));
