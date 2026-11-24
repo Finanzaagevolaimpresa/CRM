@@ -146,13 +146,13 @@ async function dismissSingleEvaluationNameMatch(
     const previousDigits = phone.canonicalValue.replace(/^(?:\+|00)/u, '');
     if (incomingDigits.endsWith(previousDigits) || previousDigits.endsWith(incomingDigits)) return null;
   }
-  if (lead.deletedAt) return 'TRASHED_NAME_ONLY';
   if (candidate.matchedSignalCodes[0] === 'COMPANY_NAME_EXACT_V1') {
     const name = payload.companyName?.normalize('NFC').trim().toLowerCase().replace(/\s+/gu, ' ');
     // Field 4 can also identify an existing company. Only whole generic labels qualify here.
     if (!name || !['progetto', 'nuovo progetto', 'progetto imprenditoriale', 'da costituire',
       'impresa da costituire', 'nuova impresa', 'nuova attività', 'startup', 'start up'].includes(name)) return null;
   }
+  if (lead.deletedAt) return 'TRASHED_NAME_ONLY';
   return email && isLeadEventEmail(email) && phone ? 'DISTINCT_CONTACTS_NAME_ONLY' : null;
 }
 

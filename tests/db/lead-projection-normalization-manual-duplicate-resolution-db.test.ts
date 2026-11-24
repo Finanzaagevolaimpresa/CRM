@@ -2104,7 +2104,7 @@ test('WPForms 4 preserves the signed request and classifies only a single weak n
     ['new', true], ['planned', true], ['different-contacts', true], ['same-person-name', true],
     ['trashed-name', true], ['strong', false], ['trashed-strong', false],
     ['missing-contact', false], ['national-equivalent', false], ['two-candidates', false],
-    ['two-weak-signals', false], ['specific-company', false], ['legacy', false],
+    ['two-weak-signals', false], ['specific-company', false], ['legacy', false], ['trashed-specific-company', false],
   ] as const;
   await withSyntheticActiveCommercialPolicy(async () => {
     for (const [index, [scenario, createsLead]] of cases.entries()) {
