@@ -53,6 +53,8 @@ jobs:
           psql 'postgresql://postgres:synthetic-m3-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           node --import tsx tests/lead-acquisition-browser/provision.ts
+      - name: Verify WPForms 4 projection, duplicate review and receipt replay on PostgreSQL
+        run: node --import tsx --test --test-name-pattern="WPForms 4 preserves the signed request" tests/db/lead-projection-normalization-manual-duplicate-resolution-db.test.ts
       - name: Qualify the new read views with Chromium
         shell: bash
         run: |

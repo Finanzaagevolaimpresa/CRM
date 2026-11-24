@@ -409,7 +409,7 @@ async function projectInTransaction(
         normalizationVersion: LEAD_NORMALIZATION_VERSION,
         state: result.state,
         candidateCount: result.candidateCount,
-        ...(dismissed && { dismissedWeakMatch: dismissed, matchedSignal: candidates[0].matchedSignalCodes[0] }),
+        ...(dismissed && { dismissalReasonCode: dismissed, matchedSignalCode: candidates[0].matchedSignalCodes[0] }),
         privacyEvidenceCount: evidence.count,
       },
     },

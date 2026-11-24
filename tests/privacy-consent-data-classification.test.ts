@@ -43,7 +43,8 @@ const leadBusinessEventFields = [
   'privacy.marketing.evidenceKind', 'privacy.marketing.decision',
   'catalogReference.catalogVersion', 'catalogReference.serviceCode',
   'catalogReference.serviceVersion', 'payload.firstName', 'payload.lastName',
-  'payload.companyName', 'payload.email', 'payload.phone', 'payload.city', 'payload.region',
+  'payload.companyName', 'payload.email', 'payload.phone', 'payload.city', 'payload.province', 'payload.region',
+  'payload.applicantAge', 'payload.businessStatus', 'payload.legalForm',
   'payload.interestText', 'payload.serviceInterestText', 'payload.message',
   'payload.sourcePagePath', 'payload.campaignPlatform', 'payload.campaignCode', 'payload.adCode', 'payload.requestedAmount.currency',
   'payload.requestedAmount.minorUnits', 'idempotency.canonicalizationVersion',
@@ -121,6 +122,11 @@ test('classification catalog v1 covers the complete lead contract and denies unk
   assert.equal(dataClassificationCatalog.external_ai_payload_v1.context.classification, 'CONFIDENTIAL');
   assert.deepEqual(dataClassificationCatalog.lead_business_event_v1['payload.campaignPlatform'],
     dataClassificationCatalog.lead_business_event_v1['payload.campaignCode']);
+  const fields = dataClassificationCatalog.lead_business_event_v1;
+  assert.deepEqual(fields['payload.province'], fields['payload.city']);
+  assert.deepEqual(fields['payload.applicantAge'], fields['payload.city']);
+  assert.deepEqual(fields['payload.businessStatus'], fields['payload.interestText']);
+  assert.deepEqual(fields['payload.legalForm'], fields['payload.interestText']);
   assert.deepEqual(dataClassificationCatalog.website_lead_intake_v2.marketingAccepted, {
     classification: 'PERSONAL', purposeCode: 'DIRECT_MARKETING', legalBasisCode: 'CONSENT',
   });

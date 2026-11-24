@@ -35,6 +35,7 @@ import {
   resolveLeadDuplicateCase,
 } from '../../src/lib/lead-duplicate-resolution';
 import {
+  LEAD_PROJECTION_MANIFEST,
   LeadProjectionError,
   projectClaimedLeadInboxEvent,
   type LeadProjectionFaultPoint,
@@ -2166,8 +2167,22 @@ test('WPForms 4 preserves the signed request and classifies only a single weak n
         assert.equal(lead.city, payload.city);
         assert.equal(lead.province, payload.province);
         assert.equal(lead.interest, payload.serviceInterestText);
-        assert.ok(lead.notes?.startsWith(payload.message! + '\n\n'));
+        const declarations = [
+          'Stato impresa dichiarato: ' + status,
+          ...(status === 'Già costituita' ? ['Forma giuridica dichiarata: Forma sintetica'] : []),
+          'Età dichiarata del richiedente o referente: 39',
+        ];
+        assert.equal(lead.notes, payload.message + '\n\n' + declarations.join('\n'));
         assert.equal(lead.status, 'nuovo');
+        if (previous.length > 0) {
+          const audit = await client().auditLog.findFirstOrThrow({
+            where: { event: LEAD_PROJECTION_MANIFEST.auditEvent }, orderBy: { createdAt: 'desc' },
+          });
+          const after = audit.after as Record<string, string>;
+          assert.equal(after.dismissalReasonCode, scenario === 'trashed-name' ? 'TRASHED_NAME_ONLY' : 'DISTINCT_CONTACTS_NAME_ONLY');
+          assert.equal(after.matchedSignalCode, scenario === 'same-person-name' ? 'PERSON_NAME_EXACT_V1' : 'COMPANY_NAME_EXACT_V1');
+          assert.equal(audit.entityId, null);
+        }
       } else {
         assert.equal(projected.result.leadId, null);
       }
