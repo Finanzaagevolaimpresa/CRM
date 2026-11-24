@@ -8,7 +8,7 @@ namespace FAI\VNX02;
 final class VaeCampaignAttribution
 {
     /** @return array<string, string> */
-    public static function fromPageUrl(int $formId, ?string $pageUrl, ?string $siteUrl): array
+    public static function fromPageUrl(int $formId, ?string $pageUrl, ?string $siteUrl, bool $includePath = false): array
     {
         if ($formId !== 4 || $pageUrl === null || $siteUrl === null || strlen($pageUrl) > 4096
             || preg_match('/[\x00-\x20\x7F\\\\]/', $pageUrl) === 1) {
@@ -25,22 +25,22 @@ final class VaeCampaignAttribution
             || ($url['port'] ?? 443) !== ($site['port'] ?? 443)) {
             return array();
         }
+        $result = $includePath ? array('sourcePagePath' => $url['path']) : array();
         $values = array();
         foreach (explode('&', $url['query'] ?? '') as $part) {
             $pair = explode('=', $part, 2);
             $key = strtolower(urldecode($pair[0]));
             if (preg_match('/\Autm_(source|campaign|content)\[/', $key) === 1) {
-                return array();
+                return $result;
             }
             if (!in_array($key, array('utm_source', 'utm_campaign', 'utm_content'), true)) {
                 continue;
             }
             if (array_key_exists($key, $values)) {
-                return array(); // Never choose one duplicated query value.
+                return $result; // Never choose one duplicated query value.
             }
             $values[$key] = urldecode($pair[1] ?? '');
         }
-        $result = array();
         $platform = strtolower($values['utm_source'] ?? '');
         if (in_array($platform, array('meta', 'chatgpt'), true)) {
             $result['campaignPlatform'] = strtoupper($platform);

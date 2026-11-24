@@ -15,6 +15,11 @@ export function LeadAcquisitionList({ items }: { items: Awaited<ReturnType<typeo
         <p>Piattaforma dichiarata dal link: {row.event.payload.campaignPlatform === 'META' ? 'Meta' : row.event.payload.campaignPlatform === 'CHATGPT' ? 'ChatGPT' : 'Non disponibile'}</p>
         <p>Pagina: {row.event.payload.sourcePagePath ?? 'Non disponibile'}</p>
         <p>Servizio richiesto: {row.event.payload.serviceInterestText ?? row.event.catalogReference?.serviceCode ?? row.event.payload.interestText ?? 'Non specificato'}</p>
+        {row.event.payload.city && <p>Comune dichiarato: {row.event.payload.city}</p>}
+        {row.event.payload.province && <p>Provincia dichiarata: {row.event.payload.province}</p>}
+        {row.event.payload.businessStatus && <p>Stato impresa dichiarato: {row.event.payload.businessStatus}</p>}
+        {row.event.payload.legalForm && <p>Forma giuridica dichiarata: {row.event.payload.legalForm}</p>}
+        {row.event.payload.applicantAge && <p>Età dichiarata del richiedente o referente: {row.event.payload.applicantAge}</p>}
         {row.event.payload.message && <p className="whitespace-pre-wrap">{row.event.payload.message}</p>}
         {row.privacyEvidence ? <>
           <p>Informativa: {row.privacyEvidence.service.noticeCode}, versione {row.privacyEvidence.service.noticeVersion} · presa visione registrata.</p>

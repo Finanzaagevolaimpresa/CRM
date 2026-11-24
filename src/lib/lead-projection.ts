@@ -14,11 +14,14 @@ import {
   discoverLeadIdentityCandidates,
   LEAD_NORMALIZATION_VERSION,
   LeadIdentityError,
+  normalizeLeadIdentityEmail,
+  normalizeLeadIdentityPhone,
   normalizeLeadIdentitySignals,
   readLeadIdentityKeyFile,
+  type LeadIdentityCandidate,
   type LeadIdentityKeyFile,
 } from './lead-identity';
-import type { LeadSubmittedEventV1 } from './lead-event-contract';
+import { isLeadEventEmail, type LeadSubmittedEventV1 } from './lead-event-contract';
 import {
   createBusinessLeadPrivacyEvidence,
   PrivacyContractUnavailableError,
@@ -75,6 +78,11 @@ export function mapLeadSubmittedEventToLead(
   const requestedAmount = event.payload.requestedAmount
     ? new Prisma.Decimal(event.payload.requestedAmount.minorUnits).div(100)
     : null;
+  const declarations = [
+    event.payload.businessStatus && 'Stato impresa dichiarato: ' + event.payload.businessStatus,
+    event.payload.legalForm && 'Forma giuridica dichiarata: ' + event.payload.legalForm,
+    event.payload.applicantAge && 'Età dichiarata del richiedente o referente: ' + event.payload.applicantAge,
+  ].filter(Boolean).join('\n');
   return {
     firstName: event.payload.firstName ?? '',
     lastName: event.payload.lastName ?? '',
@@ -85,7 +93,7 @@ export function mapLeadSubmittedEventToLead(
     source: `N10:${event.source.systemCode}:${event.source.formCode}:${event.source.formVersion}`,
     leadSource: 'altro',
     region: event.payload.region ?? null,
-    province: null,
+    province: event.payload.province ?? null,
     city: event.payload.city ?? null,
     interest: event.payload.serviceInterestText
       ?? event.payload.interestText
@@ -101,11 +109,51 @@ export function mapLeadSubmittedEventToLead(
     nextAction: null,
     nextActionNote: null,
     nextActionDate: null,
-    notes: event.payload.message ?? null,
+    notes: [event.payload.message, declarations].filter(Boolean).join('\n\n') || null,
     commercialProposal: null,
     clientId: null,
     deletedAt: null,
   };
+}
+
+async function dismissSingleEvaluationNameMatch(
+  tx: Prisma.TransactionClient,
+  event: LeadSubmittedEventV1,
+  candidates: readonly LeadIdentityCandidate[],
+): Promise<'TRASHED_NAME_ONLY' | 'DISTINCT_CONTACTS_NAME_ONLY' | null> {
+  const { source, payload } = event;
+  if (source.systemCode !== 'WORDPRESS' || source.formCode !== 'FAI_GENERAL_REQUEST'
+      || source.formVersion !== 'public-intake-2026-10-r01'
+      || !/^WPFORM:4:(?:ENTRY:[1-9]\d*|EPHEMERAL:[a-f0-9]{32})$/u.test(source.submissionId)
+      || !['Già costituita', 'Da costituire'].includes(payload.businessStatus ?? '')
+      || candidates.length !== 1) return null;
+  const [candidate] = candidates;
+  if (candidate.strongSignalCount !== 0 || candidate.weakSignalCount !== 1
+      || !['PERSON_NAME_EXACT_V1', 'COMPANY_NAME_EXACT_V1'].includes(candidate.matchedSignalCodes[0])) return null;
+
+  const incoming = normalizeLeadIdentityPhone(payload.phone);
+  if (!payload.email || !incoming) return null;
+  const [lead] = await tx.$queryRaw<Array<{ email: string | null; phone: string | null; deletedAt: Date | null }>>(
+    Prisma.sql`SELECT "email", "phone", "deletedAt" FROM "Lead" WHERE id = ${candidate.leadId} FOR SHARE`,
+  );
+  if (!lead) return null;
+  const email = normalizeLeadIdentityEmail(lead.email);
+  const phone = normalizeLeadIdentityPhone(lead.phone);
+  if (email === payload.email) return null;
+  if (phone) {
+    // A national number can still refer to the same international number.
+    const incomingDigits = incoming.canonicalValue.replace(/^(?:\+|00)/u, '');
+    const previousDigits = phone.canonicalValue.replace(/^(?:\+|00)/u, '');
+    if (incomingDigits.endsWith(previousDigits) || previousDigits.endsWith(incomingDigits)) return null;
+  }
+  if (candidate.matchedSignalCodes[0] === 'COMPANY_NAME_EXACT_V1') {
+    const name = payload.companyName?.normalize('NFC').trim().toLowerCase().replace(/\s+/gu, ' ');
+    // Field 4 can also identify an existing company. Only whole generic labels qualify here.
+    if (!name || !['progetto', 'nuovo progetto', 'progetto imprenditoriale', 'da costituire',
+      'impresa da costituire', 'nuova impresa', 'nuova attività', 'startup', 'start up'].includes(name)) return null;
+  }
+  if (lead.deletedAt) return 'TRASHED_NAME_ONLY';
+  return email && isLeadEventEmail(email) && phone ? 'DISTINCT_CONTACTS_NAME_ONLY' : null;
 }
 
 function projectionError(error: unknown): LeadProjectionError | null {
@@ -320,7 +368,8 @@ async function projectInTransaction(
     identityKeyVersionId: activeKey.id,
     signals: identitySignals,
   });
-  const snapshots = candidateSnapshots(context.recordHash, candidates);
+  const dismissed = await dismissSingleEvaluationNameMatch(context.tx, context.envelope, candidates);
+  const snapshots = candidateSnapshots(context.recordHash, dismissed ? [] : candidates);
   const result = snapshots.length === 0
     ? await createProjectedLead(context.tx, {
       inboxEventId: context.inboxEventId,
@@ -360,6 +409,7 @@ async function projectInTransaction(
         normalizationVersion: LEAD_NORMALIZATION_VERSION,
         state: result.state,
         candidateCount: result.candidateCount,
+        ...(dismissed && { dismissalReasonCode: dismissed, matchedSignalCode: candidates[0].matchedSignalCodes[0] }),
         privacyEvidenceCount: evidence.count,
       },
     },

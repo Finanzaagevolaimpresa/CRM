@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { canonicalJson, canonicalSha256 } from './canonical-json';
 import {
   BUSINESS_EVENT_BACKBONE_MANIFEST,
@@ -74,6 +74,19 @@ function exactCurrentCandidateWindow<T extends Readonly<{
   });
 }
 
+export function openLeadDuplicateReviewWhere(actorId: string): Prisma.LeadDuplicateCaseWhereInput {
+  if (!actorId) return integrityFail();
+  return {
+    state: 'OPEN',
+    candidates: { none: { lead: { selectiveGrants: { some: { recipientId: actorId } } } } },
+    projectionLedger: {
+      state: 'REVIEW_REQUIRED',
+      OR: [{ leadId: null }, { lead: { selectiveGrants: { none: { recipientId: actorId } } } }],
+      inboxEvent: { state: 'PROCESSED' },
+    },
+  };
+}
+
 export async function listLeadDuplicateReviewCases(
   prisma: PrismaClient,
   input: Readonly<{ skip: number; take: number; actorId: string }>,
@@ -83,15 +96,7 @@ export async function listLeadDuplicateReviewCases(
     return integrityFail();
   }
   const rows = await prisma.leadDuplicateCase.findMany({
-    where: {
-      state: 'OPEN',
-      candidates: { none: { lead: { selectiveGrants: { some: { recipientId: input.actorId } } } } },
-      projectionLedger: {
-        state: 'REVIEW_REQUIRED',
-        OR: [{ leadId: null }, { lead: { selectiveGrants: { none: { recipientId: input.actorId } } } }],
-        inboxEvent: { state: 'PROCESSED' },
-      },
-    },
+    where: openLeadDuplicateReviewWhere(input.actorId),
     orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
     skip: input.skip,
     take: input.take,

@@ -74,6 +74,10 @@ export interface LeadEventPayloadV1 {
   readonly email?: string;
   readonly phone?: string;
   readonly city?: string;
+  readonly province?: string;
+  readonly businessStatus?: string;
+  readonly legalForm?: string;
+  readonly applicantAge?: string;
   readonly region?: string;
   readonly interestText?: string;
   readonly serviceInterestText?: string;
@@ -122,6 +126,10 @@ const SERVICE_CODE_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const RFC3339_MILLISECOND_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isLeadEventEmail(value: string) {
+  return value.length <= 254 && EMAIL_PATTERN.test(value);
+}
 const SOURCE_PAGE_DOT_SEGMENT_PATTERN = /^(?:\.|%2e){1,2}$/iu;
 const FORBIDDEN_TEXT_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 const SERVICE_CODES = new Set(FAI_SERVICE_CATALOG.map(({ code }) => code));
@@ -381,6 +389,7 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
     value,
     [
       'firstName', 'lastName', 'companyName', 'email', 'phone', 'city', 'region',
+      'province', 'businessStatus', 'legalForm', 'applicantAge',
       'interestText', 'serviceInterestText', 'message', 'sourcePagePath', 'requestedAmount', 'campaignPlatform', 'campaignCode', 'adCode',
     ],
     [],
@@ -389,16 +398,20 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
   const output: Record<string, unknown> = {};
   for (const [key, maximum] of [
     ['firstName', 1_000], ['lastName', 1_000], ['companyName', 1_000],
-    ['city', 1_000], ['region', 1_000], ['interestText', 1_000],
+    ['city', 1_000], ['region', 1_000], ['province', 1_000], ['businessStatus', 1_000],
+    ['legalForm', 1_000], ['applicantAge', 100], ['interestText', 1_000],
     ['serviceInterestText', 1_000], ['message', 4_000],
   ] as const) {
     const normalized = optionalText(payload[key], maximum);
     if (normalized !== undefined) output[key] = normalized;
   }
+  if (output.legalForm !== undefined && output.businessStatus !== 'Già costituita') {
+    fail('LEAD_EVENT_FIELD_INVALID');
+  }
   const emailInput = optionalText(payload.email, 254);
   if (emailInput !== undefined) {
     const email = emailInput.toLowerCase();
-    if (email.length > 254 || !EMAIL_PATTERN.test(email)) fail('LEAD_EVENT_FIELD_INVALID');
+    if (!isLeadEventEmail(email)) fail('LEAD_EVENT_FIELD_INVALID');
     output.email = email;
   }
   const phoneInput = optionalText(payload.phone, 100);

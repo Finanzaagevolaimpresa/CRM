@@ -35,6 +35,7 @@ import {
   resolveLeadDuplicateCase,
 } from '../../src/lib/lead-duplicate-resolution';
 import {
+  LEAD_PROJECTION_MANIFEST,
   LeadProjectionError,
   projectClaimedLeadInboxEvent,
   type LeadProjectionFaultPoint,
@@ -44,7 +45,7 @@ import {
   LEAD_INTAKE_CONSUMER_MANIFEST,
   runLeadIntakeConsumer,
 } from '../../src/lib/lead-intake-consumer';
-import { listLeadDuplicateReviewCases } from '../../src/lib/lead-duplicate-review';
+import { listLeadDuplicateReviewCases, openLeadDuplicateReviewWhere } from '../../src/lib/lead-duplicate-review';
 import { CORE_QUERY_MAX_CANDIDATES } from '../../src/lib/core-query-policy';
 import { LeadAcquisitionDenied, readAdminLeadAttribution, readLeadAcquisitions, readLeadAcquisitionSummary } from '../../src/lib/lead-acquisition';
 import { revokeInternalSession } from '../../src/lib/internal-session-registry';
@@ -121,7 +122,7 @@ function syntheticEvent(
   occurredAt?: string,
   source: Partial<Pick<
     ReturnType<typeof syntheticLeadEventInputV1>['source'],
-    'systemCode' | 'formCode' | 'formVersion'
+    'systemCode' | 'formCode' | 'formVersion' | 'submissionId'
   >> = {},
 ) {
   const base = syntheticLeadEventInputV1();
@@ -2095,6 +2096,99 @@ async function m3Claim(eventRowId: string, ordinal: number) {
   assert.equal(lease.eventRowId, eventRowId);
   return lease;
 }
+
+test('WPForms 4 preserves the signed request and classifies only a single weak name match as new', {
+  skip: !runDbTests,
+}, async () => {
+  const cases = [
+    ['new', true], ['planned', true], ['different-contacts', true], ['same-person-name', true],
+    ['trashed-name', true], ['strong', false], ['trashed-strong', false],
+    ['missing-contact', false], ['national-equivalent', false], ['two-candidates', false],
+    ['two-weak-signals', false], ['specific-company', false], ['legacy', false], ['trashed-specific-company', false],
+  ] as const;
+  await withSyntheticActiveCommercialPolicy(async () => {
+    for (const [index, [scenario, createsLead]] of cases.entries()) {
+      const ordinal = 24100 + index;
+      const legacy = scenario === 'legacy';
+      const status = scenario === 'planned' ? 'Da costituire' : 'Già costituita';
+      const label: Partial<Record<typeof cases[number][0], string>> = {
+        'different-contacts': 'Progetto', 'trashed-name': 'Nuovo progetto', 'missing-contact': 'Nuova impresa',
+        'national-equivalent': 'Impresa da costituire', 'two-candidates': 'Progetto imprenditoriale',
+        'two-weak-signals': 'Nuova attività', 'legacy': 'Startup',
+      };
+      const event = syntheticEvent(ordinal, {
+        ...(label[scenario] && { companyName: label[scenario] }),
+        ...(!legacy && {
+          city: 'Comune sintetico', province: 'Provincia sintetica', businessStatus: status,
+          ...(status === 'Già costituita' && { legalForm: 'Forma sintetica' }), applicantAge: '39',
+        }),
+      }, undefined, { systemCode: 'WORDPRESS', formCode: 'FAI_GENERAL_REQUEST',
+        formVersion: 'public-intake-2026-10-r01', submissionId: 'WPFORM:4:ENTRY:' + ordinal });
+      const { payload } = event;
+      const previous = [];
+      if (scenario !== 'new' && scenario !== 'planned') {
+        const matchesName = scenario === 'same-person-name' || scenario === 'two-weak-signals';
+        const matchesEmail = scenario === 'strong' || scenario === 'trashed-strong';
+        for (let n = 0; n < (scenario === 'two-candidates' ? 2 : 1); n++) {
+          previous.push(await client().lead.create({ data: {
+            firstName: matchesName ? payload.firstName! : 'Altro', lastName: matchesName ? payload.lastName! : 'Referente',
+            companyName: scenario === 'same-person-name' ? null : payload.companyName,
+            email: matchesEmail ? payload.email : 'altro-' + ordinal + '-' + n + '@fixture.invalid',
+            phone: scenario === 'missing-contact' ? null : scenario === 'national-equivalent'
+              ? payload.phone!.slice(3) : '+390004' + ordinal,
+            deletedAt: scenario.startsWith('trashed-') ? new Date('2026-01-01T00:00:00Z') : null,
+          } }));
+        }
+      }
+      const receipt = await admitBusinessInboxEvent(client(), event);
+      const saved = await client().businessInboxEvent.findUniqueOrThrow({ where: { id: receipt.inboxEventId } });
+      const projected = await projectClaimedLeadInboxEvent(client(), await m3Claim(receipt.inboxEventId, ordinal), projectionOptions());
+      assert.equal(projected.result.state, createsLead ? 'PROJECTED_NEW' : 'REVIEW_REQUIRED', scenario);
+      const replay = await admitBusinessInboxEvent(client(), event);
+      assert.equal(replay.outcome, 'REPLAY', scenario);
+      assert.equal(replay.inboxEventId, receipt.inboxEventId);
+      const original = await client().businessInboxEvent.findUniqueOrThrow({ where: { id: receipt.inboxEventId } });
+      assert.equal(original.envelopeJson, saved.envelopeJson);
+      assert.equal(original.recordHash, saved.recordHash);
+      assert.equal(await client().leadProjectionLedger.count({ where: { inboxEventId: receipt.inboxEventId } }), 1);
+      const ledgerId = projected.result.ledgerId;
+      const filter = { ...openLeadDuplicateReviewWhere(primaryUserId), projectionLedgerId: ledgerId };
+      assert.equal(await client().leadDuplicateCase.count({ where: filter }), createsLead ? 0 : 1, scenario);
+      assert.equal(await client().commercialLeadInboxItem.count({ where: { projectionLedgerId: ledgerId, state: 'OPEN' } }),
+        createsLead ? 1 : 0, scenario);
+      for (const lead of previous) {
+        assert.deepEqual(await client().lead.findUniqueOrThrow({ where: { id: lead.id } }), lead);
+      }
+      if (createsLead) {
+        const id = projected.result.leadId;
+        assert.ok(id);
+        assert.ok(previous.every((lead) => lead.id !== id));
+        const lead = await client().lead.findUniqueOrThrow({ where: { id } });
+        assert.equal(lead.city, payload.city);
+        assert.equal(lead.province, payload.province);
+        assert.equal(lead.interest, payload.serviceInterestText);
+        const declarations = [
+          'Stato impresa dichiarato: ' + status,
+          ...(status === 'Già costituita' ? ['Forma giuridica dichiarata: Forma sintetica'] : []),
+          'Età dichiarata del richiedente o referente: 39',
+        ];
+        assert.equal(lead.notes, payload.message + '\n\n' + declarations.join('\n'));
+        assert.equal(lead.status, 'nuovo');
+        if (previous.length > 0) {
+          const audit = await client().auditLog.findFirstOrThrow({
+            where: { event: LEAD_PROJECTION_MANIFEST.auditEvent }, orderBy: { createdAt: 'desc' },
+          });
+          const after = audit.after as Record<string, string>;
+          assert.equal(after.dismissalReasonCode, scenario === 'trashed-name' ? 'TRASHED_NAME_ONLY' : 'DISTINCT_CONTACTS_NAME_ONLY');
+          assert.equal(after.matchedSignalCode, scenario === 'same-person-name' ? 'PERSON_NAME_EXACT_V1' : 'COMPANY_NAME_EXACT_V1');
+          assert.equal(audit.entityId, null);
+        }
+      } else {
+        assert.equal(projected.result.leadId, null);
+      }
+    }
+  });
+});
 
 test('M3 multiple submissions retain original campaign, request and privacy after replay and manual identity resolution', { skip: !runDbTests }, async () => {
   const actor = { userId: primaryUserId, sessionId: primarySessionId };

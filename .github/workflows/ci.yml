@@ -936,7 +936,7 @@ jobs:
       - name: Package VNX-02 WordPress connector
         run: |
           npm run package:wordpress-connector
-          unzip -t dist/fai-secure-lead-connector-1.3.0.zip
+          unzip -t dist/fai-secure-lead-connector-1.4.0.zip
 
       - name: Lint
         run: npm run lint
