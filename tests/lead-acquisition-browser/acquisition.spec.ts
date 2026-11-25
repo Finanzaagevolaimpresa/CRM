@@ -40,6 +40,12 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   await admin.getByRole('link', { name: 'Richieste da verificare (1)', exact: true }).click();
   await expect(admin.getByRole('heading', { name: 'Revisione possibili duplicati', exact: true })).toBeVisible();
   await admin.goto(`${app}/leads/acquisition`);
+  await admin.getByRole('link', { name: 'Senza scheda', exact: true }).click();
+  await expect(admin.getByText('Richiesta sintetica M3 numero 3', { exact: true })).toBeVisible();
+  await expect(admin.getByText('Valutazione sintetica da verificare', { exact: true })).toBeVisible();
+  for (const number of [1, 2]) {
+    await expect(admin.getByText(`Richiesta sintetica M3 numero ${number}`, { exact: true })).toHaveCount(0);
+  }
   await admin.getByRole('link', { name: 'Errori e retry' }).click();
   await expect(admin.getByRole('heading', { name: 'Tentativo successivo previsto', exact: true })).toBeVisible();
   await expect(admin.getByText('Richiesta sintetica M3 numero 3', { exact: true })).toBeVisible();

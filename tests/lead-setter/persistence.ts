@@ -12,6 +12,10 @@ import { type SetterCommand, type SetterDetails } from '../../src/lib/lead-sette
 import { leadWorkWhere, type LeadWorkQueue } from '../../src/lib/lead-work-queues';
 import { grantLead, leadProof } from '../selective-leads/fixtures';
 import { readLeadSharing, revokeLeadSharing } from '../../src/lib/selective-lead-access';
+import { admitBusinessInboxEvent } from '../../src/lib/business-event-backbone';
+import { readLeadAcquisitions, readLeadAcquisitionSummary } from '../../src/lib/lead-acquisition';
+import { createLeadSubmittedEventV1 } from '../../src/lib/lead-event-contract';
+import { syntheticLeadEventInputV1 } from '../fixtures/n10-lead-event-v1';
 import { currentAssignmentNotices } from '../../src/lib/assignment-notices';
 import { openOrdinaryWindow, ordinaryWindowExpiry, endOrdinaryWindow } from '../../src/lib/admin-ordinary-window';
 import { resolveInternalSession, revokeInternalSession } from '../../src/lib/internal-session-registry';
@@ -133,6 +137,25 @@ test('Intervento tecnico prima della pratica: solo il lead scelto e i campi amme
   await revokeLeadSharing(db,authority.session,{grantId:receipt.grantId,revision:receipt.revision,commandId:randomUUID()},leadProof(authority));
   await assert.rejects(readLeadSharing(db,tech.session,id));
   assert(!(await techNotices()).includes('/shared-leads/' + id));
+});
+
+test('Eccezioni di acquisizione: ricevuta sito senza scheda, fonte distinta, provenienza illeggibile e ambito Admin', async () => {
+  const receipt = async (systemCode: string) => {
+    const base = syntheticLeadEventInputV1();
+    const event = createLeadSubmittedEventV1({ ...base, eventId: randomUUID(), businessCorrelationId: randomUUID(),
+      source: { ...base.source, systemCode, submissionId: randomUUID() } });
+    return (await admitBusinessInboxEvent(db, event)).inboxEventId;
+  };
+  const website = await receipt('WORDPRESS'), internal = await receipt('OTHER_FIXTURE');
+  const template = await db.businessInboxEvent.findUniqueOrThrow({ where: { id: internal } });
+  const invalid = await db.businessInboxEvent.create({ data: { ...template, id: randomUUID(), eventId: randomUUID(),
+    keyDigest: randomUUID().replaceAll('-', '').repeat(2), envelopeJson: '{' }, select: { id: true } });
+  const unlinked = await readLeadAcquisitions(db, actor(admin), { queue: 'unlinked' });
+  assert(unlinked.items.some(item => item.id === website && item.verified));
+  assert(unlinked.items.every(item => item.id !== internal && item.id !== invalid.id));
+  assert((await readLeadAcquisitionSummary(db, actor(admin))).some(group => group.source === 'Da verificare'));
+  assert((await readLeadAcquisitions(db, actor(admin), {})).items.some(item => item.id === invalid.id && !item.verified && item.event === null));
+  await assert.rejects(readLeadAcquisitions(db, actor(owner), { queue: 'unlinked' }));
 });
 
 test('Registro Admin: 24 ore assolute, limite inattività, logout, cambio ruolo e prova recente per le operazioni sensibili',async () => {

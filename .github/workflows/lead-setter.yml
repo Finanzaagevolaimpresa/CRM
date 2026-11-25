@@ -62,8 +62,8 @@ jobs:
           set -euo pipefail
           node --import tsx tests/lead-setter/fixture.ts
           node --import tsx --test --test-reporter=tap tests/lead-setter-workflow.test.ts tests/lead-setter/persistence.ts | tee "$SETTER_EVIDENCE/database.tap"
-          grep -qx '# tests 9' "$SETTER_EVIDENCE/database.tap"
-          grep -qx '# pass 9' "$SETTER_EVIDENCE/database.tap"
+          grep -qx '# tests 10' "$SETTER_EVIDENCE/database.tap"
+          grep -qx '# pass 10' "$SETTER_EVIDENCE/database.tap"
           grep -qx '# skipped 0' "$SETTER_EVIDENCE/database.tap"
       - name: Browser through ordinary logins, queues, recording and restore
         run: |
