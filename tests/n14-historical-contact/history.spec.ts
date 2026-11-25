@@ -176,10 +176,13 @@ test('revocation after native preview denies confirmation and direct URL disclos
   }
 });
 
-test('Admin cannot attest for the owner and another commercial or an owner without acceptance cannot read the form', async ({ browser }) => {
+test('Only the current owner can attest after Admin assignment, without a separate acceptance', async ({ browser }) => {
   const x = await ownedLead(browser, false), oc = await browser.newContext(), excluded = await oc.newPage();
   await login(excluded, other.email);
-  for (const page of [x.admin, x.owner, excluded]) {
+  await x.owner.goto(x.route);
+  await expect(x.owner.getByRole('heading', { name: 'Registra un contatto precedente' })).toBeVisible();
+  expect(await db.auditLog.count({ where: { entityId: x.lead.id, event: 'responsibility_accepted' } })).toBe(0);
+  for (const page of [x.admin, excluded]) {
     await page.goto(x.route);
     await expect(page.getByRole('heading', { name: 'Contatto precedente non disponibile', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Prepara riepilogo', exact: true })).toHaveCount(0);

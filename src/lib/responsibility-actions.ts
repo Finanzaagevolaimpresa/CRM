@@ -20,6 +20,7 @@ const acceptanceSchema = z.object({ ...common, decisionId: z.string().min(1).max
 type Result = { ok: boolean; message: string; stepUpRequired?: boolean };
 const failure = (error: unknown): Result => ({ ok: false, message: error instanceof UserFacingActionError ? error.message : 'Operazione non completata. Riapri la scheda e verifica le modifiche intervenute.' });
 function refresh(kind: 'Lead' | 'TechnicalPractice', id: string) {
+  for (const path of ['/notifications', '/dashboard', '/leads/work', '/leads/inbox']) revalidatePath(path);
   revalidatePath(`/assignments/${kind}/${id}`); revalidatePath('/assignments');
   revalidatePath(kind === 'Lead' ? `/leads/${id}` : `/technical-office/practices/${id}`);
 }
@@ -30,12 +31,12 @@ export async function saveResponsibilityAction(_previous: Result, form: FormData
   const actor = await requirePermission(data.data.kind === 'Lead' ? 'lead.write' : 'technical.assign');
   if (actor.role !== 'admin') return { ok: false, message: 'Solo l’amministratore decide le assegnazioni.' };
   try {
-    await requireEnforcedPrivilegedMutation(actor, 'R05_RESPONSIBILITY', { inline: true });
+    await requireEnforcedPrivilegedMutation(actor, 'R05_ORDINARY_ASSIGNMENT', { inline: true });
     await withSerializableTransaction(prisma, tx => data.data.kind === 'Lead'
       ? confirmLeadResponsibility(tx, actor, data.data, true) : savePracticeResponsibility(tx, actor, data.data, true));
   } catch (error) { return error instanceof PrivilegedAdmissionRequired ? error.formState : failure(error); }
   refresh(data.data.kind, data.data.id);
-  return { ok: true, message: 'Decisione registrata. La presa in carico spetta al referente individuale.' };
+  return { ok: true, message: 'Assegnazione registrata. L’incarico è operativo per il referente.' };
 }
 export async function acceptResponsibilityAction(_previous: Result, form: FormData): Promise<Result> {
   await assertTechnicalServerAction("responsibility-actions:acceptResponsibilityAction");

@@ -1,3 +1,8 @@
+import { leadAssignees } from './lead-assignee';
+import { createHash } from 'node:crypto';
+import { effectiveSetterContact, prepareSetterCommand, SetterInputError, type SetterCommand } from './lead-setter-contract';
+import { isTechnicalAccount } from './technical-confidentiality';
+import { assertNoSelectiveClientMutation } from './selective-client-scope';
 import { recordUpdatePermission } from './record-update-context';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { historicalConversionInput } from './commercial-lead-historical-contact-contract';
@@ -515,7 +520,11 @@ async function mutateOwner(
         SELECT "id", "role" FROM "User" WHERE "id" = ${input.targetUserId}
           AND "active" = TRUE AND "deletedAt" IS NULL FOR SHARE
       `);
-      if (!target[0] || target[0].role !== 'commerciale') {
+      if (input.actor.requireManualAdmin) {
+        if (!target[0] || !(await leadAssignees(tx,input.targetUserId)).length) fail('N14_TARGET_USER_INVALID');
+        await assertNoSelectiveLeadMutation(tx,input.targetUserId,lead.id);
+        await assertNoSelectiveClientMutation(tx,input.targetUserId,lead.clientId);
+      } else if (!target[0] || target[0].role !== 'commerciale') {
         fail('N14_TARGET_USER_INVALID');
       }
     }
@@ -575,6 +584,30 @@ export function unassignCommercialLeadInboxItem(db: PrismaClient, input: Readonl
   return mutateOwner(db, { ...input, targetUserId: null, activityType: 'UNASSIGNED', reasonCode: 'MANAGER_UNASSIGNMENT', requirement: 'MANAGE' });
 }
 
+async function commitFirstResponse(tx: Prisma.TransactionClient, actor: CommercialLeadActor, lead: LockedLead,
+  item: LockedItem, cycle: LockedCycle, now: Date, faultAt?: CommercialLeadFaultPoint) {
+  const outcome = now.getTime() <= cycle.dueAt.getTime() ? 'MET' : 'BREACHED';
+  await tx.commercialLeadSlaCycle.update({ where: { id: cycle.id }, data: {
+    firstResponseAt: now, outcome, version: cycle.version + 1, updatedAt: now,
+  } });
+  inject(faultAt, 'AFTER_CYCLE');
+  const updated = await tx.commercialLeadInboxItem.update({ where: { id: item.id }, data: {
+    version: item.version + 1, updatedAt: now,
+  } });
+  inject(faultAt, 'AFTER_ITEM');
+  await appendActivity(tx, {
+    itemId: item.id, activityType: 'FIRST_RESPONSE_RECORDED', actor: actor,
+    reasonCode: 'CUSTOMER_CONTACTED', assigneeBeforeId: lead.assignedToId,
+    assigneeAfterId: lead.assignedToId, versionBefore: item.version, versionAfter: updated.version,
+  });
+  inject(faultAt, 'AFTER_ACTIVITY');
+  await appendAudit(tx, actor, 'commercial_lead_inbox_first_response_recorded', item.id, {
+    state: item.state, version: updated.version, outcome, reasonCode: 'CUSTOMER_CONTACTED',
+  });
+  inject(faultAt, 'AFTER_AUDIT');
+  return { item: updated, outcome, firstResponseAt: now } as const;
+}
+
 export async function recordCommercialLeadFirstResponse(
   db: PrismaClient,
   input: Readonly<{
@@ -594,27 +627,57 @@ export async function recordCommercialLeadFirstResponse(
     const cycle = await lockOpenCycle(tx, item.id);
     if (!cycle) fail('N14_VERSION_CONFLICT');
     if (cycle.firstResponseAt) fail('N14_FIRST_RESPONSE_ALREADY_RECORDED');
-    const now = commandNow;
-    const outcome = now.getTime() <= cycle.dueAt.getTime() ? 'MET' : 'BREACHED';
-    await tx.commercialLeadSlaCycle.update({ where: { id: cycle.id }, data: {
-      firstResponseAt: now, outcome, version: cycle.version + 1, updatedAt: now,
-    } });
-    inject(input.faultAt, 'AFTER_CYCLE');
-    const updated = await tx.commercialLeadInboxItem.update({ where: { id: item.id }, data: {
-      version: item.version + 1, updatedAt: now,
-    } });
-    inject(input.faultAt, 'AFTER_ITEM');
-    await appendActivity(tx, {
-      itemId: item.id, activityType: 'FIRST_RESPONSE_RECORDED', actor: input.actor,
-      reasonCode: 'CUSTOMER_CONTACTED', assigneeBeforeId: lead.assignedToId,
-      assigneeAfterId: lead.assignedToId, versionBefore: item.version, versionAfter: updated.version,
-    });
-    inject(input.faultAt, 'AFTER_ACTIVITY');
-    await appendAudit(tx, input.actor, 'commercial_lead_inbox_first_response_recorded', item.id, {
-      state: item.state, version: updated.version, outcome, reasonCode: 'CUSTOMER_CONTACTED',
-    });
-    inject(input.faultAt, 'AFTER_AUDIT');
-    return { item: updated, outcome, firstResponseAt: now } as const;
+    return commitFirstResponse(tx, input.actor, lead, item, cycle, commandNow, input.faultAt);
+  });
+}
+
+/** One immutable interaction, its next step and any first response share the Lead lock and commit. */
+export async function saveSetterCall(db: PrismaClient, actor: CommercialLeadActor, raw: SetterCommand) {
+  requireEnforcedMode();
+  const { value, nextAt } = prepareSetterCommand(raw);
+  const requestHash = createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  return transaction(db, async (tx, now) => {
+    const session = await authorizeActor(tx, actor, 'WORK');
+    if (isTechnicalAccount(session) || !hasPermission(session, 'lead.read')) fail('N14_PERMISSION_DENIED');
+    const lead = await lockLead(tx, value.leadId);
+    await assertNoSelectiveLeadMutation(tx, actor.userId, lead.id);
+    await assertNoSelectiveClientMutation(tx, actor.userId, lead.clientId);
+    if (lead.assignedToId !== actor.userId || !['admin', 'direzione', 'commerciale'].includes(session.role))
+      fail('N14_PERMISSION_DENIED');
+    const prior = await tx.leadSetterCall.findUnique({ where: { id: value.id } });
+    if (prior) {
+      if (prior.leadId !== lead.id || prior.actorId !== actor.userId || prior.requestHash !== requestHash)
+        fail('N14_VERSION_CONFLICT');
+      return { id: prior.id, replay: true };
+    }
+    const item = await lockItem(tx, lead.id);
+    if (lead.clientId || ['archiviato','perso','vinto','cliente_acquisito','non_qualificato'].includes(lead.status)
+      || (item && item.state !== 'OPEN')) fail('N14_ITEM_NOT_OPEN');
+    if ((item?.version ?? null) !== value.version || lead.updatedAt.toISOString() !== value.leadVersion)
+      fail('N14_VERSION_CONFLICT');
+    const latest = await tx.lead.findUniqueOrThrow({ where: { id: lead.id }, select: { setterNextKind: true, nextActionDate: true } });
+    const videoReview = ['VIDEO_HELD','VIDEO_DEFERRED','VIDEO_ABSENT'].includes(value.outcome);
+    if (videoReview && (latest.setterNextKind !== 'VIDEO' || !latest.nextActionDate))
+      throw new SetterInputError('Apri la videochiamata fissata prima di registrarne l’esito.');
+    if (value.outcome === 'VIDEO_BOOKED' && latest.setterNextKind === 'VIDEO')
+      throw new SetterInputError('La videochiamata è già fissata. Scegli il suo esito o rinviala.');
+    if (item && effectiveSetterContact(value.outcome)) {
+      const cycle = await lockOpenCycle(tx, item.id);
+      if (!cycle) fail('N14_VERSION_CONFLICT');
+      const historical = await tx.commercialLeadHistoricalContact.findFirst({ where: { inboxItemId: item.id }, select: { id: true } });
+      if (!cycle.firstResponseAt && !historical) await commitFirstResponse(tx, actor, lead, item, cycle, now);
+    }
+    const nextKind = value.nextKind === 'NONE' ? null : value.nextKind;
+    const row = await tx.leadSetterCall.create({ data: {
+      id: value.id, leadId: lead.id, actorId: actor.userId, recordedAt: now, outcome: value.outcome, nextAt, nextKind,
+      details: value.details ?? {}, requestHash,
+    }, select: { id: true } });
+    await tx.lead.update({ where: { id: lead.id }, data: { updatedAt: new Date(Math.max(now.getTime(), lead.updatedAt.getTime() + 1)),
+      setterNextKind: nextKind, nextActionDate: nextAt, nextAction: nextAt,
+      nextActionNote: nextKind === 'VIDEO' ? 'Videochiamata fissata' : nextKind === 'CALLBACK' ? 'Richiamo' : null } });
+    await tx.auditLog.create({ data: { actorId: actor.userId, entityType: 'Lead', entityId: lead.id,
+      event: 'lead_setter_call_recorded', after: { callId: row.id, outcome: value.outcome, nextKind } } });
+    return { id: row.id, replay: false };
   });
 }
 

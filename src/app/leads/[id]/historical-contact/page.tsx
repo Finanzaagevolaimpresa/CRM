@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic';
     if (!session.sessionId) throw new Error('N14_HISTORY_UNAVAILABLE');
     scope = await readHistoricalLeadContactManagement(prisma, { userId: session.userId, sessionId: session.sessionId }, id);
   } catch {
-    return <PageHeader title="Contatto precedente non disponibile" description="Il percorso richiede il referente commerciale corrente, la sua presa in carico e un lead manuale aperto senza una prima risposta già registrata." />;
+    return <PageHeader title="Contatto precedente non disponibile" description="Il percorso richiede il referente commerciale abilitato dall’assegnazione e un lead manuale aperto senza una prima risposta già registrata." />;
   }
   const requested = query.historicalContactCommand === undefined ? null : z.string().uuid().safeParse(query.historicalContactCommand);
   if (requested && !requested.success) return <PageHeader title="Riferimento della decisione non valido" description="Non avviare un nuovo salvataggio. Riprendi il riferimento della decisione originale." />;

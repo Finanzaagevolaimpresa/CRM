@@ -371,6 +371,7 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  setterCalls LeadSetterCall[]
   operationalUpdates SharedOperationalUpdate[] @relation("SharedOperationalAuthor")
   ordinaryEmailReconciliations OrdinaryEmailReconciliation[]
   administrativeRevisions AdminRecordRevision[]
@@ -466,6 +467,10 @@ model User {
 }
 
 model InternalSession {
+  ordinaryConfirmedAt DateTime? @db.Timestamptz(3)
+  ordinaryLastActiveAt DateTime? @db.Timestamptz(3)
+  ordinaryKeyVersion Int?
+  ordinaryDigest Bytes?
   ordinaryEmailReconciliations OrdinaryEmailReconciliation[]
   administrativeRevisions AdminRecordRevision[]
   historicalLeadContacts CommercialLeadHistoricalContact[]
@@ -562,6 +567,8 @@ model ClientReadGrant {
 }
 
 model Lead {
+  setterCalls LeadSetterCall[]
+  setterNextKind String? @db.VarChar(12)
   adminRequests AdminRequest[]
   selectiveEditGrants SelectiveLeadEditGrant[]
   selectiveEditDecisions SelectiveLeadEditDecision[]
@@ -4247,4 +4254,20 @@ model OrdinaryEmailReconciliation {
   previousOutcome OrdinaryEmailOutcome? @relation(fields: [previousOutcomeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+
+model LeadSetterCall {
+  id           String   @id @db.Uuid
+  leadId       String
+  actorId      String
+  recordedAt   DateTime @default(now()) @db.Timestamptz(3)
+  outcome      String   @db.VarChar(20)
+  nextKind     String?  @db.VarChar(12)
+  nextAt       DateTime? @db.Timestamptz(3)
+  details      Json
+  requestHash  String   @db.Char(64)
+  lead         Lead @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  actor        User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([leadId, recordedAt(sort: Desc), id])
 }

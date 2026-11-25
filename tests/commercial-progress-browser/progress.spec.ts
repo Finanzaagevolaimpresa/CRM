@@ -122,7 +122,7 @@ for (const viewport of [{ name: 'desktop', width: 1365, height: 900 }, { name: '
         await expect(clientProject.getByRole('link', { name: new RegExp(positiveLabel) }).locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '1');
         await expect(clientProject.getByRole('link', { name: /Servizi acquistati/ })).toHaveCount(0);
         const ownGroup = main.locator(`section[aria-labelledby="counter-area-${sales ? 'commerciale' : 'ufficio-tecnico'}"]`);
-        await expect(ownGroup.getByRole('link', { name: new RegExp(sales ? 'Lead da contattare' : 'Pratiche tecniche attive') }).locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '1');
+        await expect(ownGroup.getByRole('link', { name: new RegExp(sales ? 'Assegnati da contattare' : 'Pratiche tecniche attive') }).locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '1');
         const detailPath = sales ? `/leads/${fixtures[side].leadId}` : `/technical-office/practices/${fixtures[side].practiceId}`;
         const foreignPath = sales ? `/leads/${fixtures[other].leadId}` : `/technical-office/practices/${fixtures[other].practiceId}`;
         await expect(main.locator(`#dashboard-detail a[href="${detailPath}"]`)).toBeVisible();

@@ -29,7 +29,7 @@ export const dynamic = 'force-dynamic';
       ])} />}
       <p className="mt-3 text-sm text-slate-600">Incasso: pagamento positivo registrato come incassato, con data di incasso, per un cliente collegato. È un dato di attribuzione, non una prova che la campagna abbia causato la vendita. Costi e ROI richiedono dati di spesa e non sono stimati.</p>
     </Card>
-    <div className="flex flex-wrap gap-3">{[['', 'Tutte'], ['waiting', 'Da elaborare'], ['errors', 'Errori e retry'], ['ambiguous', 'Ambigue']].map(([queue, title]) => <SecondaryLink key={queue} href={queue ? `/leads/acquisition?queue=${queue}` : '/leads/acquisition'}>{title}</SecondaryLink>)}</div>
+    <div className="flex flex-wrap gap-3">{[['', 'Tutte'], ['unlinked','Senza scheda'], ['waiting', 'Da elaborare'], ['errors', 'Errori e retry'], ['ambiguous', 'Ambigue']].map(([queue, title]) => <SecondaryLink key={queue} href={queue ? `/leads/acquisition?queue=${queue}` : '/leads/acquisition'}>{title}</SecondaryLink>)}</div>
     <LeadAcquisitionList items={page.items} />
     <PaginationNav pathname="/leads/acquisition" params={{ queue: params.queue }} {...page} />
   </div>;

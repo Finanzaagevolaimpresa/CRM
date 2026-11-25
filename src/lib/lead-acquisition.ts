@@ -39,6 +39,9 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
       { state: 'DEAD_LETTER' }, { state: { in: ['AVAILABLE', 'LEASED'] }, lastFailureCode: { not: null } },
     ];
     if (input.queue === 'ambiguous') where.leadProjectionLedger = { is: { state: 'REVIEW_REQUIRED', ...(input.leadId ? { leadId: input.leadId } : {}) } };
+    if (!input.leadId && input.queue === 'unlinked') {
+      where.OR = [{ leadProjectionLedger: { is: null } }, { leadProjectionLedger: { is: { leadId: null } } }];
+    }
     if (input.queue === 'waiting') where.state = { in: ['AVAILABLE', 'LEASED'] };
     const rows = await tx.businessInboxEvent.findMany({
       where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: coreQueryOffset(page), take: coreQueryFetchSize(),

@@ -1,6 +1,8 @@
+import { IdentityConfirmationForm } from '@/components/identity-confirmation-form';
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
+import { ordinaryWindowEnabled } from '@/lib/admin-ordinary-policy';
 import { Badge, Card, PageHeader } from '@/components/ui';
 import { requireAnyPermission } from '@/lib/auth';
 import {
@@ -47,6 +49,10 @@ const messages: Record<string, string> = {
         </p>
       ) : null}
 
+      {session.role === 'admin' && ordinaryWindowEnabled() && <Card title="Assegnazioni ordinarie">
+        <p>La conferma abilita per 24 ore assegnazione, riassegnazione e rilascio del referente e le decisioni nominative di responsabilità. La sessione termina dopo 60 minuti senza uno di questi comandi. Uscita, revoca e cambio ruolo chiudono l’accesso.</p>
+        <p>Per permessi, credenziali, fascicoli e altre operazioni sensibili la conferma personale vale 30 minuti.</p>
+      </Card>}
       <Card
         title="Stato della protezione"
         action={<Badge tone={readiness.active ? 'green' : readiness.mode === 'enforced' ? 'orange' : 'gray'}>{readiness.mode}</Badge>}
@@ -63,7 +69,7 @@ const messages: Record<string, string> = {
 
       {readiness.mode === 'enforced' && readiness.keyReady ? (
         <Card title="Conferma identità amministrativa">
-          <form action={establishPrivilegedStepUpAction} className="max-w-lg crm-space-y-4">
+          <IdentityConfirmationForm action={establishPrivilegedStepUpAction}>
             {returnPath && <input type="hidden" name="returnTo" value="lead-inbox" />}
             {returnPath && <p>La conferma ti riporta alla coda lead. Poi scegli personalmente il referente e premi Assegna.</p>}
             <label className="block text-sm font-bold text-fai-navy">
@@ -80,7 +86,7 @@ const messages: Record<string, string> = {
             <button className="rounded-xl bg-fai-green px-4 py-3 font-black text-white">
               Conferma per {minutes} minuti
             </button>
-          </form>
+          </IdentityConfirmationForm>
           {readiness.active ? (
             <form action={clearPrivilegedStepUpAction} className="mt-4">
               <button className="rounded-xl bg-fai-orange px-4 py-3 font-black text-white">

@@ -1,3 +1,5 @@
+import { ordinaryCookie, ordinaryWindowEnabled, ordinaryActionAllowed } from './admin-ordinary-policy';
+import { openOrdinaryWindow, ordinaryWindowExpiry } from './admin-ordinary-window';
 import bcrypt from 'bcryptjs';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -50,6 +52,7 @@ export const privilegedMutationCodes = [
   'R05_CLIENT_READ_PERIMETER',
   'R05_COMMERCIAL_ORIGIN',
   'R05_RESPONSIBILITY',
+  'R05_ORDINARY_ASSIGNMENT',
   'R05_PURCHASED_SERVICE_HANDOFF',
   'USER_CREATE',
   'USER_ACTIVATE',
@@ -195,6 +198,8 @@ export async function requireEnforcedPrivilegedMutation(
     });
     deny('unavailable');
   }
+  if (sessionToken && ordinaryActionAllowed(action) && await ordinaryWindowExpiry(prisma, session, action, key,
+    sessionToken, store.get(ordinaryCookie)?.value, true)) return session;
   if (!sessionToken || !stepUpToken || !verifyPrivilegedStepUpToken({
     token: stepUpToken,
     key,
@@ -211,15 +216,17 @@ export async function requireEnforcedPrivilegedMutation(
   return session;
 }
 
-export async function privilegedAccessReadiness(session: AuthSession) {
+export async function privilegedAccessReadiness(session: AuthSession, action?: PrivilegedMutationCode) {
   let mode: 'disabled' | 'enforced' | 'invalid' = 'invalid';
   try { mode = privilegedAccessMode(); } catch { /* minimized readiness state */ }
   if (mode !== 'enforced') return { mode, keyReady: false, active: false, expiresAt: null } as const;
   const key = await loadActivePrivilegedStepUpKey(prisma);
   const store = await cookies(), sessionToken = store.get(sessionCookieName)?.value;
-  const expiresAt = key && sessionToken ? verifiedPrivilegedStepUpExpiry({ key,
+  const ordinaryExpiry = action && key && sessionToken
+    ? await ordinaryWindowExpiry(prisma,session,action,key,sessionToken,store.get(ordinaryCookie)?.value,false) : null;
+  const expiresAt = ordinaryExpiry ?? (key && sessionToken ? verifiedPrivilegedStepUpExpiry({ key,
     expectedUserId: session.userId, role: session.role, sessionToken,
-    token: store.get(privilegedStepUpCookieName)?.value }) : null;
+    token: store.get(privilegedStepUpCookieName)?.value }) : null);
   return { mode, keyReady: Boolean(key), active: expiresAt !== null, expiresAt } as const;
 }
 
@@ -248,8 +255,17 @@ export async function establishPrivilegedStepUp(session: AuthSession, password: 
     await auditStepUp(session.userId, 'blocked_privileged_step_up', { code: 'CREDENTIALS_INVALID' });
     return 'DENIED' as const;
   }
+  const ordinary = user.role === 'admin' && ordinaryWindowEnabled()
+    ? await openOrdinaryWindow(prisma,session,key,sessionToken,user.passwordHash) : null;
+  if (user.role === 'admin' && ordinaryWindowEnabled() && !ordinary) return 'DENIED' as const;
+  if (ordinary) {
+    const options = { httpOnly: true, sameSite: 'strict' as const, secure: process.env.NODE_ENV === 'production',
+      path: '/', expires: ordinary.expiresAt, priority: 'high' as const };
+    store.set(ordinaryCookie, ordinary.token, options);
+    store.set(sessionCookieName, sessionToken, options);
+  }
   const now = Math.floor(Date.now() / 1000);
-  const ttlSeconds = Math.min(session.expiresAt - now, user.role === 'admin'
+  const ttlSeconds = Math.min((ordinary ? Math.floor(ordinary.expiresAt.getTime()/1000) : session.expiresAt) - now, user.role === 'admin'
     ? ADMIN_PRIVILEGED_STEP_UP_TTL_SECONDS : PRIVILEGED_STEP_UP_TTL_SECONDS);
   if (ttlSeconds < 1) return 'DENIED' as const;
   const token = createPrivilegedStepUpToken({
@@ -276,6 +292,7 @@ export async function establishPrivilegedStepUp(session: AuthSession, password: 
 }
 
 export async function clearPrivilegedStepUpCookie() {
+  (await cookies()).delete(ordinaryCookie);
   (await cookies()).set(privilegedStepUpCookieName, '', {
     httpOnly: true,
     sameSite: 'strict',

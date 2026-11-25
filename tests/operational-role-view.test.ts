@@ -4,7 +4,7 @@ import { buildDashboardCounterGroups, type DashboardCounterCounts } from '../src
 import { operationalDashboardView, operationalNavigationAllows } from '../src/lib/operational-role-view';
 
 const counts: DashboardCounterCounts = {
-  leadDaContattare: 11, trattativeAperte: 12, offerteInviate: 13, offerteAccettate: 14,
+  entratiOggi: 7, daAssegnare: 8, leadDaContattare: 11, trattativeAperte: 12, offerteInviate: 13, offerteAccettate: 14,
   activeTechnicalPracticesCount: 21, overdueClientUpdates: 22, commsToReview: 23, approvedUnusedComms: 24,
   clientiAttivi: 31, progettiAttivi: 32, serviziAcquistati: 33, tasks: 41, todayTasksCount: 42,
   overdueTasks: 43, dueSoonTasks: 44, payments: 51, preReview: 61, dossierBozza: 62,

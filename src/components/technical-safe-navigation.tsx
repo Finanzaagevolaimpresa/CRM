@@ -1,3 +1,4 @@
+import { currentAssignmentNotices } from '@/lib/assignment-notices';
 import { listOrdinaryTechnicalDocuments } from '@/lib/technical-ordinary-documents';
 import { SharedOperationalPanel } from './shared-operational-panel';
 import Link from 'next/link';
@@ -105,8 +106,10 @@ export async function TechnicalSafeNavigation({ route, session, props }: { route
   const title = route === '/documents' ? 'Documenti tecnici consentiti' : route === '/search' ? 'Ricerca nel perimetro tecnico'
     : route.startsWith('/notifications') ? 'Notifiche · perimetro tecnico' : route.startsWith('/communications') ? 'Comunicazioni · perimetro tecnico'
       : route === '/tasks' || route === '/deadlines' || route === '/document-checklists' ? 'Incarichi · attività e scadenze' : 'Ufficio Tecnico';
+  const notices = route === '/notifications' ? await currentAssignmentNotices(session) : [];
   return <div className="space-y-5"><PageHeader title={title}
     description="Ogni incarico mantiene destinatario, responsabilità, scadenza, campi, operazioni e singole versioni autorizzate." />
+    {notices.map(n => <Link key={n.id} className="block underline" href={n.href}>{n.title}</Link>)}
     {(route.startsWith('/notifications') || route.startsWith('/communications')) && <Link className="block underline" href="/notifications/updates">Apri aggiornamenti e promemoria selezionati</Link>}
     <form className="flex gap-3"><label>Cerca incarico<input className="block rounded-lg border p-2" name="q" defaultValue={query.q ?? ''} /></label><button className="underline">Cerca</button></form>
     {route.startsWith('/communications') || route.startsWith('/notifications') ? <p>I messaggi e le note non classificati restano riservati. Apri l’incarico per stato, scadenze e operazioni effettivamente disponibili.</p> : null}

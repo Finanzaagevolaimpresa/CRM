@@ -1,4 +1,5 @@
 'use server';
+import { leadAssignees } from './lead-assignee';
 import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
@@ -685,6 +686,7 @@ export async function updateLeadCommercial(form: FormData) {
   return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
     const { current, lead: before } = await lockLeadForMutation(tx, s, data.id, data.expectedVersion);
     const freshInbox = await tx.commercialLeadInboxItem.findUnique({ where: { leadId: data.id } });
+    if (assignment && !(await leadAssignees(tx,assignment)).length) denyManualAssignment();
     if (freshInbox && ((assignment !== undefined && assignment !== before.assignedToId)
       || (before.status !== data.status && (protectedTerminalStatus.includes(before.status) || protectedTerminalStatus.includes(data.status))))) {
       throw new UserFacingActionError('Owner e stati terminali si gestiscono dalla Commercial Lead Inbox.');

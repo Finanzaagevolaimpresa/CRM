@@ -187,7 +187,10 @@ try:
     assert catalog('rollback-catalog') == before_catalog
     assert snapshot('rollback-rows', before_cols) == before
     receipt['injectedRollbackExact'] = True
-    run('apply-schema76', [args.node, prisma, 'migrate', 'deploy'], timeout=300)
+    schema76_sql = prefix / 'prisma/migrations' / binding['migration'] / 'migration.sql'
+    schema76_sql.parent.mkdir()
+    schema76_sql.write_bytes(migration_bytes)
+    run('apply-schema76', [args.node, prisma, 'migrate', 'deploy', '--schema', str(prefix / 'prisma/schema.prisma')], timeout=300)
     current_operations = set(re.findall(r"'([A-Z_]+)'", value('command-operations76', command_check_sql)))
     assert current_operations == previous_operations | {'CLOSE_ATTEMPT'}
     receipt['allPreviousCommandOperationsPreserved'] = sorted(previous_operations)

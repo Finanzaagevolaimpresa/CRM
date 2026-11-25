@@ -265,7 +265,7 @@ test("contatori per area mostrano i totali completi e le destinazioni", async ({
   const areas = page.getByRole("region", { name: "Contatori per area" });
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
   const commercial = areas.getByRole("region", { name: "Commerciale", exact: true });
-  await expect(commercial.getByRole("link", { name: /Lead da contattare/ })).toContainText("24");
+  await expect(commercial.getByRole("link", { name: /Assegnati da contattare/ })).toContainText("24");
   await expect(commercial.getByRole("link", { name: /Offerte inviate/ })).toHaveAttribute("href", "/commercial-offers");
   const reviews = areas.getByRole("region", { name: "Revisioni e autorizzazioni", exact: true });
   await expect(reviews.getByRole("link", { name: /Autorizzazioni AI in attesa/ })).toContainText("47");

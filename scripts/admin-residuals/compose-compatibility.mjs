@@ -24,6 +24,9 @@ assert.equal(hash(read('prisma/migrations/' + recovery.migration + '/migration.s
 const shared = JSON.parse(read('scripts/shared-operational/schema-binding.json'));
 assert.equal(shared.baseline, '1a5195730b1b396354ec405118bcbb8187c72311');
 assert.equal(hash(read('prisma/migrations/' + shared.migration + '/migration.sql')), shared.migrationSha256);
+const setter = JSON.parse(read('scripts/lead-setter/schema-binding.json'));
+assert.equal(setter.baseline, '0769dd4362200d978dbe4cb2d4a3e5c57ca6b0e2');
+assert.equal(hash(read('prisma/migrations/' + setter.migration + '/migration.sql')), setter.migrationSha256);
 const legacyPaths = [
   'prisma/schema.prisma', 'scripts/ordinary-reconciliation/schema-binding.json',
   'prisma/migrations/' + recovery.migration + '/migration.sql',
@@ -88,6 +91,7 @@ const stoppedActions = [
   'src/lib/drive-video-actions.ts',
   'src/lib/drive-folder-actions.ts',
   'src/lib/shared-operational-actions.ts',
+  'src/lib/lead-setter-actions.ts',
 ];
 for (const file of [...omittedPages, ...stoppedActions, 'src/components/ordinary-email-recovery.tsx']) overlay.add(file);
 // Close all missing relative/alias imports against the exact candidate tree.
@@ -205,8 +209,8 @@ try {
     assert(emitted.includes('withTechnicalPage') || emitted.includes('assertTechnicalFileRoute') || emitted.includes('assertTechnicalServerAction'));
   }
   console.log(JSON.stringify({ protocol: 'ADMIN_PRIVACY_COMPATIBILITY_SOURCE_V2', baseline, baselineTree, privacyBase,
-    candidate, candidateTree: git(['rev-parse', candidate + '^{tree}']), commit, tree, schema: 76,
-    sqlSha256: shared.migrationSha256, priorSql75Sha256: recovery.migrationSha256, priorSql74Sha256: binding.migrationSha256,
+    candidate, candidateTree: git(['rev-parse', candidate + '^{tree}']), commit, tree, schema: 77,
+    sqlSha256: setter.migrationSha256, priorSql76Sha256: shared.migrationSha256, priorSql75Sha256: recovery.migrationSha256, priorSql74Sha256: binding.migrationSha256,
     files, importClosure: dependencies, mandatoryBoundaries, omittedPages, stoppedActions,
     mandatoryTechnicalCeilingRetained: true, unmodifiedHistoricalRecovery: false,
     linkAndPrivateVersionEditorsExposed: false, roleProfileEditorExposed: false,

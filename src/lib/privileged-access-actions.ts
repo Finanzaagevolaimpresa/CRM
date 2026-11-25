@@ -1,6 +1,8 @@
 'use server';
 import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 
+import { endOrdinaryWindow } from './admin-ordinary-window';
+import { prisma } from './prisma';
 import { redirect } from 'next/navigation';
 import { requireAnyPermission, getSession, hasPermission } from './auth';
 import { privilegedAccessPermissions } from './privileged-access-contract';
@@ -45,7 +47,8 @@ export async function establishPrivilegedStepUpInline(_previous: { ok: boolean; 
 
 export async function clearPrivilegedStepUpAction() {
   await assertTechnicalServerAction("privileged-access-actions:clearPrivilegedStepUpAction");
-  await requireAnyPermission([...privilegedAccessPermissions]);
+  const session = await requireAnyPermission([...privilegedAccessPermissions]);
+  await endOrdinaryWindow(prisma,session);
   await clearPrivilegedStepUpCookie();
   redirect('/settings/security?status=cleared');
 }

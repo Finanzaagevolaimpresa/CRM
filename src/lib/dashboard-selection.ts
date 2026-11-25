@@ -11,7 +11,6 @@ export function selectDashboardView(value: unknown, allowed: readonly DashboardV
 
 // These predicates mirror the existing complete counters. The same predicates
 // are used by the new detail and destination lists; they grant no visibility.
-export const dashboardLeadFilter = { deletedAt: null, status: 'da_contattare' } satisfies Prisma.LeadWhereInput;
 export const dashboardPracticeFilter = { deletedAt: null, status: { notIn: ['approvata', 'respinta', 'archiviata'] } } satisfies Prisma.TechnicalPracticeWhereInput;
 export const dashboardReviewFilter = { status: { in: ['bozza_generata', 'da_revisionare'] } } satisfies Prisma.PreAnalysisWhereInput;
 export function dashboardTodayWindow(now: Date) {
@@ -25,6 +24,6 @@ export function dashboardTodayFilter(now: Date): Prisma.TaskWhereInput {
 }
 
 export const dashboardDestinations: Record<DashboardView, string> = {
-  lead: '/leads?status=da_contattare', pratiche: '/technical-office/practices?dashboard=attive',
+  lead: '/leads/work?queue=contact', pratiche: '/technical-office/practices?dashboard=attive',
   revisioni: '/preanalyses?dashboard=revisioni', oggi: '/tasks?dashboard=oggi',
 };
