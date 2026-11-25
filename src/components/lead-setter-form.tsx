@@ -1,15 +1,34 @@
 'use client';
-import { useState, useTransition, type FormEvent } from 'react';
+import { useState, useSyncExternalStore, useTransition, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveSetterCallAction } from '@/lib/lead-setter-actions';
 import { assistanceOptions, riskFields, riskOrigins, setterFields, setterOutcomes, type SetterDetails, type SetterOutcome, type SetterCommand } from '@/lib/lead-setter-contract';
 
-type Props = { leadId: string; initialId: string; version: number | null; leadVersion: string; scheduledVideo: boolean;
+type Props = { leadId: string; actorId: string; confirmedIds: string[]; initialId: string; version: number | null; leadVersion: string; scheduledVideo: boolean;
   defaults: Partial<SetterDetails> };
 const inputClass = 'block w-full rounded-xl border p-2';
-export function LeadSetterForm({ leadId, initialId, version, leadVersion, scheduledVideo, defaults }: Props) {
+const pendingEvent = 'fai-lead-setter-receipt';
+function subscribePending(notify: () => void) {
+  window.addEventListener(pendingEvent, notify);
+  return () => window.removeEventListener(pendingEvent, notify);
+}
+function rememberCommand(scope: string, id: string | null) {
+  try {
+    if (id) sessionStorage.setItem(scope, id);
+    else sessionStorage.removeItem(scope);
+    window.dispatchEvent(new Event(pendingEvent));
+  } catch {
+    // The in-memory command and server history remain available.
+  }
+}
+export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, version, leadVersion, scheduledVideo, defaults }: Props) {
   const router = useRouter();
   const [id, setId] = useState(initialId);
+  const scope = 'fai.setter.command.v1:' + actorId + ':' + leadId;
+  const pendingId = useSyncExternalStore(subscribePending, () => {
+    try { return sessionStorage.getItem(scope); } catch { return null; }
+  }, () => null);
+  const persisted = !!pendingId && confirmedIds.includes(pendingId);
   const [outcome, setOutcome] = useState<SetterOutcome>('UNREACHABLE');
   const [next, setNext] = useState<SetterCommand['nextKind']>('CALLBACK');
   const [saved, setSaved] = useState(false), [pending, start] = useTransition();
@@ -20,7 +39,7 @@ export function LeadSetterForm({ leadId, initialId, version, leadVersion, schedu
   }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending || saved) return;
+    if (pending || saved || persisted) return;
     const data = new FormData(event.currentTarget);
     const field = (name: string) => String(data.get(name) ?? '');
     const details = Object.fromEntries(Object.keys(setterFields).map(key => [key, field(key)]));
@@ -28,7 +47,9 @@ export function LeadSetterForm({ leadId, initialId, version, leadVersion, schedu
       origin: field(key + 'Origin') || 'UNKNOWN', finding: field(key + 'Finding'), source: field(key + 'Source'), date: field(key + 'Date'),
     }]));
     const assessment = outcome === 'UNREACHABLE' ? null : { ...details, ...risks, assistance: field('assistance') || 'UNKNOWN' } as SetterDetails;
-    const value = { id, leadId, leadVersion, version, outcome, nextKind: next, nextLocal: field('nextLocal'), details: assessment };
+    const commandId = pendingId || id;
+    rememberCommand(scope, commandId);
+    const value = { id: commandId, leadId, leadVersion, version, outcome, nextKind: next, nextLocal: field('nextLocal'), details: assessment };
     start(async () => {
       try {
         const result = await saveSetterCallAction(value);
@@ -37,8 +58,8 @@ export function LeadSetterForm({ leadId, initialId, version, leadVersion, schedu
       } catch { setMessage('Esito da verificare. Rileggi lo storico prima di iniziare una nuova chiamata. La scheda conserva le scelte.'); }
     });
   }
-  if (saved) return <div><p role="status">{message}</p><button className="underline" onClick={() => {
-    setId(crypto.randomUUID()); changeOutcome('UNREACHABLE'); setSaved(false); setMessage('');
+  if (saved || persisted) return <div><p role="status">{message || 'Chiamata e prossimo passo salvati. La ricevuta è presente nello storico.'}</p><button className="underline" onClick={() => {
+    rememberCommand(scope,null); setId(crypto.randomUUID()); changeOutcome('UNREACHABLE'); setSaved(false); setMessage('');
   }}>Registra un’altra telefonata</button></div>;
   return <form onSubmit={submit} className="crm-space-y-3">
     <label>Esito<select className={inputClass} value={outcome} onChange={e => changeOutcome(e.target.value as SetterOutcome)}>
@@ -70,5 +91,6 @@ export function LeadSetterForm({ leadId, initialId, version, leadVersion, schedu
     <button className="rounded-xl bg-blue-900 px-4 py-2 font-bold text-white" disabled={pending}>
       {pending ? 'Salvataggio in corso…' : 'Salva chiamata e prossimo passo'}</button>
     {message && <p role="status">{message}</p>}
+    {pendingId && <button type="button" className="underline" disabled={pending} onClick={() => router.refresh()}>Rileggi esito del salvataggio</button>}
   </form>;
 }

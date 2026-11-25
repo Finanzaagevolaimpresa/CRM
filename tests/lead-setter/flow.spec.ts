@@ -59,7 +59,8 @@ test('Admin assegna; il referente registra tentativo, contatto e video; cestino 
     await setter.getByLabel('Data del richiamo',{exact:true}).fill(romeDateTimeInput(new Date()).slice(0,10)); await save.click();
     await expect(setter.getByRole('status').filter({hasText:'Chiamata e prossimo passo salvati'})).toBeVisible();
     await checkQueue(setter,'contact',title,true); await checkQueue(setter,'callbacks',title,true);
-    await setter.goto(detail); await setter.getByLabel('Esito',{exact:true}).selectOption('VIDEO_BOOKED');
+    await setter.goto(detail); await setter.getByRole('button',{name:'Registra un’altra telefonata'}).click();
+    await setter.getByLabel('Esito',{exact:true}).selectOption('VIDEO_BOOKED');
     await setter.getByLabel('Indicazioni per il consulente').fill('Progetto e prossima riunione sintetici.');
     await setter.getByLabel('Data e ora della videochiamata (Roma)').fill(romeDateTimeInput(new Date(Date.now()+86400000)).slice(0,16));
     await save.click(); await expect(setter.getByRole('status').filter({hasText:'Chiamata e prossimo passo salvati'})).toBeVisible();
@@ -74,7 +75,8 @@ test('Admin assegna; il referente registra tentativo, contatto e video; cestino 
     await admin.getByRole('dialog').getByRole('button',{name:'Ripristina lead',exact:true}).click();
     await expect.poll(async () => (await db.lead.findUniqueOrThrow({where:{id:lead.id}})).deletedAt).toBeNull();
     await checkQueue(setter,'videos',title,true);
-    await setter.goto(detail); await setter.getByLabel('Esito',{exact:true}).selectOption('VIDEO_HELD');
+    await setter.goto(detail); await setter.getByRole('button',{name:'Registra un’altra telefonata'}).click();
+    await setter.getByLabel('Esito',{exact:true}).selectOption('VIDEO_HELD');
     await setter.getByLabel('Indicazioni per il consulente').fill('Video svolto, sintesi di prova.');
     await setter.getByLabel('Prossimo passo',{exact:true}).selectOption('NONE'); await save.click();
     await expect.poll(() => db.leadSetterCall.count({where:{leadId:lead.id}})).toBe(3);

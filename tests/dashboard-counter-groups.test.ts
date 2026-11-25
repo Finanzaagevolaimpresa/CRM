@@ -22,7 +22,7 @@ const noAccess: DashboardCounterAccess = {
 };
 
 const counts: DashboardCounterCounts = {
-  leadDaContattare: 11, entratiOggi: 7, daAssegnare: 8,
+  entratiOggi: 7, daAssegnare: 8, leadDaContattare: 11,
   trattativeAperte: 12,
   offerteInviate: 13,
   offerteAccettate: 14,
@@ -160,7 +160,7 @@ test("payment card identifies the count as records, not euro", () => {
   assert.equal(result[0].counters[0].href, "/payments");
 });
 
-test("full access yields six groups and preserves all 20 independent source values", () => {
+test("full access yields six groups and preserves all 22 independent source values", () => {
   const allAccess = Object.fromEntries(Object.keys(noAccess).map((key) => [key, true])) as DashboardCounterAccess;
   const result = buildDashboardCounterGroups(allAccess, counts);
   assert.deepEqual(result.map(({ title }) => title), [

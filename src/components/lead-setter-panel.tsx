@@ -19,7 +19,7 @@ export async function LeadSetterPanel({ session, lead, item }: { session: AuthSe
   return <><Card title="Registra chiamata">
     {lead.availableBudget != null && <p>Budget disponibile indicato nel lead: {lead.availableBudget.toString()} €.</p>}
     {open && lead.assignedToId === session.userId && hasPermission(session,'lead.write')
-      ? <LeadSetterForm leadId={lead.id} initialId={randomUUID()} version={item?.version ?? null} leadVersion={lead.updatedAt.toISOString()}
+      ? <LeadSetterForm leadId={lead.id} actorId={session.userId} confirmedIds={calls.filter(c => c.actorId === session.userId).map(c => c.id)} initialId={randomUUID()} version={item?.version ?? null} leadVersion={lead.updatedAt.toISOString()}
           defaults={defaults} scheduledVideo={lead.setterNextKind === 'VIDEO'}/>
       : <p>Il referente nominativo può registrare le telefonate mentre il lead è aperto.</p>}
     <nav className="mt-4 flex flex-wrap gap-4"><Link href="/leads/work?queue=callbacks" className="underline">Richiami di oggi</Link>

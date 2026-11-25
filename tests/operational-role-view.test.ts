@@ -15,7 +15,7 @@ test('sales keeps lead, offers and own progress while excluding administrative a
   const view = operationalDashboardView('commerciale', () => true);
   const groups = buildDashboardCounterGroups({ ...view, isAdmin: false }, counts);
   assert.deepEqual(groups.map(g => g.id), ['commerciale', 'clienti-servizi', 'attivita-scadenze']);
-  assert.deepEqual(groups[0].counters.map(c => c.value), [11, 12, 13, 14]);
+  assert.deepEqual(groups[0].counters.map(c => c.value), [7, 8, 11, 12, 13, 14]);
   assert.deepEqual(groups[1].counters.map(c => c.value), [31]);
   assert.equal(view.canReadCommercialProgress, true);
   assert.equal(view.showPipeline, false);
