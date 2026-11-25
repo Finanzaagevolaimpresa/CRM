@@ -14,9 +14,21 @@ export async function LeadSetterPanel({ session, lead, item }: { session: AuthSe
   const calls = await prisma.leadSetterCall.findMany({ where: { leadId: lead.id, lead: { deletedAt: null, AND: [leadVisibilityWhere(session)] } },
     orderBy: [{ recordedAt: 'desc' }, { id: 'asc' }], include: { actor: { select: { name: true } } } });
   const open = !lead.clientId && (!item || item.state === 'OPEN') && !['archiviato','perso','vinto','cliente_acquisito','non_qualificato'].includes(lead.status);
-  const defaults = { project: lead.interest ?? '', site: [lead.city,lead.province,lead.region].filter(Boolean).join(', '),
-    investment: lead.declaredInvestment?.toString(), financing: lead.requestedAmount?.toString() };
+  const previous = calls.find(call => call.details !== null);
+  const last = setterDetails.safeParse(previous?.details);
+  const defaults: Partial<Record<keyof typeof setterFields, string>> = {};
+  if (last.success) {
+    for (const key of Object.keys(setterFields) as (keyof typeof setterFields)[]) {
+      if (key !== 'consultantSummary' && last.data[key]) defaults[key] = last.data[key];
+    }
+  }
+  if (lead.interest) defaults.project = lead.interest;
+  const site = [lead.city, lead.province, lead.region].filter(Boolean).join(', ');
+  if (site) defaults.site = site;
+  if (lead.declaredInvestment != null) defaults.investment = lead.declaredInvestment.toString();
+  if (lead.requestedAmount != null) defaults.financing = lead.requestedAmount.toString();
   return <><Card title="Registra chiamata">
+    {last.success && previous && <p>I dati del progetto provengono dalla scheda lead e dall’ultima telefonata del {formatDateTime(previous.recordedAt)}. Puoi aggiornarli per questa chiamata.</p>}
     {lead.availableBudget != null && <p>Budget disponibile indicato nel lead: {lead.availableBudget.toString()} €.</p>}
     {open && lead.assignedToId === session.userId && hasPermission(session,'lead.write')
       ? <LeadSetterForm leadId={lead.id} actorId={session.userId} confirmedIds={calls.filter(c => c.actorId === session.userId).map(c => c.id)} initialId={randomUUID()} version={item?.version ?? null} leadVersion={lead.updatedAt.toISOString()}

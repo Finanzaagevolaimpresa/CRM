@@ -10,6 +10,8 @@ import { readResponsibility } from '../../src/lib/responsibility';
 import { recordHistoricalLeadContact } from '../../src/lib/commercial-lead-historical-contact-storage';
 import { type SetterCommand, type SetterDetails } from '../../src/lib/lead-setter-contract';
 import { leadWorkWhere, type LeadWorkQueue } from '../../src/lib/lead-work-queues';
+import { grantLead, leadProof } from '../selective-leads/fixtures';
+import { readLeadSharing, revokeLeadSharing } from '../../src/lib/selective-lead-access';
 import { currentAssignmentNotices } from '../../src/lib/assignment-notices';
 import { openOrdinaryWindow, ordinaryWindowExpiry, endOrdinaryWindow } from '../../src/lib/admin-ordinary-window';
 import { resolveInternalSession, revokeInternalSession } from '../../src/lib/internal-session-registry';
@@ -110,6 +112,27 @@ test('Contatto pregresso dell’assegnatario senza accettazione personale, esclu
   await saveSetterCall(db,actor(owner),await nextCommand(id,{outcome:'CONTACT',nextKind:'NONE',nextLocal:'',details:detail}));
   assert.equal((await db.commercialLeadSlaCycle.findFirstOrThrow({where:{inboxItemId:item.id}})).firstResponseAt,null);
   assert.equal(await db.auditLog.count({where:{entityId:id,event:'responsibility_accepted'}}),0);
+});
+
+test('Intervento tecnico prima della pratica: solo il lead scelto e i campi ammessi fino alla revoca',async () => {
+  const binding = await db.selectiveLeadAuthority.findUniqueOrThrow({where:{id:'lead-sharing'}});
+  const authorityUser = await db.user.findUniqueOrThrow({where:{id:binding.userId}});
+  const authority = {user:authorityUser,...await syntheticSession(db,authorityUser)};
+  const id = await newLead(), foreign = await newLead();
+  await db.userPermissionOverride.upsert({where:{userId_permission:{userId:tech.user.id,permission:'lead.read'}},
+    update:{allowed:true},create:{userId:tech.user.id,permission:'lead.read',allowed:true}});
+  const {receipt} = await grantLead(db,authority,{leadId:id,recipientId:tech.user.id,revision:0,commandId:randomUUID(),
+    fields:['companyName','status'],expiresAt:null});
+  const techNotices = async () => (await currentAssignmentNotices(tech.session)).map(notice => notice.href);
+  assert((await techNotices()).includes('/shared-leads/' + id));
+  assert(!(await techNotices()).includes('/shared-leads/' + foreign));
+  const selected = await readLeadSharing(db,tech.session,id);
+  assert.deepEqual(selected.fields.map(f=>f.key).sort(),['companyName','status']);
+  await assert.rejects(readLeadSharing(db,tech.session,foreign));
+  await assert.rejects(saveSetterCall(db,actor(tech),await nextCommand(id)));
+  await revokeLeadSharing(db,authority.session,{grantId:receipt.grantId,revision:receipt.revision,commandId:randomUUID()},leadProof(authority));
+  await assert.rejects(readLeadSharing(db,tech.session,id));
+  assert(!(await techNotices()).includes('/shared-leads/' + id));
 });
 
 test('Registro Admin: 24 ore assolute, limite inattività, logout, cambio ruolo e prova recente per le operazioni sensibili',async () => {

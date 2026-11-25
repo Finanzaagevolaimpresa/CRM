@@ -3,11 +3,10 @@ import { withTechnicalPage } from '@/lib/technical-surface-guards';
 export const dynamic = 'force-dynamic';
 
 import { ordinaryWindowEnabled } from '@/lib/admin-ordinary-policy';
-import { Badge, Card, PageHeader } from '@/components/ui';
+import { Badge, Card, PageHeader, formatDateTime } from '@/components/ui';
 import { requireAnyPermission } from '@/lib/auth';
 import {
   clearPrivilegedStepUpAction,
-  establishPrivilegedStepUpAction,
 } from '@/lib/privileged-access-actions';
 import { privilegedAccessReadiness } from '@/lib/privileged-access';
 import { privilegedAccessPermissions } from '@/lib/privileged-access-contract';
@@ -30,7 +29,9 @@ const messages: Record<string, string> = {
   searchParams: Promise<{ status?: string; returnTo?: string }>;
 }) {
   const session = await requireAnyPermission([...privilegedAccessPermissions]);
-  const readiness = await privilegedAccessReadiness(session);
+  const showOrdinaryPolicy = session.role === 'admin' && ordinaryWindowEnabled();
+  const [readiness, ordinary] = await Promise.all([privilegedAccessReadiness(session),
+    showOrdinaryPolicy ? privilegedAccessReadiness(session, 'N14_LEAD_INBOX_ASSIGN') : null]);
   const { status, returnTo } = await searchParams;
   const returnPath = securityReturnPath(returnTo);
   const minutes = privilegedStepUpTtlSeconds(session.role) / 60;
@@ -49,7 +50,8 @@ const messages: Record<string, string> = {
         </p>
       ) : null}
 
-      {session.role === 'admin' && ordinaryWindowEnabled() && <Card title="Assegnazioni ordinarie">
+      {showOrdinaryPolicy && <Card title="Assegnazioni ordinarie">
+        <p>{ordinary?.ordinaryExpiresAt ? `Conferma ordinaria attiva. Scadenza massima ${formatDateTime(new Date(ordinary.ordinaryExpiresAt))}.` : 'Conferma ordinaria non attiva.'}</p>
         <p>La conferma abilita per 24 ore assegnazione, riassegnazione e rilascio del referente e le decisioni nominative di responsabilità. La sessione termina dopo 60 minuti senza uno di questi comandi. Uscita, revoca e cambio ruolo chiudono l’accesso.</p>
         <p>Per permessi, credenziali, fascicoli e altre operazioni sensibili la conferma personale vale 30 minuti.</p>
       </Card>}
@@ -69,8 +71,7 @@ const messages: Record<string, string> = {
 
       {readiness.mode === 'enforced' && readiness.keyReady ? (
         <Card title="Conferma identità amministrativa">
-          <IdentityConfirmationForm action={establishPrivilegedStepUpAction}>
-            {returnPath && <input type="hidden" name="returnTo" value="lead-inbox" />}
+          <IdentityConfirmationForm returnToInbox={!!returnPath}>
             {returnPath && <p>La conferma ti riporta alla coda lead. Poi scegli personalmente il referente e premi Assegna.</p>}
             <label className="block text-sm font-bold text-fai-navy">
               Password corrente
@@ -87,7 +88,7 @@ const messages: Record<string, string> = {
               Conferma per {minutes} minuti
             </button>
           </IdentityConfirmationForm>
-          {readiness.active ? (
+          {readiness.active || ordinary?.ordinaryExpiresAt ? (
             <form action={clearPrivilegedStepUpAction} className="mt-4">
               <button className="rounded-xl bg-fai-orange px-4 py-3 font-black text-white">
                 Rimuovi conferma

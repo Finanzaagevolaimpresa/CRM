@@ -39,12 +39,20 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
       { state: 'DEAD_LETTER' }, { state: { in: ['AVAILABLE', 'LEASED'] }, lastFailureCode: { not: null } },
     ];
     if (input.queue === 'ambiguous') where.leadProjectionLedger = { is: { state: 'REVIEW_REQUIRED', ...(input.leadId ? { leadId: input.leadId } : {}) } };
-    if (!input.leadId && input.queue === 'unlinked') {
-      where.OR = [{ leadProjectionLedger: { is: null } }, { leadProjectionLedger: { is: { leadId: null } } }];
+    const unlinkedWebsite = !input.leadId && input.queue === 'unlinked';
+    if (unlinkedWebsite) {
+      const excluded = fresh.selectiveLeadInboxEventIds ?? [];
+      const pageIds = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT e.id FROM "BusinessInboxEvent" e
+        LEFT JOIN "LeadProjectionLedger" p ON p."inboxEventId"=e.id
+        WHERE p."leadId" IS NULL AND e."envelopeJson"::jsonb #>> '{source,systemCode}' = 'WORDPRESS'
+          ${excluded.length ? Prisma.sql`AND e.id::text NOT IN (${Prisma.join(excluded)})` : Prisma.empty}
+        ORDER BY e."createdAt" DESC, e.id DESC OFFSET ${coreQueryOffset(page)} LIMIT ${coreQueryFetchSize()}`);
+      where.id = { in: pageIds.map(row => row.id) };
     }
     if (input.queue === 'waiting') where.state = { in: ['AVAILABLE', 'LEASED'] };
     const rows = await tx.businessInboxEvent.findMany({
-      where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: coreQueryOffset(page), take: coreQueryFetchSize(),
+      where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: unlinkedWebsite ? 0 : coreQueryOffset(page), take: coreQueryFetchSize(),
       select: { id: true, envelopeJson: true, recordHash: true, createdAt: true, state: true, attemptCount: true,
         maxAttempts: true, availableAt: true, lastFailureCode: true, terminalReasonCode: true,
         leadProjectionLedger: { select: { state: true, sourceRecordHash: true, leadId: true } },

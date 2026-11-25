@@ -23,7 +23,7 @@ import { Card, PageHeader } from '@/components/ui';
       <Link className="underline" href="/admin-requests">Richieste all’Admin</Link><Link className="underline" href="/settings/security">Conferma Admin</Link>
       <Link className="underline" href="/projects">Progetti e condivisioni</Link><Link className="underline" href="/technical-office/practices">Pratiche e incarichi</Link></nav>
     <Card title="Cestini e ripristino"><form className="flex flex-wrap gap-3">
-      <label>Area<select className="block rounded-xl border p-2" name="bin" defaultValue="Lead">{bins.map(p => <option key={p.model} value={p.model}>{p.label}</option>)}</select></label>
+      <label>Area<select aria-label="Area" className="block rounded-xl border p-2" name="bin" defaultValue="Lead">{bins.map(p => <option key={p.model} value={p.model}>{p.label}</option>)}</select></label>
       <label>Cerca nel cestino<input className="block rounded-xl border p-2" name="q" maxLength={128}/></label><button className="underline">Apri cestino</button>
     </form><p>Il ripristino del lead lo rimette nel suo perimetro. Un progetto ripristinato torna in archivio. Per un documento consulta le versioni prima del ripristino.</p>
     <Link className="underline" href="/admin/lifecycle">Fonti storiche e documenti privati</Link>{' · '}

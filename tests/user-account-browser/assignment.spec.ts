@@ -140,7 +140,9 @@ test('manual leads enter the admin queue; operator HTTP payloads cannot self ass
   await update.getByRole('button', { name: 'Salva aggiornamenti' }).click();
   await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId).toBe(salesId);
   await sales.goto('/notifications');
-  await expect(sales.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(1);
+  const leadNotices = sales.locator('article').filter({ has: sales.locator('a[href="/leads/' + lead.id + '"]') });
+  await expect(leadNotices).toHaveCount(2);
+  await expect(leadNotices.getByRole('heading', { name: 'Lead assegnato a te' })).toBeVisible();
   await sales.goto('/leads/' + lead.id);
   await expect(sales.getByRole('heading', { name: 'Lead non trovato' })).toHaveCount(0);
   const salesUpdate = sales.locator('form').filter({ has: sales.getByRole('button', { name: 'Salva aggiornamenti', exact: true }) });

@@ -58,11 +58,11 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
       } catch { setMessage('Esito da verificare. Rileggi lo storico prima di iniziare una nuova chiamata. La scheda conserva le scelte.'); }
     });
   }
-  if (saved || persisted) return <div><p role="status">{message || 'Chiamata e prossimo passo salvati. La ricevuta è presente nello storico.'}</p><button className="underline" onClick={() => {
+  if (saved || persisted) return <div><p role="status">{message || 'Chiamata e prossimo passo salvati. La ricevuta è presente nello storico.'}</p><button type="button" className="underline" onClick={() => {
     rememberCommand(scope,null); setId(crypto.randomUUID()); changeOutcome('UNREACHABLE'); setSaved(false); setMessage('');
   }}>Registra un’altra telefonata</button></div>;
   return <form onSubmit={submit} className="crm-space-y-3">
-    <label>Esito<select className={inputClass} value={outcome} onChange={e => changeOutcome(e.target.value as SetterOutcome)}>
+    <label>Esito<select aria-label="Esito" className={inputClass} value={outcome} onChange={e => changeOutcome(e.target.value as SetterOutcome)}>
       {Object.entries(setterOutcomes).filter(([key]) => scheduledVideo ? key !== 'VIDEO_BOOKED'
         : !['VIDEO_HELD','VIDEO_ABSENT','VIDEO_DEFERRED'].includes(key)).map(([key,label]) => <option key={key} value={key}>{label}</option>)}
     </select></label>
@@ -82,7 +82,7 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
       <label>Disponibilità per l’assistenza<select className={inputClass} name="assistance">
         {Object.entries(assistanceOptions).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select></label>
       <p>Quando emerge un percorso adatto e il contatto sceglie l’affiancamento, il budget minimo indicativo è di 3.000–3.500 € oltre IVA.</p></>}
-    <label>Prossimo passo<select className={inputClass} value={next} onChange={e => setNext(e.target.value as SetterCommand['nextKind'])}>
+    <label>Prossimo passo<select aria-label="Prossimo passo" className={inputClass} value={next} onChange={e => setNext(e.target.value as SetterCommand['nextKind'])}>
       {['VIDEO_BOOKED','VIDEO_DEFERRED'].includes(outcome) ? <option value="VIDEO">Videochiamata</option> : <>
         <option value="CALLBACK">Richiamo</option>{!['UNREACHABLE','VIDEO_ABSENT'].includes(outcome) && <option value="NONE">Nessuna ulteriore azione prevista</option>}</>}
     </select></label>

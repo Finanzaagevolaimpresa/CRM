@@ -61,22 +61,25 @@ test('Admin assegna; il referente registra tentativo, contatto e video; cestino 
     await checkQueue(setter,'contact',title,true); await checkQueue(setter,'callbacks',title,true);
     await setter.goto(detail); await setter.getByRole('button',{name:'Registra un’altra telefonata'}).click();
     await setter.getByLabel('Esito',{exact:true}).selectOption('VIDEO_BOOKED');
+    await setter.getByLabel('Spese previste e priorità').fill('Attrezzatura sintetica');
     await setter.getByLabel('Indicazioni per il consulente').fill('Progetto e prossima riunione sintetici.');
     await setter.getByLabel('Data e ora della videochiamata (Roma)').fill(romeDateTimeInput(new Date(Date.now()+86400000)).slice(0,16));
     await save.click(); await expect(setter.getByRole('status').filter({hasText:'Chiamata e prossimo passo salvati'})).toBeVisible();
     await checkQueue(setter,'contact',title,false); await checkQueue(setter,'videos',title,true);
-    await admin.goto(detail); await admin.getByRole('button',{name:'Sposta nel cestino',exact:true}).click();
+    await admin.goto(detail); await admin.getByRole('button',{name:'Sposta nel cestino: ' + title,exact:true}).click();
     await admin.getByRole('dialog').getByRole('checkbox').check(); await admin.getByRole('dialog').getByRole('button',{name:'Sposta nel cestino',exact:true}).click();
     await expect.poll(async () => !!(await db.lead.findUniqueOrThrow({where:{id:lead.id}})).deletedAt).toBe(true);
     await checkQueue(setter,'videos',title,false);
     await admin.goto('/admin/records'); await admin.getByLabel('Area',{exact:true}).selectOption('Lead');
     await admin.getByLabel('Cerca nel cestino',{exact:true}).fill(title); await admin.getByRole('button',{name:'Apri cestino'}).click();
-    await admin.getByRole('button',{name:'Ripristina lead',exact:true}).click(); await admin.getByRole('dialog').getByRole('checkbox').check();
+    await admin.getByRole('button',{name:'Ripristina lead: ' + title,exact:true}).click(); await admin.getByRole('dialog').getByRole('checkbox').check();
     await admin.getByRole('dialog').getByRole('button',{name:'Ripristina lead',exact:true}).click();
     await expect.poll(async () => (await db.lead.findUniqueOrThrow({where:{id:lead.id}})).deletedAt).toBeNull();
     await checkQueue(setter,'videos',title,true);
     await setter.goto(detail); await setter.getByRole('button',{name:'Registra un’altra telefonata'}).click();
     await setter.getByLabel('Esito',{exact:true}).selectOption('VIDEO_HELD');
+    await expect(setter.getByLabel('Spese previste e priorità')).toHaveValue('Attrezzatura sintetica');
+    await expect(setter.getByLabel('Indicazioni per il consulente')).toHaveValue('');
     await setter.getByLabel('Indicazioni per il consulente').fill('Video svolto, sintesi di prova.');
     await setter.getByLabel('Prossimo passo',{exact:true}).selectOption('NONE'); await save.click();
     await expect.poll(() => db.leadSetterCall.count({where:{leadId:lead.id}})).toBe(3);
@@ -85,5 +88,11 @@ test('Admin assegna; il referente registra tentativo, contatto e video; cestino 
     const receipts = await db.leadSetterCall.findMany({where:{leadId:lead.id},orderBy:{recordedAt:'asc'},select:{id:true,actorId:true,outcome:true,nextKind:true,recordedAt:true}});
     expect(receipts.every(r => r.actorId === fixture.setter.id)).toBe(true);
     writeFileSync(join(evidence,'browser-receipt.json'),JSON.stringify({synthetic:true,at:new Date(),lead:lead.id,entered,unassignedBefore,receipts}));
+  } catch (error) {
+    for (const [index,context] of contexts.entries()) {
+      const page = context.pages()[0];
+      if (page) writeFileSync(join(evidence,'screen-' + index + '.txt'), await page.locator('body').ariaSnapshot().catch(() => 'Page closed'));
+    }
+    throw error;
   } finally { await Promise.all(contexts.map(c => c.close())); }
 });

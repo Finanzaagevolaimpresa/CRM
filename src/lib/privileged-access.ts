@@ -219,7 +219,7 @@ export async function requireEnforcedPrivilegedMutation(
 export async function privilegedAccessReadiness(session: AuthSession, action?: PrivilegedMutationCode) {
   let mode: 'disabled' | 'enforced' | 'invalid' = 'invalid';
   try { mode = privilegedAccessMode(); } catch { /* minimized readiness state */ }
-  if (mode !== 'enforced') return { mode, keyReady: false, active: false, expiresAt: null } as const;
+  if (mode !== 'enforced') return { mode, keyReady: false, active: false, expiresAt: null, ordinaryExpiresAt: null } as const;
   const key = await loadActivePrivilegedStepUpKey(prisma);
   const store = await cookies(), sessionToken = store.get(sessionCookieName)?.value;
   const ordinaryExpiry = action && key && sessionToken
@@ -227,7 +227,7 @@ export async function privilegedAccessReadiness(session: AuthSession, action?: P
   const expiresAt = ordinaryExpiry ?? (key && sessionToken ? verifiedPrivilegedStepUpExpiry({ key,
     expectedUserId: session.userId, role: session.role, sessionToken,
     token: store.get(privilegedStepUpCookieName)?.value }) : null);
-  return { mode, keyReady: Boolean(key), active: expiresAt !== null, expiresAt } as const;
+  return { mode, keyReady: Boolean(key), active: expiresAt !== null, expiresAt, ordinaryExpiresAt: ordinaryExpiry } as const;
 }
 
 export async function establishPrivilegedStepUp(session: AuthSession, password: string) {

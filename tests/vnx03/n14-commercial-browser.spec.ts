@@ -313,7 +313,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await acceptanceLink.click();
   await expect(ownerWorkPage).toHaveURL(new URL(acceptanceHref, crmUrl).href);
   const acceptanceUrl = ownerWorkPage.url();
-  await expect(ownerWorkPage.getByText('Presa in carico commerciale: da confermare', { exact: true })).toBeVisible();
+  await expect(ownerWorkPage.getByText('Responsabilità commerciale: incarico operativo dalla decisione Admin', { exact: true })).toBeVisible();
   await adminPage.goto(acceptanceUrl);
   await expect(adminPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
   await otherPage.goto(acceptanceUrl);

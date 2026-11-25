@@ -58,7 +58,7 @@ test.afterEach(async ({ page }, info) => {
 
 test('native Admin dashboard uses complete real synthetic totals, original logo, selection and filtered lead destination', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' }); await login(page, f.emails.admin);
-  for (const [id, value] of [['lead', 47], ['pratiche', 18], ['revisioni', 6], ['oggi', 3]] as const) await expect(kpi(page, id).locator('[data-counter-final]')).toHaveAttribute('data-counter-final', String(value));
+  for (const [id, value] of [['lead', 48], ['pratiche', 18], ['revisioni', 6], ['oggi', 3]] as const) await expect(kpi(page, id).locator('[data-counter-final]')).toHaveAttribute('data-counter-final', String(value));
   await expect(kpi(page, 'pratiche')).toHaveAttribute('data-selected', 'true');
   const logo = page.getByRole('img', { name: 'Finanza Agevola Impresa' }).filter({ visible: true });
   await expect(logo).toBeVisible();
@@ -66,12 +66,10 @@ test('native Admin dashboard uses complete real synthetic totals, original logo,
   await expect(page.locator('#dashboard-detail li')).toHaveCount(3);
   await expect(page.locator('#dashboard-detail')).not.toContainText('approvata fuori filtro');
   await shot(page, 'dashboard-native-desktop-1672', 1672);
-  await selectByKeyboard(page, 'lead');
-  await expect(page.locator('#dashboard-detail li')).toHaveCount(3);
-  await page.locator('#dashboard-detail').getByRole('link', { name: 'Vedi elenco completo' }).click();
-  await expect(page).toHaveURL(/\/leads\?status=da_contattare/);
-  await expect(page.locator('select[name="status"]')).toHaveValue('da_contattare');
-  await expect(page.getByText('Lead nuovo escluso dal filtro', { exact: true })).toHaveCount(0);
+  const link = kpi(page, 'lead').getByRole('link', { name: /^Anteprima:/ });
+  await link.focus(); await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/leads\/work\?queue=contact$/);
+  await expect(page.getByRole('heading', { name: '48 lead in elenco' })).toBeVisible();
   await expect(page.getByText('Lead nel cestino escluso', { exact: true })).toHaveCount(0);
 });
 
@@ -93,10 +91,10 @@ test('review and today lists apply the same filters as their counters without ch
 
 test('an open session loses detail and counts after permission revocation or reassignment', async ({ page }) => {
   await login(page, f.emails.reader); await page.goto('/dashboard?vista=lead');
-  await expect(kpi(page, 'lead').locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '3');
+  await expect(kpi(page, 'lead').locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '4');
   await db.lead.update({ where: { id: f.leadId }, data: { assignedToId: f.otherId } });
   try {
-    await page.reload(); await expect(kpi(page, 'lead').locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '2');
+    await page.reload(); await expect(kpi(page, 'lead').locator('[data-counter-final]')).toHaveAttribute('data-counter-final', '3');
     await expect(page.locator('#dashboard-detail')).not.toContainText('Lead sintetico 01');
     await db.userPermissionOverride.create({ data: { userId: f.readerId, permission: 'lead.read', allowed: false } });
     await page.reload(); await expect(kpi(page, 'lead')).toHaveCount(0);

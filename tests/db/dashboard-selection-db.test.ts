@@ -14,19 +14,21 @@ const actor: AuthSession = { userId: prefix + 'reader', role: 'consulente', acti
 test.before(async () => { if (run) await assertAiOrchestratorEphemeralDatabaseIdentity(prisma); });
 test.after(async () => { await prisma.$disconnect(); });
 
-test('lead preview narrows the count predicate and excludes deleted, different-status and reassigned records', { skip: !run }, async () => {
+test('lead preview includes new assigned work and excludes deleted, closed and reassigned leads', { skip: !run }, async () => {
   const base = { firstName: 'Synthetic', lastName: 'Dashboard', assignedToId: actor.userId, status: 'da_contattare' as const };
   try {
     await prisma.lead.createMany({ data: [
       ...[1, 2, 3].map(i => ({ ...base, id: `${prefix}lead-${i}`, companyName: `Lead ${i}` })),
       { ...base, id: prefix + 'lead-deleted', deletedAt: new Date() },
       { ...base, id: prefix + 'lead-new', status: 'nuovo' },
+      { ...base, id: prefix + 'lead-closed', status: 'vinto' },
       { ...base, id: prefix + 'lead-other', assignedToId: prefix + 'other' },
     ] });
     assert.equal((await loadDashboardLeadDetail(actor)).length, 3);
-    assert((await loadDashboardLeadDetail(actor)).every(row => row.status === 'da_contattare' && !/deleted|other|new/.test(row.id)));
+    assert((await loadDashboardLeadDetail(actor)).every(row => ['da_contattare','nuovo'].includes(row.status) && !/deleted|other|closed/.test(row.id)));
     await prisma.lead.update({ where: { id: prefix + 'lead-1' }, data: { assignedToId: prefix + 'other' } });
-    assert.equal((await loadDashboardLeadDetail(actor)).length, 2);
+    assert.equal((await loadDashboardLeadDetail(actor)).length, 3);
+    assert((await loadDashboardLeadDetail(actor)).some(row => row.id === prefix + 'lead-new'));
     const denied = { ...actor, permissionOverrides: [{ permission: 'lead.read', allowed: false }] };
     assert.deepEqual(await loadDashboardLeadDetail(denied), []);
   } finally { await prisma.lead.deleteMany({ where: { id: { startsWith: prefix + 'lead-' } } }); }
