@@ -15,11 +15,12 @@ import { parseCoreQueryPage } from '@/lib/core-query-policy';
   if (session.role !== 'admin') notFound();
   const params = await searchParams ?? {};
   const page = parseCoreQueryPage(params.page);
-  const result = await listTrashedLeads(prisma, session, page);
+  const result = await listTrashedLeads(prisma, session, page, params.q);
   return <div className="crm-space-y-6">
     <PageHeader title="Cestino lead" description="Area riservata all’amministratore. I lead sono conservati e possono essere ripristinati; non è prevista una cancellazione definitiva." />
     <SecondaryLink href="/leads">Torna alla pipeline</SecondaryLink>
     {params.result === 'trashed' && <p role="status" className="rounded-xl bg-green-50 p-3">Lead spostato nel cestino. Dati e collegamenti conservati.</p>}
+    <form><label>Cerca nel cestino lead <input name="q" defaultValue={params.q} maxLength={128} className="rounded border p-2"/></label> <button className="underline">Cerca</button></form>
     <Card title="Lead nel cestino">{result.items.length === 0 ? <EmptyState title="Cestino vuoto" /> : <div className="space-y-4">
       {result.items.map(lead => {
         const title = lead.companyName || `${lead.firstName} ${lead.lastName}`;
@@ -32,8 +33,8 @@ import { parseCoreQueryPage } from '@/lib/core-query-policy';
       })}
     </div>}</Card>
     <nav aria-label="Pagine del cestino" className="flex gap-3">
-      {page > 1 && <SecondaryLink href={`/leads/trash?page=${page - 1}`}>Precedente</SecondaryLink>}
-      {result.hasNext && <SecondaryLink href={`/leads/trash?page=${page + 1}`}>Successiva</SecondaryLink>}
+      {page > 1 && <SecondaryLink href={`/leads/trash?page=${page - 1}&q=${encodeURIComponent(params.q ?? '')}`}>Precedente</SecondaryLink>}
+      {result.hasNext && <SecondaryLink href={`/leads/trash?page=${page + 1}&q=${encodeURIComponent(params.q ?? '')}`}>Successiva</SecondaryLink>}
     </nav>
   </div>;
 }

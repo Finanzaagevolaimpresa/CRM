@@ -22,7 +22,7 @@ const noAccess: DashboardCounterAccess = {
 };
 
 const counts: DashboardCounterCounts = {
-  leadDaContattare: 11,
+  entratiOggi: 7, daAssegnare: 8, leadDaContattare: 11,
   trattativeAperte: 12,
   offerteInviate: 13,
   offerteAccettate: 14,
@@ -53,7 +53,7 @@ test("commercial-only access preserves four distinct lead and offer counters", (
   assert.equal(result.length, 1);
   assert.equal(result[0].title, "Commerciale");
   assert.deepEqual(result[0].counters.map(({ value, href }) => [value, href]), [
-    [11, "/leads"], [12, "/leads"], [13, "/commercial-offers"], [14, "/commercial-offers"],
+    [7, "/leads/work?queue=today"], [8, "/leads/work?queue=unassigned"], [11, "/leads/work?queue=contact"], [12, "/leads"], [13, "/commercial-offers"], [14, "/commercial-offers"],
   ]);
 });
 
@@ -160,7 +160,7 @@ test("payment card identifies the count as records, not euro", () => {
   assert.equal(result[0].counters[0].href, "/payments");
 });
 
-test("full access yields six groups and preserves all 20 independent source values", () => {
+test("full access yields six groups and preserves all 22 independent source values", () => {
   const allAccess = Object.fromEntries(Object.keys(noAccess).map((key) => [key, true])) as DashboardCounterAccess;
   const result = buildDashboardCounterGroups(allAccess, counts);
   assert.deepEqual(result.map(({ title }) => title), [

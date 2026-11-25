@@ -75,6 +75,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          npm run prisma:migrate:deploy
           node --import tsx --test --test-reporter=tap tests/shared-operational-update-contract.test.ts tests/shared-operational-retry.test.ts tests/record-update-read-retry.test.ts | tee "$SHARED_EVIDENCE/unit.tap"
           grep -q '^# tests 13$' "$SHARED_EVIDENCE/unit.tap"
           grep -q '^# pass 13$' "$SHARED_EVIDENCE/unit.tap"

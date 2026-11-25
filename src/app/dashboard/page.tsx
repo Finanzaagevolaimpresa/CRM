@@ -1,3 +1,4 @@
+import { countLeadWork, leadWorkHref } from '@/lib/lead-work-queues';
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import {
   Card,
@@ -139,7 +140,7 @@ export const dynamic = "force-dynamic";
   const statusLabel = (status: string) => status.replaceAll("_", " ");
   const [
     leadNuovi,
-    leadDaContattare,
+    workCounts,
     proposteInviate,
     trattativeAperte,
     leadVinti,
@@ -184,15 +185,7 @@ export const dynamic = "force-dynamic";
           where: { deletedAt: null, status: "nuovo", ...leadAccessWhere },
         })
       : 0,
-    canReadLeads
-      ? prisma.lead.count({
-          where: {
-            deletedAt: null,
-            status: "da_contattare",
-            ...leadAccessWhere,
-          },
-        })
-      : 0,
+    canReadLeads ? countLeadWork(prisma, session, now) : null,
     canReadLeads
       ? prisma.lead.count({
           where: {
@@ -530,10 +523,11 @@ export const dynamic = "force-dynamic";
       "green",
     ],
   ];
+  const leadDaContattare = workCounts?.contact ?? 0;
   const commercialSummary = [
     ["Nuovi lead", leadNuovi, "Contatti appena entrati", "blue"],
     [
-      "Da contattare",
+      "Assegnati da contattare",
       leadDaContattare,
       "Lead in attesa di primo contatto",
       "orange",
@@ -734,11 +728,11 @@ export const dynamic = "force-dynamic";
     pipelineCounts.find((row) => row.operationalStatus === status)?._count
       ._all ?? 0;
   const dashboardKpis = [
-    canReadLeads && { id: "lead" as const, label: "Lead da contattare", value: leadDaContattare, description: "Lead nello stato da contattare, nel tuo perimetro.", href: dashboardDestinations.lead, tone: "blue" as const },
+    canReadLeads && { id: "lead" as const, label: "Assegnati da contattare", value: leadDaContattare, description: "Lead aperti assegnati senza un contatto effettivo registrato.", href: leadWorkHref("contact"), tone: "blue" as const },
     canReadTechnical && { id: "pratiche" as const, label: "Pratiche attive", value: activeTechnicalPracticesCount, description: "Pratiche tecniche in stato operativo: escluse approvate, respinte e archiviate.", href: dashboardDestinations.pratiche, tone: "green" as const },
     canReadDossiers && { id: "revisioni" as const, label: "Da revisionare", value: preReview, description: "Pre-analisi in bozza generata o da revisionare, accessibili al tuo profilo.", href: dashboardDestinations.revisioni, tone: "purple" as const },
     canReadServices && { id: "oggi" as const, label: "In scadenza oggi", value: todayTasksCount, description: "Attività aperte o in lavorazione con scadenza nella giornata corrente.", href: dashboardDestinations.oggi, tone: "orange" as const },
-  ].filter((item): item is Exclude<typeof item, false> => Boolean(item)).map(item => ({ ...item, selectionHref: `/dashboard?vista=${item.id}` }));
+  ].filter((item): item is Exclude<typeof item, false> => Boolean(item)).map(item => ({ ...item, selectionHref: item.id === "lead" ? leadWorkHref("contact") : `/dashboard?vista=${item.id}` }));
   const selectedView = selectDashboardView(params.vista, dashboardKpis.map(item => item.id as DashboardView));
   const dashboardDetail = selectedView === "lead" ? await loadDashboardLeadDetail(session)
     : selectedView === "revisioni" ? await loadDashboardReviewDetail(session)
@@ -765,7 +759,7 @@ export const dynamic = "force-dynamic";
     isAdmin: session.role === "admin",
     showServicePortfolio: view.showServicePortfolio,
   }, {
-    leadDaContattare, trattativeAperte, offerteInviate, offerteAccettate,
+    leadDaContattare, entratiOggi: workCounts?.today ?? 0, daAssegnare: workCounts?.unassigned ?? 0, trattativeAperte, offerteInviate, offerteAccettate,
     activeTechnicalPracticesCount, overdueClientUpdates, commsToReview,
     approvedUnusedComms, clientiAttivi, progettiAttivi, serviziAcquistati,
     tasks, todayTasksCount, overdueTasks, dueSoonTasks, payments,

@@ -24,10 +24,12 @@ import { isOperationalTechnician } from '@/lib/operational-work';
   </nav>;
   if (view === 'archive' || view === 'trash') {
     if (!hasPermission(session, 'project.write')) notFound();
-    const rows = await listManagedProjectLifecycle(prisma, session, view === 'trash' ? 'trash' : 'archived');
+    const term = typeof query.q === 'string' ? query.q.trim().slice(0,128).toLocaleLowerCase('it') : '';
+    const rows = (await listManagedProjectLifecycle(prisma, session, view === 'trash' ? 'trash' : 'archived')).filter(row =>
+      [row.id,row.title,row.clientName].some(text => text.toLocaleLowerCase('it').includes(term)));
     return <div className="crm-space-y-6"><PageHeader title={view === 'trash' ? 'Cestino progetti' : 'Archivio progetti'}
       description="Progetti sospesi, con documenti e collegamenti conservati. Solo i gestori già autorizzati possono ripristinarli." />
-      {tabs}
+      {tabs}<form><input type="hidden" name="view" value={view}/><label>Cerca per progetto o cliente <input name="q" defaultValue={term} maxLength={128} className="rounded border p-2"/></label> <button className="underline">Cerca</button></form>
       {rows.length === 0 ? <EmptyState title="Nessun progetto" /> : rows.map(row => <Card key={row.id} title={row.title}>
         <p className="mb-3">Cliente: {row.clientName}</p>
         <ProjectLifecycleControls id={row.id} updatedAt={row.updatedAt} state={row.state} />

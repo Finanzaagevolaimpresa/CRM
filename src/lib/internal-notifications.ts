@@ -1,3 +1,4 @@
+import { currentAssignmentNotices } from './assignment-notices';
 import { isTechnicalAccount } from './technical-confidentiality';
 import { hasPermission, type AuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -128,6 +129,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   const visibleOffers = offers.filter(access.canViewOffer);
   const visibleTasks = tasks.filter(access.canViewTask);
   const notifications: InternalNotification[] = [
+    ...await currentAssignmentNotices(session,limit),
     ...aiAuthorizationNotifications.map((notification) => ({
       id: `ai-authorization-${notification.id}`,
       title: `${notification.request.functionCode.replaceAll("_", " ")} · ${notification.request.requester?.name ?? "Sistema"}`,

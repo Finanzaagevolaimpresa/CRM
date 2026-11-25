@@ -88,13 +88,14 @@ async function lockContext(tx: Tx, actor: Actor, leadId: string) {
   const decision = responsibility.current;
   const acceptance = responsibility.accepted.find(r => r.acceptance.role === 'commerciale'
     && r.acceptance.userId === actor.userId && r.acceptance.decisionId === decision?.id);
-  if (!responsibility.valid || !decision || !acceptance) return unavailable();
+  if (!responsibility.valid || !decision || decision.decision.state.commercialOwnerId !== actor.userId) return unavailable();
   const times = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp()::timestamptz(3) AS now`;
   if (!times[0]) return unavailable();
   const context: HistoricalContactContext = {
     leadId, actorId: actor.userId, actorRole: session.role, sessionLive: true, canWriteLead: true,
     selectiveAccessOnly: false, currentOwnerId: lead.assignedToId, assignmentId: decision.id,
-    acceptedAssignmentId: acceptance.acceptance.decisionId, acceptedById: acceptance.acceptance.userId,
+    administrativeAssignmentId: decision.id,
+    acceptedAssignmentId: acceptance?.acceptance.decisionId ?? null, acceptedById: acceptance?.acceptance.userId ?? null,
     origin: item.originKind, state: item.state, inboxVersion: item.version, deleted: false, converted: false,
     cycleSequence: cycles[0].sequence, firstResponseAt: null, historicalContactExists: false,
     initializedAt: item.initializedAt.toISOString(), recordedAt: times[0].now.toISOString(),

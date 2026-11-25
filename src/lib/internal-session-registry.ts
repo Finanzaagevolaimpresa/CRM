@@ -1,3 +1,4 @@
+import { ordinaryWindowEnabled } from './admin-ordinary-policy';
 import { currentTechnicalRestriction } from './technical-account-membership';
 import { Prisma, type PrismaClient, type RoleCode } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -107,6 +108,9 @@ export function authoritativeInternalSessionLookupQuery(
     WHERE s."tokenDigest" = ${Buffer.from(digest)}
       AND s."revokedAt" IS NULL
       AND s."expiresAt" > CURRENT_TIMESTAMP
+      AND (to_jsonb(s)->>'ordinaryConfirmedAt' IS NULL OR (${ordinaryWindowEnabled()} AND u."role"='admin'
+        AND (to_jsonb(s)->>'ordinaryLastActiveAt')::timestamptz > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+        AND (to_jsonb(s)->>'ordinaryConfirmedAt')::timestamptz > CURRENT_TIMESTAMP - INTERVAL '24 hours'))
       AND u."active" = TRUE
       AND u."deletedAt" IS NULL
     LIMIT 1
@@ -172,7 +176,10 @@ export async function lockAuthoritativeInternalSession(
     deletedAt: Date | null;
   }>>(Prisma.sql`
     SELECT session_row."id", session_row."userId", session_row."expiresAt",
-      session_row."revokedAt", session_row."expiresAt" > CURRENT_TIMESTAMP AS "live",
+      session_row."revokedAt", (session_row."expiresAt" > CURRENT_TIMESTAMP
+        AND (to_jsonb(session_row)->>'ordinaryConfirmedAt' IS NULL OR (${ordinaryWindowEnabled()} AND user_row."role"='admin'
+          AND (to_jsonb(session_row)->>'ordinaryLastActiveAt')::timestamptz > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+          AND (to_jsonb(session_row)->>'ordinaryConfirmedAt')::timestamptz > CURRENT_TIMESTAMP - INTERVAL '24 hours'))) AS "live",
       user_row."role", user_row."active", user_row."deletedAt"
     FROM "InternalSession" session_row
     JOIN "User" user_row ON user_row."id" = session_row."userId"

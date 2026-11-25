@@ -63,6 +63,7 @@ export type HistoricalContactContext = Readonly<{
   selectiveAccessOnly: boolean;
   currentOwnerId: string | null;
   assignmentId: string | null;
+  administrativeAssignmentId?: string;
   acceptedAssignmentId: string | null;
   acceptedById: string | null;
   origin: string;
@@ -89,7 +90,8 @@ export function prepareHistoricalContact(input: HistoricalContactInput, context:
   if (context.deleted || context.converted || context.origin !== 'MANUAL_CRM' || context.state !== 'OPEN'
     || context.cycleSequence !== 1 || value.leadId !== context.leadId
     || context.inboxVersion !== value.expectedInboxVersion || context.assignmentId !== value.expectedAssignmentId
-    || context.acceptedAssignmentId !== context.assignmentId || context.acceptedById !== context.actorId) return deny('STALE_CONTEXT');
+    || (context.administrativeAssignmentId !== context.assignmentId
+      && (context.acceptedAssignmentId !== context.assignmentId || context.acceptedById !== context.actorId))) return deny('STALE_CONTEXT');
   if (context.firstResponseAt !== null || context.historicalContactExists) return deny('ALREADY_RECORDED');
   if (Date.parse(value.occurredAt) >= Date.parse(initializedAt) || Date.parse(initializedAt) > Date.parse(recordedAt)) return deny('NOT_HISTORICAL');
   const payload = {

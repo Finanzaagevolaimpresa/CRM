@@ -150,7 +150,7 @@ async function migrationChain(upgrade: boolean) {
   const allNames = readdirSync("prisma/migrations")
     .filter((name) => /^\d/.test(name))
     .sort();
-  assert.equal(allNames.length, 76, "the current candidate must contain exactly 76 migrations");
+  assert.equal(allNames.length, 77, "the current candidate must contain exactly 77 migrations");
   assert.equal(allNames[70], "20261028180000_record_deadline_reminders_v1");
   assert.equal(allNames[45], "20260914130000_practice_engagement_readiness_v1");
   assert.equal(allNames[47], "20260924100000_admin_client_read_perimeters_v1");
@@ -240,9 +240,13 @@ test("N02 catalog has checks FKs and indexes", { skip: !run }, async () => {
       (SELECT COUNT(*) FROM pg_indexes
         WHERE tablename='InternalSession') AS indexes
   `;
+  const ordinaryCheck = await db.$queryRaw<Array<{ conname: string }>>`
+    SELECT conname FROM pg_constraint WHERE conrelid='"InternalSession"'::regclass
+      AND contype='c' AND conname='InternalSession_ordinary_window'`;
+  assert.equal(ordinaryCheck.length, 1);
   assert.deepEqual(
     [Number(rows[0].checks), Number(rows[0].fks), Number(rows[0].indexes)],
-    [3, 2, 4],
+    [4, 2, 4],
   );
 });
 

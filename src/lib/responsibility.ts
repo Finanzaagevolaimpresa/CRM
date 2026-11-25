@@ -1,3 +1,4 @@
+import { leadAssignees } from './lead-assignee';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { assertNoSelectivePracticeMutation } from './selective-practice-scope';
 import { assertNoSelectiveClientMutation } from './selective-client-scope';
@@ -117,6 +118,8 @@ export async function confirmLeadResponsibility(tx: Prisma.TransactionClient, ac
   const context = await lockContext(tx, 'Lead', input.id), current = await latestResponsibility(tx, 'Lead', input.id);
   if (!context?.workable || context.updatedAt.toISOString() !== input.expectedUpdatedAt || (current?.id ?? '') !== input.expectedEntryId) return deny();
   await authorizeManualAssignment(tx, actor, [{ userId: context.state.commercialOwnerId, roles: commercialRoles }]);
+  if (context.state.commercialOwnerId && !(await leadAssignees(tx,context.state.commercialOwnerId)).length)
+    return deny('Scegli un referente attivo e abilitato al lavoro sul lead.');
   return appendResponsibilityDecision(tx, { kind: 'Lead', id: input.id, actorId: actor.userId, state: context.state,
     allowed: true, reason: input.reason });
 }

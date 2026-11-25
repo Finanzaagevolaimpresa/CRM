@@ -52,18 +52,18 @@ export const dynamic = 'force-dynamic';
       <p>Commerciale: {nameOf(currentState?.commercialOwnerId)}</p>
       {kind === 'TechnicalPractice' && <><p>Reparto tecnico: {data.current?.decision.departmentCode ?? 'Non indicato'}</p><p>Referente tecnico: {nameOf(currentState?.technicalOwnerId)}</p>
         {!currentState?.technicalOwnerId && <p>Referente individuale mancante: presa in carico tecnica non avvenuta.</p>}</>}
-      {data.current ? <p>Decisione di {nameOf(data.current.actorId)} · {formatDateTime(data.current.createdAt)} · revisione {data.current.decision.version}</p> : <p>Assegnazione preesistente: l’amministratore deve confermarla prima della presa in carico.</p>}
+      {data.current ? <p>Decisione di {nameOf(data.current.actorId)} · {formatDateTime(data.current.createdAt)} · revisione {data.current.decision.version}</p> : <p>Assegnazione preesistente: l’amministratore può registrare la decisione corrente.</p>}
       {!data.valid && <p>La decisione non è utilizzabile per una nuova presa in carico. È necessaria la verifica dell’amministratore.</p>}
       {(['commerciale', ...(kind === 'TechnicalPractice' ? ['tecnico'] : [])] as Array<'commerciale' | 'tecnico'>).map(role => {
         const ownerId = role === 'commerciale' ? currentState?.commercialOwnerId : currentState?.technicalOwnerId;
         const owner = ownerId ? userMap.get(ownerId) : null, accepted = data.accepted.find(row => row.acceptance.role === role && row.acceptance.userId === ownerId);
         const available = owner?.active && !owner.deletedAt;
-        return <div key={role} className="mt-3 rounded-xl border p-3"><p>Presa in carico {role}: {accepted ? `registrata il ${formatDateTime(accepted.createdAt)}` : 'da confermare'}{owner && !available ? ' · account non operativo, attività nella coda amministrativa' : ''}</p>
+        return <div key={role} className="mt-3 rounded-xl border p-3"><p>{accepted ? 'Presa in carico' : 'Responsabilità'} {role}: {accepted ? `registrata il ${formatDateTime(accepted.createdAt)}` : data.valid && available ? 'incarico operativo dalla decisione Admin' : 'incarico da verificare'}{owner && !available ? ' · account non operativo, attività nella coda amministrativa' : ''}</p>
           {data.valid && data.current && !accepted && available && ownerId === session.userId && hasPermission(session, 'assignment.accept') && (role !== 'tecnico' || data.current.decision.departmentCode) && <ResponsibilityAcceptanceForm kind={kind} id={id} decisionId={data.current.id} role={role} />}</div>;
       })}
     </Card>
     {session.role === 'admin' && data.context?.workable && <Card title="Decisione amministrativa">
-      <p>Il reparto non concede accessi ai suoi membri. Solo il referente individuale riceve la responsabilità. Una nuova decisione richiede una nuova presa in carico.</p>
+      <p>Il reparto non concede accessi ai suoi membri. Solo il referente individuale riceve la responsabilità. Il salvataggio rende operativo l’incarico individuale. L’eventuale presa in carico personale resta nello storico.</p>
       {kind === 'TechnicalPractice' && <><form method="get"><label>Cerca referente<input name="q" defaultValue={q} className="m-2 rounded-lg border p-2" /></label><button>Cerca</button></form>
         {candidates.length > 25 && <Link href={`${path}?${new URLSearchParams({ q, after: candidates[24].id })}`}>Altri referenti</Link>}</>}
       <ResponsibilityAssignmentForm key={`${data.current?.id ?? 'initial'}:${q}:${after ?? ''}`} kind={kind} id={id} entryId={data.current?.id ?? ''}

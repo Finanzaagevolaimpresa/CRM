@@ -1,0 +1,91 @@
+name: Lead setter
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: lead-setter-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  qualify:
+    name: Lead setter assignment, calls and queues
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-setter-ci, POSTGRES_DB: fai_crm_test }
+        ports: ['127.0.0.1:15477:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-setter-ci@127.0.0.1:15477/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      NEXT_TELEMETRY_DISABLED: '1'
+      INTERNAL_SESSION_MODE: registry
+      PRIVILEGED_ACCESS_MODE: enforced
+      ADMIN_ORDINARY_WINDOW_MODE: enabled
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-setter-ci-explicit-stepup-000000000000
+      AUTH_SECRET: synthetic-setter-ci-local-login-000000000000
+      AUTH_COOKIE_NAME: fai_setter_test
+      APP_ORIGIN: http://127.0.0.1:3059
+      COMMERCIAL_LEAD_INBOX_MODE: enforced
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Verify source and bind synthetic database
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          mkdir "$RUNNER_TEMP/setter-evidence"
+          echo "SETTER_EVIDENCE=$RUNNER_TEMP/setter-evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/setter-documents" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$RUNNER_TEMP/setter-evidence/binding.json"
+          psql "${DATABASE_URL%%\?*}" -X -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+      - name: Migration, preserved legacy lead and atomic rollback
+        run: bash scripts/lead-setter/qualify-schema.sh
+      - name: Assignment, concurrency, historical contact, session expiry and revocation
+        run: |
+          set -euo pipefail
+          node --import tsx tests/lead-setter/fixture.ts
+          node --import tsx --test --test-reporter=tap tests/lead-setter-workflow.test.ts tests/lead-setter/persistence.ts | tee "$SETTER_EVIDENCE/database.tap"
+          grep -qx '# tests 10' "$SETTER_EVIDENCE/database.tap"
+          grep -qx '# pass 10' "$SETTER_EVIDENCE/database.tap"
+          grep -qx '# skipped 0' "$SETTER_EVIDENCE/database.tap"
+      - name: Browser through ordinary logins, queues, recording and restore
+        run: |
+          set -euo pipefail
+          node --import tsx tests/lead-setter/prepare-browser.ts
+          npx playwright install --with-deps chromium
+          NODE_ENV=production npm run build 2>&1 | tee "$SETTER_EVIDENCE/build.log"
+          NODE_ENV=production node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3059 > "$SETTER_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 15 http://127.0.0.1:3059/login > /dev/null; then break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$SETTER_EVIDENCE/playwright.json" npx playwright test --config tests/lead-setter/playwright.config.ts --reporter=line,json --output "$SETTER_EVIDENCE/results"
+          node -e 'const {stats:s}=require(process.env.SETTER_EVIDENCE+"/playwright.json");if(s.expected!==1||s.skipped||s.unexpected||s.flaky)process.exit(1)'
+          git rev-parse HEAD HEAD^{tree} > "$SETTER_EVIDENCE/source.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lead-setter-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/setter-evidence
+          if-no-files-found: error
+          retention-days: 14

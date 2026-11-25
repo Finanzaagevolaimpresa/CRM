@@ -1,3 +1,4 @@
+import { leadAssignees } from '@/lib/lead-assignee';
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { AdminRecordShortcut } from '@/components/admin-record-shortcut';
 import type { Prisma } from '@prisma/client';
@@ -79,13 +80,9 @@ function queueValue(value: string | undefined): Queue {
         slaCycles: { orderBy: { sequence: 'desc' }, take: 1, include: { policyVersion: true } },
       },
     }),
-    prisma.user.findMany({
-      where: { active: true, deletedAt: null, role: 'commerciale' },
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: 250,
-      select: { id: true, name: true },
-    }),
-    privilegedAccessReadiness(session),
+    session.role === 'admin' && hasPermission(session,'lead.inbox.assign') ? leadAssignees(prisma)
+      : prisma.user.findMany({ where: { id: session.userId, active: true, deletedAt: null }, select: { id: true, name: true, email: true } }),
+    privilegedAccessReadiness(session,'N14_LEAD_INBOX_ASSIGN'),
     canReview ? prisma.leadDuplicateCase.count({ where: openLeadDuplicateReviewWhere(session.userId) }) : null,
   ]);
   const page = toCoreQueryPage(rows, pageNumber);
@@ -99,6 +96,8 @@ function queueValue(value: string | undefined): Queue {
     <AdminRecordShortcut session={session} model="CommercialLeadSlaPolicyVersion" />
     <div className="flex flex-wrap gap-3">
       <SecondaryLink href="/leads">← Pipeline</SecondaryLink>
+      <SecondaryLink href="/leads/work?queue=contact">Assegnati da contattare</SecondaryLink>
+      <SecondaryLink href="/leads/work?queue=missing">Eccezioni e prossimi passi</SecondaryLink>
       {reviewCount !== null && <SecondaryLink href="/leads/duplicates">Richieste da verificare ({reviewCount})</SecondaryLink>}
       {queues.map((queue) => <SecondaryLink key={queue} href={`/leads/inbox?queue=${queue}`}>{queue}</SecondaryLink>)}
     </div>
@@ -107,7 +106,7 @@ function queueValue(value: string | undefined): Queue {
     {assignmentAuthority && <Card title="Assegnazione del referente commerciale">
       {canManage ? <p>Conferma personale attiva. Scegli il referente nella scheda del lead e premi Assegna. L’assegnazione non registra una risposta e non converte il lead.</p>
         : readiness.mode === 'enforced' && readiness.keyReady ? <div className="crm-space-y-3">
-          <p>Per assegnare, cambiare o rilasciare un referente devi prima confermare la tua identità. La conferma Admin vale 30 minuti nella sessione corrente; nessun lead viene modificato da questo passaggio.</p>
+          <p>Per assegnare, cambiare o rilasciare un referente devi prima confermare la tua identità. La pagina Sicurezza indica la durata disponibile per le assegnazioni.</p>
           <SecondaryLink href="/settings/security?returnTo=lead-inbox">Conferma identità per assegnare</SecondaryLink>
         </div> : <p>La protezione necessaria per assegnare il referente non è disponibile. I dati restano consultabili; l’assegnazione rimane bloccata.</p>}
     </Card>}
@@ -132,7 +131,7 @@ function queueValue(value: string | undefined): Queue {
               {item.state === 'OPEN' && owned && canWork && !cycle?.firstResponseAt && <form action={recordCommercialLeadFirstResponse}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Registra prima risposta</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && cycle?.firstResponseAt && <form action={convertLeadToClientAndRedirect} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="type" defaultValue="societa" className="rounded-xl border p-2"><option value="societa">Società</option><option value="ditta_individuale">Ditta individuale</option><option value="persona_fisica">Persona fisica</option><option value="professionista">Professionista</option><option value="soggetto_da_costituire">Soggetto da costituire</option><option value="associazione">Associazione</option><option value="altro">Altro</option></select><PrimaryButton type="submit">Converti</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && <form action={closeCommercialLeadInbox} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="reasonCode" className="rounded-xl border p-2" defaultValue="QUALIFIED_OUT"><option value="QUALIFIED_OUT">Non qualificato</option><option value="LOST">Perso</option><option value="ARCHIVED">Archiviato</option></select><PrimaryButton type="submit">Chiudi</PrimaryButton></form>}
-              {item.state === 'OPEN' && canManage && <form action={assignCommercialLeadInbox} className="flex flex-wrap gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><label className="block min-w-0 flex-1">Referente commerciale<select aria-label="Referente commerciale" name="targetUserId" defaultValue="" className="mt-1 block w-full max-w-full rounded-xl border p-2" required><option value="" disabled>Seleziona una persona</option>{userRows.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label><PrimaryButton type="submit" disabled={userRows.length === 0}>Assegna</PrimaryButton>{userRows.length === 0 && <p>Nessun referente commerciale attivo disponibile.</p>}</form>}
+              {item.state === 'OPEN' && canManage && <form action={assignCommercialLeadInbox} className="flex flex-wrap gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><label className="block min-w-0 flex-1">Referente commerciale<select aria-label="Referente commerciale" name="targetUserId" defaultValue="" className="mt-1 block w-full max-w-full rounded-xl border p-2" required><option value="" disabled>Seleziona una persona</option>{userRows.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.email}</option>)}</select></label><PrimaryButton type="submit" disabled={userRows.length === 0}>Assegna</PrimaryButton>{userRows.length === 0 && <p>Nessun referente commerciale attivo disponibile.</p>}</form>}
               {item.state === 'OPEN' && item.lead.assignedToId && canManage && <form action={unassignCommercialLeadInbox}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Rilascia</PrimaryButton></form>}
               {item.state === 'CLOSED' && canManage && <form action={reopenCommercialLeadInbox}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Riapri</PrimaryButton></form>}
             </div>

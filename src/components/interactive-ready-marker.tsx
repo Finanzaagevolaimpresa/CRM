@@ -1,6 +1,11 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+
+const subscribe = () => () => {};
+export function useInteractiveReady() {
+  return useSyncExternalStore(subscribe, () => true, () => false);
+}
 
 export function InteractiveReadyMarker() {
   const marker = useRef<HTMLSpanElement>(null);

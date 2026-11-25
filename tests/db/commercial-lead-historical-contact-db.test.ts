@@ -207,10 +207,12 @@ test('failure while writing the audit rolls back the inbox version and entire co
   assert.deepEqual(await state(f), before);
 });
 
-test('admin, another commercial and an owner without personal acceptance cannot attest for the owner', options, async () => {
+test('only the assigned owner can attest, including after an Admin decision without personal acceptance', options, async () => {
   const f = await fixture(false), before = await state(f);
-  for (const who of [f.admin, f.other, f.owner]) await assert.rejects(recordHistoricalLeadContact(client(), who, f.input));
+  for (const who of [f.admin, f.other]) await assert.rejects(recordHistoricalLeadContact(client(), who, f.input));
   assert.deepEqual(await state(f), before);
+  await recordHistoricalLeadContact(client(), f.owner, f.input);
+  assert.equal(await client().auditLog.count({ where: { entityId: f.input.leadId, event: 'responsibility_accepted' } }), 0);
 });
 
 for (const revocation of ['permission', 'session', 'suspension'] as const) {

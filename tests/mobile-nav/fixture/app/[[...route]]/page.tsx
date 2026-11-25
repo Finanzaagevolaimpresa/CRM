@@ -50,7 +50,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
     canReviewAiOutputs: can("ai.review"),
     isAdmin: profile === "admin",
   }, {
-    leadDaContattare: count(24), trattativeAperte: count(8), offerteInviate: count(6), offerteAccettate: count(3),
+    entratiOggi: count(7), daAssegnare: count(8), leadDaContattare: count(24), trattativeAperte: count(8), offerteInviate: count(6), offerteAccettate: count(3),
     activeTechnicalPracticesCount: count(11), overdueClientUpdates: count(2), commsToReview: count(5), approvedUnusedComms: count(4),
     clientiAttivi: count(38), progettiAttivi: count(16), serviziAcquistati: count(52),
     tasks: count(19), todayTasksCount: count(6), overdueTasks: count(2), dueSoonTasks: count(9), payments: count(7),
@@ -80,7 +80,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
             ]}
             summary={`${priorities.length} priorità operative sintetiche nel perimetro della fixture.`}
             kpis={[
-              ...(can("lead.read") ? [{ id: "lead", selectionHref: "/dashboard?vista=lead", label: "Lead da contattare", value: count(24), description: "Contatti visibili da contattare", href: "/leads?status=da_contattare", tone: "blue" as const }] : []),
+              ...(can("lead.read") ? [{ id: "lead", selectionHref: "/dashboard?vista=lead", label: "Assegnati da contattare", value: count(24), description: "Contatti visibili da contattare", href: "/leads?status=da_contattare", tone: "blue" as const }] : []),
               ...(can("technical.read") ? [{ id: "pratiche", selectionHref: "/dashboard?vista=pratiche", label: "Pratiche attive", value: count(11), description: "Pratiche tecniche accessibili in stato operativo", href: "/technical-office/practices?dashboard=attive", tone: "green" as const }] : []),
               ...(can("dossier.read") ? [{ id: "revisioni", selectionHref: "/dashboard?vista=revisioni", label: "Da revisionare", value: count(3), description: "Pre-analisi in bozza o da revisionare", href: "/preanalyses?dashboard=revisioni", tone: "purple" as const }] : []),
               ...(can("service.read") ? [{ id: "oggi", selectionHref: "/dashboard?vista=oggi", label: "In scadenza oggi", value: count(6), description: "Attività aperte in scadenza oggi", href: "/tasks?dashboard=oggi", tone: "orange" as const }] : []),

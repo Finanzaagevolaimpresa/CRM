@@ -157,11 +157,16 @@ test('N14 qualified-out is terminal across the legacy writer and database guard'
   assert.match(migration, /NEW\."status"::text IN \([^)]*'non_qualificato'[\s\S]*OLD\."status"::text IN \([^)]*'non_qualificato'/u);
 });
 
-test('N14 manager assignment accepts only active commercial users', () => {
+test('N14 self-service stays commercial; administrative target selection uses the same eligibility as its commit', () => {
   const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
   const page = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');
   assert.match(service, /target\[0\]\.role !== 'commerciale'/u);
-  assert.match(page, /role: 'commerciale'/u);
+  assert.match(page, /leadAssignees\(prisma\)/u);
+  assert.match(service, /leadAssignees\(tx,\s*input\.targetUserId\)/u);
+  const eligibility = readFileSync('src/lib/lead-assignee.ts', 'utf8');
+  assert.match(eligibility, /'lead\.read'/u);
+  assert.match(eligibility, /'lead\.write'/u);
+  assert.match(eligibility, /!isTechnicalAccount\(user\)/u);
 });
 
 test('N14 UI is mode-gated, permission-scoped and query-bounded', () => {

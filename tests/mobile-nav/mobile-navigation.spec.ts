@@ -265,7 +265,7 @@ test("contatori per area mostrano i totali completi e le destinazioni", async ({
   const areas = page.getByRole("region", { name: "Contatori per area" });
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
   const commercial = areas.getByRole("region", { name: "Commerciale", exact: true });
-  await expect(commercial.getByRole("link", { name: /Lead da contattare/ })).toContainText("24");
+  await expect(commercial.getByRole("link", { name: /Assegnati da contattare/ })).toContainText("24");
   await expect(commercial.getByRole("link", { name: /Offerte inviate/ })).toHaveAttribute("href", "/commercial-offers");
   const reviews = areas.getByRole("region", { name: "Revisioni e autorizzazioni", exact: true });
   await expect(reviews.getByRole("link", { name: /Autorizzazioni AI in attesa/ })).toContainText("47");
@@ -309,7 +309,10 @@ test("contatori zero restano visibili e numeri grandi non causano overflow mobil
   const areas = page.getByRole("region", { name: "Contatori per area" });
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
   const counters = areas.getByRole("link");
-  expect(await counters.count()).toBe(20);
+  expect(await counters.count()).toBe(22);
+  for (const queue of ['today','unassigned','contact']) {
+    await expect(areas.locator('a[href="/leads/work?queue=' + queue + '"]')).toHaveCount(1);
+  }
   for (const link of await counters.all()) await expect(link).toHaveText(/0$/);
   const distribution = page.getByRole("img", { name: "Distribuzione dei servizi per stato", exact: true });
   await expect(distribution).toHaveAttribute("data-pipeline-total", "0");

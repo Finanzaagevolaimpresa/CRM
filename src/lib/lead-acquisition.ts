@@ -39,9 +39,21 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
       { state: 'DEAD_LETTER' }, { state: { in: ['AVAILABLE', 'LEASED'] }, lastFailureCode: { not: null } },
     ];
     if (input.queue === 'ambiguous') where.leadProjectionLedger = { is: { state: 'REVIEW_REQUIRED', ...(input.leadId ? { leadId: input.leadId } : {}) } };
+    const unlinkedWebsite = !input.leadId && input.queue === 'unlinked';
+    if (unlinkedWebsite) {
+      const excluded = fresh.selectiveLeadInboxEventIds ?? [];
+      const pageIds = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT e.id FROM "BusinessInboxEvent" e
+        LEFT JOIN "LeadProjectionLedger" p ON p."inboxEventId"=e.id
+        WHERE p."leadId" IS NULL AND CASE WHEN pg_input_is_valid(e."envelopeJson", 'jsonb')
+          THEN e."envelopeJson"::jsonb #>> '{source,systemCode}' END = 'WORDPRESS'
+          ${excluded.length ? Prisma.sql`AND e.id::text NOT IN (${Prisma.join(excluded)})` : Prisma.empty}
+        ORDER BY e."createdAt" DESC, e.id DESC OFFSET ${coreQueryOffset(page)} LIMIT ${coreQueryFetchSize()}`);
+      where.id = { in: pageIds.map(row => row.id) };
+    }
     if (input.queue === 'waiting') where.state = { in: ['AVAILABLE', 'LEASED'] };
     const rows = await tx.businessInboxEvent.findMany({
-      where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: coreQueryOffset(page), take: coreQueryFetchSize(),
+      where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: unlinkedWebsite ? 0 : coreQueryOffset(page), take: coreQueryFetchSize(),
       select: { id: true, envelopeJson: true, recordHash: true, createdAt: true, state: true, attemptCount: true,
         maxAttempts: true, availableAt: true, lastFailureCode: true, terminalReasonCode: true,
         leadProjectionLedger: { select: { state: true, sourceRecordHash: true, leadId: true } },
@@ -85,8 +97,12 @@ export async function readLeadAcquisitionSummary(db: PrismaClient, actor: Actor)
     await authority(tx, actor, true);
     return tx.$queryRaw<Array<{ source: string; form: string; requests: bigint; waiting: bigint; errors: bigint;
       ambiguous: bigint; unassigned: bigint; assigned: bigint; leads: bigint; paidLeads: bigint }>>(Prisma.sql`
-      SELECT inbox."envelopeJson"::jsonb #>> '{source,systemCode}' AS source,
-        inbox."envelopeJson"::jsonb #>> '{source,formCode}' AS form, COUNT(*) AS requests,
+      WITH receipts AS (
+        SELECT id, state, "lastFailureCode", CASE WHEN pg_input_is_valid("envelopeJson", 'jsonb')
+          THEN "envelopeJson"::jsonb END AS envelope FROM "BusinessInboxEvent"
+      )
+      SELECT COALESCE(inbox.envelope #>> '{source,systemCode}', 'Da verificare') AS source,
+        COALESCE(inbox.envelope #>> '{source,formCode}', 'Da verificare') AS form, COUNT(*) AS requests,
         COUNT(*) FILTER (WHERE inbox.state IN ('AVAILABLE','LEASED')) AS waiting,
         COUNT(*) FILTER (WHERE inbox.state='DEAD_LETTER' OR
           (inbox.state IN ('AVAILABLE','LEASED') AND inbox."lastFailureCode" IS NOT NULL)) AS errors,
@@ -99,7 +115,7 @@ export async function readLeadAcquisitionSummary(db: PrismaClient, actor: Actor)
           WHERE client."deletedAt" IS NULL AND (client.id=lead."clientId" OR client."leadId"=lead.id)
             AND payment.status='incassato' AND payment."totalAmount">0 AND payment."collectedAt" IS NOT NULL
         )) AS "paidLeads"
-      FROM "BusinessInboxEvent" inbox LEFT JOIN "LeadProjectionLedger" projection ON projection."inboxEventId"=inbox.id
+      FROM receipts inbox LEFT JOIN "LeadProjectionLedger" projection ON projection."inboxEventId"=inbox.id
       LEFT JOIN "Lead" lead ON lead.id=projection."leadId" AND lead."deletedAt" IS NULL
       WHERE (projection."leadId" IS NULL OR lead.id IS NOT NULL)
       AND NOT EXISTS (SELECT 1 FROM "SelectiveLeadGrant" g WHERE g."recipientId"=${actor.userId} AND g."leadId"=projection."leadId")

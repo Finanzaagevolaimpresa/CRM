@@ -1,16 +1,16 @@
 import type { AuthSession } from './auth';
 import type { Task } from '@prisma/client';
 import { hasPermission } from './permission-evaluator';
-import { leadVisibilityWhere } from './core-query-policy';
+import { leadWorkWhere } from './lead-work-queues';
 import { canViewPreAnalysisListRecord } from './business-list-access';
 import { prisma } from './prisma';
 import { filterAccessibleTasks } from './read-access';
-import { dashboardLeadFilter, dashboardReviewFilter, dashboardTodayFilter, type DashboardDetailItem } from './dashboard-selection';
+import { dashboardReviewFilter, dashboardTodayFilter, type DashboardDetailItem } from './dashboard-selection';
 
 export async function loadDashboardLeadDetail(session: AuthSession): Promise<DashboardDetailItem[]> {
   if (!hasPermission(session, 'lead.read')) return [];
   const rows = await prisma.lead.findMany({
-    where: { AND: [dashboardLeadFilter, leadVisibilityWhere(session)] },
+    where: leadWorkWhere(session, 'contact', new Date()),
     orderBy: [{ nextActionDate: 'asc' }, { updatedAt: 'desc' }, { id: 'desc' }], take: 3,
     select: { id: true, companyName: true, firstName: true, lastName: true, status: true },
   });

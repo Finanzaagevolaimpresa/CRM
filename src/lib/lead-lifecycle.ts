@@ -58,11 +58,12 @@ export async function transitionLeadLifecycle(db: PrismaClient, claimed: AuthSes
     return { id: after.id, state: after.deletedAt ? 'trash' as const : 'active' as const };
   });
 }
-export async function listTrashedLeads(db: PrismaClient, claimed: AuthSession, page: number) {
+export async function listTrashedLeads(db: PrismaClient, claimed: AuthSession, page: number, query = '') {
   return withSerializableTransaction(db, async tx => {
     const current = await lockLeadActor(tx, claimed, false);
     if (current.role !== 'admin') throw new LeadLifecycleError('DENIED');
-    const rows = await tx.lead.findMany({ where: { deletedAt: { not: null }, AND: [leadVisibilityWhere(current)] }, orderBy: [{ deletedAt: 'desc' }, { id: 'asc' }],
+    const rows = await tx.lead.findMany({ where: { deletedAt: { not: null }, AND: [leadVisibilityWhere(current)],
+      ...(query ? { OR: ['firstName','lastName','companyName','id'].map(key => ({ [key]: { contains: query.trim().slice(0,128), mode: 'insensitive' } })) } : {}) }, orderBy: [{ deletedAt: 'desc' }, { id: 'asc' }],
       skip: (Math.max(1, Math.min(10_000, Math.trunc(page))) - 1) * 30, take: 31,
       select: { id: true, companyName: true, firstName: true, lastName: true, status: true, deletedAt: true, updatedAt: true, clientId: true } });
     await assertLeadActorLive(tx, current);
