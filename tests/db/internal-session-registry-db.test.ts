@@ -240,9 +240,13 @@ test("N02 catalog has checks FKs and indexes", { skip: !run }, async () => {
       (SELECT COUNT(*) FROM pg_indexes
         WHERE tablename='InternalSession') AS indexes
   `;
+  const ordinaryCheck = await db.$queryRaw<Array<{ conname: string }>>`
+    SELECT conname FROM pg_constraint WHERE conrelid='"InternalSession"'::regclass
+      AND contype='c' AND conname='InternalSession_ordinary_window'`;
+  assert.equal(ordinaryCheck.length, 1);
   assert.deepEqual(
     [Number(rows[0].checks), Number(rows[0].fks), Number(rows[0].indexes)],
-    [3, 2, 4],
+    [4, 2, 4],
   );
 });
 

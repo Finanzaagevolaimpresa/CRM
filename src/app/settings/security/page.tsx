@@ -51,7 +51,7 @@ const messages: Record<string, string> = {
       ) : null}
 
       {showOrdinaryPolicy && <Card title="Assegnazioni ordinarie">
-        <p>{ordinary?.ordinaryExpiresAt ? `Conferma ordinaria attiva. Scadenza massima ${formatDateTime(new Date(ordinary.ordinaryExpiresAt))}.` : 'Conferma ordinaria non attiva.'}</p>
+        <p>{ordinary?.ordinaryExpiresAt ? `Conferma ordinaria attiva. Scadenza massima ${formatDateTime(new Date(ordinary.ordinaryExpiresAt), 'Europe/Rome')}.` : 'Conferma ordinaria non attiva.'}</p>
         <p>La conferma abilita per 24 ore assegnazione, riassegnazione e rilascio del referente e le decisioni nominative di responsabilità. La sessione termina dopo 60 minuti senza uno di questi comandi. Uscita, revoca e cambio ruolo chiudono l’accesso.</p>
         <p>Per permessi, credenziali, fascicoli e altre operazioni sensibili la conferma personale vale 30 minuti.</p>
       </Card>}

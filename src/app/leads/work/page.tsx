@@ -32,7 +32,7 @@ async function Page({ searchParams }: { searchParams: Promise<{ queue?: string; 
     <Card title={total + ' lead in elenco'}>
       {page.items.map(row => <p className="border-b py-3" key={row.id}>
         <Link className="font-bold underline" href={'/leads/' + row.id}>{row.companyName || [row.firstName,row.lastName].join(' ')}</Link>
-        {' · '}{row.assignedToId ? 'Assegnato' : 'Da assegnare'}{(row.nextActionDate ?? row.nextAction) && ' · ' + formatDateTime(row.nextActionDate ?? row.nextAction)}
+        {' · '}{row.assignedToId ? 'Assegnato' : 'Da assegnare'}{(row.nextActionDate ?? row.nextAction) && ' · ' + formatDateTime(row.nextActionDate ?? row.nextAction, 'Europe/Rome')}
       </p>)}
       <PaginationNav pathname="/leads/work" params={{ queue: key }} {...page}/>
     </Card>

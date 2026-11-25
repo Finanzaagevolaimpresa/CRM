@@ -387,7 +387,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
       await oldClient.$executeRaw`INSERT INTO "User"
         (id,email,name,"passwordHash",role,active,"updatedAt") VALUES
         (${userId},'schema43@n15.invalid','N15 Schema43','synthetic-not-a-real-password-hash','commerciale',true,NOW())`;
-      await oldClient.internalSession.create({ data: { id: sessionId, userId, tokenDigest: Buffer.alloc(32, 43),
+      await oldClient.internalSession.create({ select: { id: true }, data: { id: sessionId, userId, tokenDigest: Buffer.alloc(32, 43),
         expiresAt: new Date('2099-01-01T00:00:00.000Z') } });
       await oldClient.commercialLeadSlaPolicyVersion.create({ data: { id: '00000000-0000-4000-8000-000000154301',
         policyCode: 'COMMERCIAL_FIRST_RESPONSE', version: 1, status: 'ACTIVE', calendarCode: 'CONTINUOUS_24X7',

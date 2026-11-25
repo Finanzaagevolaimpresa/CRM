@@ -1,16 +1,16 @@
 'use client';
 
 import { establishPrivilegedStepUpInline } from '@/lib/privileged-access-actions';
-import { useState, useSyncExternalStore, useTransition, type ReactNode } from 'react';
+import { useState, useTransition, type ReactNode } from 'react';
 
-const subscribe = () => () => {};
+import { useInteractiveReady } from './interactive-ready-marker';
 
 // A native form POST may carry an opaque Origin under the CRM's no-referrer
 // policy. Submit through the hydrated same-origin action, retaining all guards.
 export function IdentityConfirmationForm({ returnToInbox, children }: {
   returnToInbox: boolean; children: ReactNode;
 }) {
-  const ready = useSyncExternalStore(subscribe, () => true, () => false);
+  const ready = useInteractiveReady();
   const [pending, start] = useTransition();
   const [error, setError] = useState('');
   return <form className="max-w-lg crm-space-y-4" data-identity-ready={ready} aria-busy={pending}

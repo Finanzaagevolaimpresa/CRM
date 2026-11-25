@@ -70,7 +70,8 @@ jobs:
           set -euo pipefail
           node --import tsx tests/lead-setter/prepare-browser.ts
           npx playwright install --with-deps chromium
-          node node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port 3059 > "$SETTER_EVIDENCE/app.log" 2>&1 &
+          NODE_ENV=production node node_modules/next/dist/bin/next build --webpack > "$SETTER_EVIDENCE/build.log" 2>&1
+          NODE_ENV=production node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3059 > "$SETTER_EVIDENCE/app.log" 2>&1 &
           app_pid=$!
           trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 60); do

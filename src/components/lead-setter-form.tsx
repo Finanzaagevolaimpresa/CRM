@@ -1,6 +1,7 @@
 'use client';
 import { useState, useSyncExternalStore, useTransition, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { useInteractiveReady } from './interactive-ready-marker';
 import { saveSetterCallAction } from '@/lib/lead-setter-actions';
 import { assistanceOptions, riskFields, riskOrigins, setterFields, setterOutcomes, type SetterDetails, type SetterOutcome, type SetterCommand } from '@/lib/lead-setter-contract';
 
@@ -23,6 +24,7 @@ function rememberCommand(scope: string, id: string | null) {
 }
 export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, version, leadVersion, scheduledVideo, defaults }: Props) {
   const router = useRouter();
+  const ready = useInteractiveReady();
   const [id, setId] = useState(initialId);
   const scope = 'fai.setter.command.v1:' + actorId + ':' + leadId;
   const pendingId = useSyncExternalStore(subscribePending, () => {
@@ -39,7 +41,7 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
   }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending || saved || persisted) return;
+    if (!ready || pending || saved || persisted) return;
     const data = new FormData(event.currentTarget);
     const field = (name: string) => String(data.get(name) ?? '');
     const details = Object.fromEntries(Object.keys(setterFields).map(key => [key, field(key)]));
@@ -61,7 +63,7 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
   if (saved || persisted) return <div><p role="status">{message || 'Chiamata e prossimo passo salvati. La ricevuta è presente nello storico.'}</p><button type="button" className="underline" onClick={() => {
     rememberCommand(scope,null); setId(crypto.randomUUID()); changeOutcome('UNREACHABLE'); setSaved(false); setMessage('');
   }}>Registra un’altra telefonata</button></div>;
-  return <form onSubmit={submit} className="crm-space-y-3">
+  return <form method="post" onSubmit={submit} aria-busy={pending}><fieldset className="crm-space-y-3" disabled={!ready || pending}>
     <label>Esito<select aria-label="Esito" className={inputClass} value={outcome} onChange={e => changeOutcome(e.target.value as SetterOutcome)}>
       {Object.entries(setterOutcomes).filter(([key]) => scheduledVideo ? key !== 'VIDEO_BOOKED'
         : !['VIDEO_HELD','VIDEO_ABSENT','VIDEO_DEFERRED'].includes(key)).map(([key,label]) => <option key={key} value={key}>{label}</option>)}
@@ -92,5 +94,5 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
       {pending ? 'Salvataggio in corso…' : 'Salva chiamata e prossimo passo'}</button>
     {message && <p role="status">{message}</p>}
     {pendingId && <button type="button" className="underline" disabled={pending} onClick={() => router.refresh()}>Rileggi esito del salvataggio</button>}
-  </form>;
+  </fieldset></form>;
 }

@@ -309,7 +309,10 @@ test("contatori zero restano visibili e numeri grandi non causano overflow mobil
   const areas = page.getByRole("region", { name: "Contatori per area" });
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
   const counters = areas.getByRole("link");
-  expect(await counters.count()).toBe(20);
+  expect(await counters.count()).toBe(22);
+  for (const queue of ['today','unassigned','contact']) {
+    await expect(areas.locator('a[href="/leads/work?queue=' + queue + '"]')).toHaveCount(1);
+  }
   for (const link of await counters.all()) await expect(link).toHaveText(/0$/);
   const distribution = page.getByRole("img", { name: "Distribuzione dei servizi per stato", exact: true });
   await expect(distribution).toHaveAttribute("data-pipeline-total", "0");

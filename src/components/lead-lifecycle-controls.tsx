@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState, useId, useRef } from 'react';
+import { useInteractiveReady } from './interactive-ready-marker';
 import { changeLeadLifecycle } from '@/lib/lead-lifecycle-actions';
 import { leadLifecycleCopy, leadLifecycleReasons, type LeadLifecycleAction } from '@/lib/lead-lifecycle-policy';
 
@@ -10,8 +11,9 @@ export function LeadLifecycleControls({ id, updatedAt, action, title }: {
   const [state, submit, pending] = useActionState(changeLeadLifecycle, { ok: false, message: '' });
   const dialog = useRef<HTMLDialogElement>(null), headingId = useId();
   const copy = leadLifecycleCopy[action];
+  const ready = useInteractiveReady();
   return <>
-    <button type="button" aria-haspopup="dialog" aria-label={`${copy.label}: ${title}`}
+    <button type="button" disabled={!ready} aria-haspopup="dialog" aria-label={`${copy.label}: ${title}`}
       onClick={() => dialog.current?.showModal()} className="rounded-xl border px-3 py-2 font-bold whitespace-normal">{copy.label}</button>
     <dialog ref={dialog} aria-labelledby={headingId} onCancel={event => { if (pending) event.preventDefault(); }}
       className="fixed inset-0 rounded-2xl border bg-white p-5 text-fai-navy shadow-xl backdrop:bg-black/50"

@@ -14,7 +14,7 @@ export async function LeadSetterPanel({ session, lead, item }: { session: AuthSe
   const calls = await prisma.leadSetterCall.findMany({ where: { leadId: lead.id, lead: { deletedAt: null, AND: [leadVisibilityWhere(session)] } },
     orderBy: [{ recordedAt: 'desc' }, { id: 'asc' }], include: { actor: { select: { name: true } } } });
   const open = !lead.clientId && (!item || item.state === 'OPEN') && !['archiviato','perso','vinto','cliente_acquisito','non_qualificato'].includes(lead.status);
-  const previous = calls.find(call => call.details !== null);
+  const previous = calls.find(call => call.outcome !== 'UNREACHABLE' && call.details !== null);
   const last = setterDetails.safeParse(previous?.details);
   const defaults: Partial<Record<keyof typeof setterFields, string>> = {};
   if (last.success) {
@@ -28,7 +28,7 @@ export async function LeadSetterPanel({ session, lead, item }: { session: AuthSe
   if (lead.declaredInvestment != null) defaults.investment = lead.declaredInvestment.toString();
   if (lead.requestedAmount != null) defaults.financing = lead.requestedAmount.toString();
   return <><Card title="Registra chiamata">
-    {last.success && previous && <p>I dati del progetto provengono dalla scheda lead e dall’ultima telefonata del {formatDateTime(previous.recordedAt)}. Puoi aggiornarli per questa chiamata.</p>}
+    {last.success && previous && <p>I dati del progetto provengono dalla scheda lead e dall’ultima telefonata del {formatDateTime(previous.recordedAt, 'Europe/Rome')}. Puoi aggiornarli per questa chiamata.</p>}
     {lead.availableBudget != null && <p>Budget disponibile indicato nel lead: {lead.availableBudget.toString()} €.</p>}
     {open && lead.assignedToId === session.userId && hasPermission(session,'lead.write')
       ? <LeadSetterForm leadId={lead.id} actorId={session.userId} confirmedIds={calls.filter(c => c.actorId === session.userId).map(c => c.id)} initialId={randomUUID()} version={item?.version ?? null} leadVersion={lead.updatedAt.toISOString()}
@@ -39,8 +39,8 @@ export async function LeadSetterPanel({ session, lead, item }: { session: AuthSe
   </Card><Card title="Storico telefonate e riepilogo per il consulente">
     {!calls.length && <p>Nessuna telefonata registrata.</p>}
     {calls.map(call => { const details = setterDetails.safeParse(call.details);
-      return <details key={call.id} className="border-b py-2"><summary>{setterOutcomes[call.outcome as SetterOutcome]} · {call.actor.name} · {formatDateTime(call.recordedAt)}</summary>
-        {call.nextAt && <p>{call.nextKind === 'VIDEO' ? 'Videochiamata' : 'Richiamo'} · {call.nextKind === 'VIDEO' ? formatDateTime(call.nextAt) : call.nextAt.toLocaleDateString('it-IT',{ timeZone:'Europe/Rome' })}</p>}
+      return <details key={call.id} className="border-b py-2"><summary>{setterOutcomes[call.outcome as SetterOutcome]} · {call.actor.name} · {formatDateTime(call.recordedAt, 'Europe/Rome')}</summary>
+        {call.nextAt && <p>{call.nextKind === 'VIDEO' ? 'Videochiamata' : 'Richiamo'} · {call.nextKind === 'VIDEO' ? formatDateTime(call.nextAt, 'Europe/Rome') : call.nextAt.toLocaleDateString('it-IT',{ timeZone:'Europe/Rome' })}</p>}
         {details.success && <dl>{Object.entries(setterFields).map(([k,label]) => { const v = details.data[k as keyof typeof setterFields];
           return v ? <div key={k}><dt className="font-bold">{label}</dt><dd>{v}</dd></div> : null; })}
           {Object.entries(riskFields).map(([k,label]) => { const r = details.data[k as keyof typeof riskFields];
