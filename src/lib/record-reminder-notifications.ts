@@ -13,13 +13,13 @@ export type SelectedRecordNotice =
  * native admission of ordinary updates and the stricter scheduled admission.
  * A missing registered key cannot make a scheduled notice ordinary. */
 export async function listSelectedRecordNotices(db: PrismaClient, claimed: AuthSession,
-  key: PrivilegedStepUpKey | null, limit = 100, unreadOnly = true) {
+  key: PrivilegedStepUpKey | null, limit = 100, unreadOnly = true, exhaustiveInbox = false) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new RecordUpdateError('INVALID');
-  const ordinary = await listRecordUpdates(db, claimed, limit, unreadOnly);
-  const reminders = key ? await listRecordReminderNotices(db, claimed, key, limit, unreadOnly) : [];
+  const ordinary = await listRecordUpdates(db, claimed, limit, unreadOnly, exhaustiveInbox);
+  const reminders = key ? await listRecordReminderNotices(db, claimed, key, limit, unreadOnly, exhaustiveInbox) : [];
   const combined: SelectedRecordNotice[] = [...ordinary.map(row => ({ ...row, noticeKind: 'UPDATE' as const })),
     ...reminders.map(row => ({ ...row, noticeKind: 'REMINDER' as const }))];
-  return combined.sort((a, b) => b.date.getTime() - a.date.getTime() || b.id.localeCompare(a.id)).slice(0, limit);
+  return combined.sort((a, b) => b.date.getTime() - a.date.getTime() || b.id.localeCompare(a.id)).slice(0, exhaustiveInbox ? undefined : limit);
 }
 
 export async function readSelectedRecordNotice(db: PrismaClient, claimed: AuthSession,

@@ -759,6 +759,7 @@ export const dynamic = "force-dynamic";
     isAdmin: session.role === "admin",
     showServicePortfolio: view.showServicePortfolio,
   }, {
+    lavoroOggi: workCounts?.workday ?? 0, proposteReferente: workCounts?.proposals ?? 0,
     leadDaContattare, entratiOggi: workCounts?.today ?? 0, daAssegnare: workCounts?.unassigned ?? 0, trattativeAperte, offerteInviate, offerteAccettate,
     activeTechnicalPracticesCount, overdueClientUpdates, commsToReview,
     approvedUnusedComms, clientiAttivi, progettiAttivi, serviziAcquistati,

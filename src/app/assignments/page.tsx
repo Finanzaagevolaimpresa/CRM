@@ -25,7 +25,7 @@ export const dynamic = 'force-dynamic';
     : await prisma.technicalPractice.findMany({ where: { ...cursor, deletedAt: null, OR: [{ commercialOwnerId: session.userId }, { technicalOwnerId: session.userId }],
       AND: [practiceOutsideSelection(session)], status: { notIn: ['archiviata', 'approvata', 'respinta'] } }, orderBy: { id: 'asc' }, take: 26, select: { id: true, title: true } });
   const visible = (await Promise.all(rows.slice(0, 25).map(async row => await responsibilityContext(prisma, kind, row.id) ? row : null))).filter(row => row !== null);
-  return <div className="crm-space-y-6"><PageHeader title="Le mie assegnazioni" description="Lavori assegnati personalmente dall’amministratore. Apri la scheda per verificare responsabilità, storico e presa in carico." />
+  return <div className="crm-space-y-6"><PageHeader title="Le mie assegnazioni" description="Lavori assegnati personalmente dall’amministratore e subito operativi. Apri la scheda per verificare responsabilità e storico." />
     <div className="flex gap-4">{!technical && hasPermission(session, 'lead.read') && <Link href="/assignments?kind=Lead">Lead assegnati</Link>}{hasPermission(session, 'technical.read') && <Link href="/assignments?kind=TechnicalPractice">Pratiche assegnate</Link>}</div>
     {technical && hasPermission(session,'lead.read') && <Link className="underline" href="/shared-leads">Incarichi prima della pratica · lead condivisi con me</Link>}
     <Card title={kind === 'Lead' ? 'Lead assegnati' : 'Pratiche assegnate'}><ul className="crm-space-y-3">{visible.map(row => <li key={row.id}><Link className="underline" href={`/assignments/${kind}/${row.id}`}>{row.title}</Link></li>)}</ul>

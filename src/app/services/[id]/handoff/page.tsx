@@ -52,7 +52,7 @@ export const dynamic = 'force-dynamic';
     return <div className="crm-space-y-6 min-w-0 break-words"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
       <Card title="Passaggio registrato"><p>Registrato il {formatDateTime(entry.createdAt)} · variante {receipt.variantCode} · reparto iniziale {receipt.departmentCode}</p>
         <p>Passaggio operativo autorizzato dall’amministratore. La presa in carico personale è registrata separatamente.</p>
-        <div className="flex flex-wrap gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e presa in carico</Link></div>
+        <div className="flex flex-wrap gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e assegnazioni</Link></div>
         {!practice && <p>La pratica non è attualmente disponibile; la ricevuta storica è conservata.</p>}
       </Card>
       {canViewContracts ? <Card title="Perimetro dell’incarico">{scopeMatches ? <p className="whitespace-pre-wrap">{contract!.serviceDescription}</p> : <p>L’incarico è cambiato dopo il passaggio. Verifica la versione firmata con l’amministratore prima di proseguire.</p>}</Card> : null}

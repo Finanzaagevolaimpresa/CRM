@@ -52,8 +52,26 @@ test('Admin assegna; il referente registra tentativo, contatto e video; cestino 
     }
     await assign('second'); await checkQueue(second,'contact',title,true);
     await assign('setter'); await checkQueue(second,'contact',title,false); await checkQueue(setter,'contact',title,true);
+    const workday = await checkQueue(setter,'workday',title,true);
+    await setter.goto('/dashboard');
+    await expect(setter.locator('section[aria-labelledby="counter-area-commerciale"]').getByRole('link',{name:/^Oggi\b/}).locator('[data-counter-final]')).toHaveAttribute('data-counter-final',String(workday));
     expect(await checkQueue(admin,'unassigned',title,false)).toBe(unassignedBefore - 1);
-    await setter.goto('/notifications'); await expect(setter.locator('a[href="'+detail+'"]').first()).toBeVisible();
+    await setter.goto('/notifications');
+    const notice = setter.locator('article[data-notification-href="'+detail+'"]');
+    await expect(notice.first()).toBeVisible();
+    const beforeRead = (await (await setter.request.get('/api/notifications/count')).json()).count as number;
+    const noticeId = await notice.first().getAttribute('data-notification-id');
+    await notice.first().getByRole('button', { name: 'Apri', exact: true }).click();
+    await expect(setter).toHaveURL(new RegExp(detail + '$'));
+    await expect.poll(async () => (await (await setter.request.get('/api/notifications/count')).json()).count).toBe(beforeRead - 1);
+    await setter.goto('/notifications?state=read');
+    const readNotice = setter.locator('article[data-notification-id="' + noticeId + '"]');
+    await expect(readNotice).toBeVisible();
+    await readNotice.getByRole('button', { name: 'Apri', exact: true }).click();
+    await expect(setter).toHaveURL(new RegExp(detail + '$'));
+    await setter.reload();
+    expect((await (await setter.request.get('/api/notifications/count')).json()).count).toBe(beforeRead - 1);
+    await checkQueue(setter,'contact',title,true);
     await tech.goto(detail); await expect(tech.getByRole('button',{name:'Salva chiamata e prossimo passo'})).toHaveCount(0);
     await setter.goto(detail); const save = setter.getByRole('button',{name:'Salva chiamata e prossimo passo'});
     await setter.getByLabel('Data del richiamo',{exact:true}).fill(romeDateTimeInput(new Date()).slice(0,10)); await save.click();
@@ -87,6 +105,22 @@ test('Admin assegna; il referente registra tentativo, contatto e video; cestino 
     expect(await db.auditLog.count({where:{entityId:lead.id,event:'responsibility_accepted'}})).toBe(0);
     const receipts = await db.leadSetterCall.findMany({where:{leadId:lead.id},orderBy:{recordedAt:'asc'},select:{id:true,actorId:true,outcome:true,nextKind:true,recordedAt:true}});
     expect(receipts.every(r => r.actorId === fixture.setter.id)).toBe(true);
+    await setter.goto(detail);
+    await setter.getByLabel('Commerciale proposto',{exact:true}).selectOption(fixture.second.id);
+    await setter.getByLabel('Sintesi della qualificazione',{exact:true}).fill('Caso qualificato per il secondo referente sintetico.');
+    await setter.getByRole('button',{name:'Proponi all’Admin',exact:true}).click();
+    await expect(setter.getByRole('status').filter({hasText:'Proposta registrata'})).toBeVisible();
+    expect((await db.lead.findUniqueOrThrow({where:{id:lead.id}})).assignedToId).toBe(fixture.setter.id);
+    const proposed = await checkQueue(admin,'proposals',title,true);
+    await admin.goto('/dashboard');
+    await expect(admin.locator('section[aria-labelledby="counter-area-commerciale"]').getByRole('link',{name:/Proposte da confermare/}).locator('[data-counter-final]')).toHaveAttribute('data-counter-final',String(proposed));
+    await admin.goto(detail); await admin.getByRole('button',{name:'Conferma assegnazione',exact:true}).click();
+    await expect.poll(async () => (await db.lead.findUniqueOrThrow({where:{id:lead.id}})).assignedToId).toBe(fixture.second.id);
+    await checkQueue(admin,'proposals',title,false); await checkQueue(setter,'workday',title,false); await checkQueue(second,'workday',title,true);
+    await second.goto(`/assignments/Lead/${lead.id}`);
+    await expect(second.getByText('Operativo dalla decisione Admin. Non è richiesta un’ulteriore conferma del destinatario.',{exact:true})).toBeVisible();
+    await expect(second.getByRole('button',{name:'Confermo la presa in carico commerciale',exact:true})).toHaveCount(0);
+    expect(await db.auditLog.count({where:{entityId:lead.id,event:'responsibility_accepted'}})).toBe(0);
     writeFileSync(join(evidence,'browser-receipt.json'),JSON.stringify({synthetic:true,at:new Date(),lead:lead.id,entered,unassignedBefore,receipts}));
   } catch (error) {
     for (const [index,context] of contexts.entries()) {

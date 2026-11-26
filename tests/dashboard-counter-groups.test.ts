@@ -22,6 +22,7 @@ const noAccess: DashboardCounterAccess = {
 };
 
 const counts: DashboardCounterCounts = {
+  lavoroOggi: 9, proposteReferente: 10,
   entratiOggi: 7, daAssegnare: 8, leadDaContattare: 11,
   trattativeAperte: 12,
   offerteInviate: 13,
@@ -48,11 +49,12 @@ test("no permissions exposes no group, even when every hidden count is nonzero",
   assert.deepEqual(buildDashboardCounterGroups(noAccess, counts), []);
 });
 
-test("commercial-only access preserves four distinct lead and offer counters", () => {
+test("commercial-only access preserves work queues and distinct lead and offer counters", () => {
   const result = buildDashboardCounterGroups({ ...noAccess, canReadLeads: true }, counts);
   assert.equal(result.length, 1);
   assert.equal(result[0].title, "Commerciale");
   assert.deepEqual(result[0].counters.map(({ value, href }) => [value, href]), [
+    [9, "/leads/work?queue=workday"], [10, "/leads/work?queue=proposals"],
     [7, "/leads/work?queue=today"], [8, "/leads/work?queue=unassigned"], [11, "/leads/work?queue=contact"], [12, "/leads"], [13, "/commercial-offers"], [14, "/commercial-offers"],
   ]);
 });

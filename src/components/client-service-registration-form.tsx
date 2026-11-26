@@ -77,7 +77,7 @@ export function ClientServiceRegistrationForm({ setup }: { setup: Setup }) {
   }
   if (result) return <section role="status" className="grid gap-4 rounded-2xl border border-green-300 bg-green-50 p-5">
     <h2 className="text-xl font-bold">{setup.serviceId ? 'Pagamento collegato al servizio' : 'Servizio registrato nel fascicolo'}</h2>
-    <p>Il referente tecnico e la sua presa in carico si scelgono nel passaggio successivo.</p>
+    <p>Il referente tecnico si sceglie nel passaggio successivo. L’assegnazione confermata dall’Admin rende operativo l’incarico.</p>
     <div className="flex flex-wrap gap-4"><Link className={button} href={`/clients/${result.clientId}#service-${result.serviceId}`}>Apri servizio nel fascicolo</Link>
       <Link className="rounded-xl border border-fai-blue px-5 py-3 font-semibold text-fai-blue" href={`/services/${result.serviceId}/handoff`}>Passaggio al tecnico</Link></div>
   </section>;

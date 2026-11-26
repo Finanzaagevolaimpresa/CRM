@@ -49,7 +49,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => db.$disconnect());
 
-test('paid service UI: Admin handoff, individual acceptance, classified material and reassignment preserve the privacy ceiling', async ({ browser }) => {
+test('paid service UI: Admin handoff is immediately operational; classified material and reassignment preserve the privacy ceiling', async ({ browser }) => {
   test.setTimeout(240_000);
   const ac = await browser.newContext({ baseURL }), tc = await browser.newContext({ baseURL }), oc = await browser.newContext({ baseURL });
   const admin = await ac.newPage(), tech = await tc.newPage(), other = await oc.newPage();
@@ -93,8 +93,9 @@ test('paid service UI: Admin handoff, individual acceptance, classified material
   await other.goto(path); await expect(other.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toHaveCount(0);
   const practicePath = `/technical-office/practices/${receipt.receipt.technicalPracticeId}`, assignmentPath = `/assignments/TechnicalPractice/${receipt.receipt.technicalPracticeId}`;
   await tech.goto('/assignments?kind=TechnicalPractice'); await tech.getByRole('link', { name: f.catalog.name, exact: true }).click();
-  await tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true }).click();
-  await expect.poll(() => db.auditLog.count({ where: { entityId: receipt.receipt.technicalPracticeId, event: 'responsibility_accepted' } })).toBe(1);
+  await expect(tech.getByRole('button', { name: /Confermo la presa in carico/ })).toHaveCount(0);
+  await expect(tech.getByText('Operativo dalla decisione Admin. Non è richiesta un’ulteriore conferma del destinatario.', { exact: true }).first()).toBeVisible();
+  expect(await db.auditLog.count({ where: { entityId: receipt.receipt.technicalPracticeId, event: 'responsibility_accepted' } })).toBe(0);
   await tech.goto(practicePath);
   expect((await tech.request.get('/documents/' + f.documents[2].id + '/download')).status()).toBe(404);
   const adminUser = await db.user.findUniqueOrThrow({ where: { id: f.admin.id } });
@@ -121,6 +122,8 @@ test('paid service UI: Admin handoff, individual acceptance, classified material
   await expect.poll(async () => (await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId).toBe(f.other.id);
   expect((await tech.request.get(`/documents/${f.documents[2].id}/download`)).status()).toBe(403);
   expect((await other.request.get(`/documents/${f.documents[2].id}/download`)).status()).toBe(200);
+  await other.goto(assignmentPath); await expect(other.getByRole('button', { name: /Confermo la presa in carico/ })).toHaveCount(0);
+  await expect(other.getByText('Operativo dalla decisione Admin. Non è richiesta un’ulteriore conferma del destinatario.', { exact: true }).first()).toBeVisible();
   await replay(admin, committedRequest); expect((await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } })).assignedToId).toBe(f.other.id);
   expect(await getHandoffReceipt(db, f.service.id)).toEqual(receipt);
   await ac.close(); await tc.close(); await oc.close();

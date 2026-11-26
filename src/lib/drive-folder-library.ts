@@ -7,6 +7,7 @@ import { mapSerializableConflict } from './serializable';
 import { currentFolderActor, currentFolderDirectory } from './drive-folder-authority';
 import { canReadFolder, folderClientAvailable, folderClientMatches, resolveFolderAudience, type FolderClient, type FolderPerson } from './drive-folder-policy';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
+import { isTechnicalAccount } from './technical-confidentiality';
 import { createFolderDecision, verifyFolderDecision } from './drive-folder-decision';
 import { DriveFolderError, driveFolderCommand, driveFolderModel, driveFolderSnapshot, parseDriveFolderLink,
   type DriveFolderCommand, type DriveFolderSnapshot } from './drive-folder-contract';
@@ -156,14 +157,25 @@ function allowed(row: DriveFolderSnapshot, client: FolderClient | null, person: 
 const view = (row: DriveFolderSnapshot) => ({ id: row.id, version: row.revision, state: row.state, title: row.details.title,
   clientId: row.details.clientId, clientName: row.clientName, url: row.details.url, expiresAt: row.details.expiresAt });
 export async function readDriveFolder(db: PrismaClient, claimed: AuthSession, id: string, manage = false) {
-  return transaction(db, async tx => {
+  return transaction(db, tx => readDriveFolderInTransaction(tx, claimed, id, manage));
+}
+/** Transactional composition retains the native folder admission and directory lock. */
+export async function readDriveFolderInTransaction(tx: Tx, claimed: AuthSession, id: string, manage = false) {
     const auth = await currentFolderActor(tx, claimed, manage); await lock(tx, 'drive-folder-directory', false);
     const row = (await load(tx, id)).current; if (!row) deny();
     const client = await clientRow(tx, row.details.clientId), directory = await currentFolderDirectory(tx);
     if (!manage && !allowed(row, client, auth.person, directory, await auth.finish())) deny();
     const end = await auth.finish(); if (!manage && !allowed(row, client, auth.person, directory, end)) deny();
     return view(row);
-  });
+}
+/** A reviewed technical folder cannot silently acquire a financial PDF. */
+export async function assertFinancialDriveFolderInTransaction(tx: Tx, id: string) {
+  await lock(tx, 'drive-folder-directory', false);
+  const row = (await load(tx, id)).current, directory = await currentFolderDirectory(tx);
+  if (!row || row.audience.some(selected => {
+    const person = directory.find(candidate => candidate.id === selected.id);
+    return person && isTechnicalAccount(person);
+  })) deny();
 }
 export async function driveFolderSetup(db: PrismaClient, claimed: AuthSession, id: string) {
   return transaction(db, async tx => {

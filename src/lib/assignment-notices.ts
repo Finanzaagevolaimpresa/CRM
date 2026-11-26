@@ -8,14 +8,14 @@ import { readLeadSharing } from './selective-lead-access';
 import { responsibilityDecision } from './responsibility-contract';
 
 /** Current relationships bound the query before any notice or record link is returned. */
-export async function currentAssignmentNotices(session: AuthSession, limit = 100) {
+export async function currentAssignmentNotices(session: AuthSession, limit = 100, includeResolved = false) {
   const technical = isTechnicalAccount(session);
   const [leads, practices, grants] = await Promise.all([
     !technical && hasPermission(session,'lead.read') ? prisma.lead.findMany({ where: { assignedToId: session.userId,
-      deletedAt: null, clientId: null, status: { notIn: ['archiviato','cliente_acquisito','vinto','perso','non_qualificato'] },
-      AND: [leadVisibilityWhere(session)], NOT: { commercialInboxItem: { is: { state: 'CLOSED' } } } }, select: { id: true } }) : [],
+      deletedAt: null, ...(includeResolved ? {} : { clientId: null, status: { notIn: ['archiviato','cliente_acquisito','vinto','perso','non_qualificato'] },
+        NOT: { commercialInboxItem: { is: { state: 'CLOSED' } } } }), AND: [leadVisibilityWhere(session)] }, select: { id: true } }) : [],
     hasPermission(session,'technical.read') ? prisma.technicalPractice.findMany({ where: { deletedAt: null,
-      status: { notIn: ['archiviata','approvata','respinta'] }, AND: [practiceOutsideSelection(session)],
+      ...(includeResolved ? {} : { status: { notIn: ['archiviata','approvata','respinta'] } }), AND: [practiceOutsideSelection(session)],
       OR: [{ commercialOwnerId: session.userId }, { technicalOwnerId: session.userId }] },
       select: { id: true, commercialOwnerId: true, technicalOwnerId: true, clientId:true, projectId:true, clientServiceId:true } }) : [],
     technical ? prisma.selectiveLeadGrant.findMany({
@@ -31,7 +31,7 @@ export async function currentAssignmentNotices(session: AuthSession, limit = 100
   const currentPractices = practices.filter(p => clientIds.has(p.clientId));
   const rows = await prisma.auditLog.findMany({ where: { event: 'responsibility_assigned', OR: [
     { entityType: 'Lead', entityId: { in: leads.map(l => l.id) } }, { entityType: 'TechnicalPractice', entityId: { in: currentPractices.map(p => p.id) } },
-  ] }, distinct: ['entityType','entityId'], orderBy: [{ createdAt:'desc' },{ id:'desc' }],
+  ] }, ...(includeResolved ? {} : { distinct: ['entityType','entityId'] }), orderBy: [{ createdAt:'desc' },{ id:'desc' }],
     select: { id:true,entityType:true,entityId:true,createdAt:true,after:true } });
   const byPractice = new Map(currentPractices.map(row => [row.id,row]));
   const notices = rows.flatMap(row => {

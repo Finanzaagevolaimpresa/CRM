@@ -7,7 +7,7 @@ const access: DashboardCounterAccess = { canReadLeads: true, canReadTechnical: t
   canReadPracticeCommunications: true, canReadClients: true, canReadProjects: true, canReadServices: true,
   canReadPayments: true, canReadDossiers: true, canReadAiOutputs: true, canReviewAiOutputs: true, isAdmin: true };
 const large = new URLSearchParams(location.search).has('large');
-const counts: DashboardCounterCounts = { entratiOggi: 7, daAssegnare: 8, leadDaContattare: large ? 123456789 : 24, trattativeAperte: 8, offerteInviate: 3,
+const counts: DashboardCounterCounts = { lavoroOggi: 9, proposteReferente: 10, entratiOggi: 7, daAssegnare: 8, leadDaContattare: large ? 123456789 : 24, trattativeAperte: 8, offerteInviate: 3,
   offerteAccettate: 0, activeTechnicalPracticesCount: 12, overdueClientUpdates: 2, commsToReview: 4, approvedUnusedComms: 0,
   clientiAttivi: 18, progettiAttivi: 11, serviziAcquistati: 21, tasks: 27, todayTasksCount: 5, overdueTasks: 2,
   dueSoonTasks: 8, payments: 0, preReview: 3, dossierBozza: 2, aiReview: 0, pendingAiAuthorizationRequestCount: 0 };

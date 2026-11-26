@@ -1,4 +1,6 @@
 import { leadAssignees } from './lead-assignee';
+import { calendarFromSetterOutcome } from './personal-calendar';
+import { stopPendingWorkflowExecutions } from './workflow-executions';
 import { createHash } from 'node:crypto';
 import { effectiveSetterContact, prepareSetterCommand, SetterInputError, type SetterCommand } from './lead-setter-contract';
 import { isTechnicalAccount } from './technical-confidentiality';
@@ -483,6 +485,7 @@ async function mutateOwner(
     activityType: 'CLAIMED' | 'ASSIGNED' | 'UNASSIGNED';
     reasonCode: 'SELF_CLAIM' | 'MANAGER_ASSIGNMENT' | 'MANAGER_UNASSIGNMENT';
     requirement: 'CLAIM' | 'WORK' | 'MANAGE';
+    proposalId?: string;
     faultAt?: CommercialLeadFaultPoint;
   }>,
 ) {
@@ -512,6 +515,11 @@ async function mutateOwner(
     if (!item) fail('N14_ITEM_NOT_FOUND');
     if (item.state !== 'OPEN') fail('N14_ITEM_NOT_OPEN');
     if (item.version !== input.expectedInboxVersion) fail('N14_VERSION_CONFLICT');
+    if (input.proposalId) {
+      const proposal = await tx.leadAssignmentProposal.findUnique({ where: { id: input.proposalId } });
+      if (!proposal || proposal.leadId !== lead.id || proposal.state !== 'PENDING'
+        || proposal.targetUserId !== input.targetUserId || proposal.inboxVersion !== item.version) fail('N14_VERSION_CONFLICT');
+    }
     if (input.activityType === 'CLAIMED' && (lead.assignedToId || input.targetUserId !== input.actor.userId)) {
       fail('N14_VERSION_CONFLICT');
     }
@@ -530,6 +538,9 @@ async function mutateOwner(
     }
     await tx.$queryRaw`SELECT set_config('fai.n14_write_context', 'authorized', true)`;
     await tx.lead.update({ where: { id: lead.id }, data: { assignedToId: input.targetUserId }, select: { id: true } });
+    await tx.leadAssignmentProposal.updateMany({ where: { leadId: lead.id, state: 'PENDING' },
+      data: { state: 'SUPERSEDED', decidedById: input.actor.userId, decidedAt: commandNow } });
+    if (input.proposalId) await tx.leadAssignmentProposal.update({ where: { id: input.proposalId }, data: { state: 'CONFIRMED' } });
     inject(input.faultAt, 'AFTER_LEAD');
     const updated = await tx.commercialLeadInboxItem.update({
       where: { id: item.id }, data: { version: item.version + 1, updatedAt: commandNow },
@@ -573,7 +584,7 @@ export function claimCommercialLeadInboxItem(db: PrismaClient, input: Readonly<{
 }
 
 export function assignCommercialLeadInboxItem(db: PrismaClient, input: Readonly<{
-  leadId: string; actor: CommercialLeadActor; targetUserId: string; expectedInboxVersion: number; faultAt?: CommercialLeadFaultPoint;
+  leadId: string; actor: CommercialLeadActor; targetUserId: string; expectedInboxVersion: number; faultAt?: CommercialLeadFaultPoint; proposalId?: string;
 }>) {
   return mutateOwner(db, { ...input, activityType: 'ASSIGNED', reasonCode: 'MANAGER_ASSIGNMENT', requirement: 'MANAGE' });
 }
@@ -584,8 +595,43 @@ export function unassignCommercialLeadInboxItem(db: PrismaClient, input: Readonl
   return mutateOwner(db, { ...input, targetUserId: null, activityType: 'UNASSIGNED', reasonCode: 'MANAGER_UNASSIGNMENT', requirement: 'MANAGE' });
 }
 
+export async function proposeCommercialLeadAssignee(db: PrismaClient, actor: CommercialLeadActor, input: {
+  id: string; leadId: string; targetUserId: string; expectedInboxVersion: number; reason: string;
+}) {
+  requireEnforcedMode();
+  if (!/^[0-9a-f-]{36}$/u.test(input.id) || input.reason.trim().length < 3 || input.reason.length > 500)
+    fail('N14_REASON_INVALID');
+  return transaction(db, async (tx, now) => {
+    const session = await authorizeActor(tx, actor, 'WORK');
+    if (isTechnicalAccount(session) || !['admin','direzione','commerciale'].includes(session.role)
+      || !hasPermission(session, 'lead.read')) fail('N14_PERMISSION_DENIED');
+    await assertNoSelectiveLeadMutation(tx, actor.userId, input.leadId);
+    const lead = await lockLead(tx, input.leadId), item = await lockItem(tx, input.leadId);
+    await assertNoSelectiveClientMutation(tx, actor.userId, lead.clientId);
+    if (lead.assignedToId !== actor.userId) fail('N14_PERMISSION_DENIED');
+    const prior = await tx.leadAssignmentProposal.findUnique({ where: { id: input.id } });
+    if (prior) {
+      if (prior.leadId !== lead.id || prior.proposedById !== actor.userId || prior.targetUserId !== input.targetUserId
+        || prior.reason !== input.reason.trim()) fail('N14_VERSION_CONFLICT');
+      return prior;
+    }
+    if (!item || item.state !== 'OPEN' || lead.clientId
+      || ['archiviato','perso','vinto','cliente_acquisito','non_qualificato'].includes(lead.status)) fail('N14_ITEM_NOT_OPEN');
+    if (item.version !== input.expectedInboxVersion) fail('N14_VERSION_CONFLICT');
+    if (!(await leadAssignees(tx, input.targetUserId)).length) fail('N14_TARGET_USER_INVALID');
+    await tx.leadAssignmentProposal.updateMany({ where: { leadId: lead.id, state: 'PENDING' },
+      data: { state: 'SUPERSEDED', decidedAt: now, decidedById: actor.userId } });
+    const row = await tx.leadAssignmentProposal.create({ data: { id: input.id, leadId: lead.id,
+      proposedById: actor.userId, targetUserId: input.targetUserId, inboxVersion: item.version, reason: input.reason.trim(), createdAt: now } });
+    await tx.auditLog.create({ data: { actorId: actor.userId, entityType: 'Lead', entityId: lead.id,
+      event: 'lead_assignment_proposed', after: { proposalId: row.id, targetUserId: row.targetUserId } } });
+    return row;
+  });
+}
+
 async function commitFirstResponse(tx: Prisma.TransactionClient, actor: CommercialLeadActor, lead: LockedLead,
   item: LockedItem, cycle: LockedCycle, now: Date, faultAt?: CommercialLeadFaultPoint) {
+  await stopPendingWorkflowExecutions(tx, { leadId: lead.id, reason: 'REPLIED', evidenceId: cycle.id });
   const outcome = now.getTime() <= cycle.dueAt.getTime() ? 'MET' : 'BREACHED';
   await tx.commercialLeadSlaCycle.update({ where: { id: cycle.id }, data: {
     firstResponseAt: now, outcome, version: cycle.version + 1, updatedAt: now,
@@ -668,6 +714,7 @@ export async function saveSetterCall(db: PrismaClient, actor: CommercialLeadActo
       if (!cycle.firstResponseAt && !historical) await commitFirstResponse(tx, actor, lead, item, cycle, now);
     }
     const nextKind = value.nextKind === 'NONE' ? null : value.nextKind;
+    await calendarFromSetterOutcome(tx, lead.id, value.outcome, nextKind, nextAt, actor.userId);
     const row = await tx.leadSetterCall.create({ data: {
       id: value.id, leadId: lead.id, actorId: actor.userId, recordedAt: now, outcome: value.outcome, nextAt, nextKind,
       details: value.details ?? {}, requestHash,

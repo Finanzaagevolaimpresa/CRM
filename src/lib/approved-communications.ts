@@ -1,4 +1,5 @@
 import { canAccessFinancialDocument } from './financial-document-access';
+import { assertWorkflowMessageAction, stopPendingWorkflowExecutions } from './workflow-executions';
 import { captureInternalDisclosure, assertInternalDisclosureCurrent } from './internal-content-disclosure-db';
 import { selectedInternalDisclosure } from './internal-content-disclosure';
 import { assertOperationalAccess, readOperationalState, AdminOperationalStateError, type AdminOperationalModel, type OperationalStateRow } from './admin-operational-state';
@@ -429,6 +430,7 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
   const current = await actor(tx, claimed, 'practice_communications.mark_used', true);
   if (!hasPermission(current, 'practice_communications.read')) denied();
   const loaded = await messageScope(tx, current, messageId, true);
+  await assertWorkflowMessageAction(tx, { messageId, revision: loaded.version.revision, snapshotHash: loaded.version.snapshotHash });
   await revalidateSnapshotRecipients(tx, loaded.scope, loaded.snapshot);
   if (selectedInternalDisclosure(loaded.snapshot) && (!loaded.version.approval
     || loaded.version.approval.snapshotHash !== loaded.version.snapshotHash)) throw new ApprovedCommunicationError('CONTENT_APPROVAL_REQUIRED');
@@ -518,6 +520,8 @@ export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: Aut
     }
     if (existing) {
       const prior = await messageScope(tx, current, input.messageId, true, false);
+      await assertWorkflowMessageAction(tx, { messageId: input.messageId, revision: prior.version.revision,
+        snapshotHash: prior.version.snapshotHash, edit: true });
       if (prior.row.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(prior.row.state)
         || canonicalSha256(rowContext(prior.row)) !== canonicalSha256(input.context)) conflict();
       if ((prior.box.restricted && !box.restricted)
@@ -595,6 +599,7 @@ export async function submitApprovedMessage(db: Db, claimed: AuthSession, raw: u
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.write');
     const { row, version, updateUntil } = await messageScope(tx, current, input.messageId, true);
+    await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['DRAFT', 'PENDING'].includes(row.state)) conflict();
     if (row.state === 'PENDING') { await assertCurrentClock(tx, current, expiryDate(updateUntil)); return; }
     await tx.approvedCommunication.update({ where: { id: row.id }, data: { state: 'PENDING' } });
@@ -608,6 +613,7 @@ export async function approveExactMessage(db: Db, claimed: AuthSession, raw: unk
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.read', true);
     const { row, version, snapshot, scope, box, updateUntil } = await messageScope(tx, current, input.messageId, true);
+    await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
     await revalidateSnapshotRecipients(tx, scope, snapshot);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['PENDING', 'APPROVED'].includes(row.state)) conflict();
     if (scope.leadLifecycle && scope.leadLifecycle.createdAt >= version.createdAt) conflict();
@@ -631,6 +637,7 @@ export async function prepareManualMessage(db: Db, claimed: AuthSession, raw: un
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.mark_used');
     const { row, version, snapshot, scope, box, updateUntil } = await messageScope(tx, current, input.messageId, true);
+    await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
     await revalidateSnapshotRecipients(tx, scope, snapshot);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !version.approval) conflict();
     const approval = version.approval;
@@ -966,6 +973,8 @@ export async function acquireManualReply(db: Db, claimed: AuthSession, raw: unkn
     const reply = await tx.communicationReply.create({ data: { ...payload, canonicalMailboxId, contentHash,
       evidenceReference: input.evidenceReference, receivedAt: new Date(input.receivedAt), acquiredById: current.userId, messageId } });
     await event(tx, current, messageId, messageId ? 'REPLY_LINKED_FROM_REFERENCE' : 'REPLY_NEEDS_RECONCILIATION', { replyId: reply.id, contentHash, method: 'MANUAL_ACQUISITION' }, {}, reply.id);
+    if (messageId && version?.message.contextKind === 'LEAD' && version.message.leadId)
+      await stopPendingWorkflowExecutions(tx, { leadId: version.message.leadId, reason: 'REPLIED', evidenceId: reply.id });
     return reply;
   });
 }
@@ -985,6 +994,8 @@ export async function linkAmbiguousReply(db: Db, claimed: AuthSession, raw: unkn
     if (reply.messageId) return reply;
     const result = await tx.communicationReply.update({ where: { id: reply.id }, data: { messageId: message.row.id, linkedById: current.userId } });
     await event(tx, current, message.row.id, 'REPLY_LINKED_MANUALLY', { replyId: reply.id, reason: input.reason, contentHash: reply.contentHash }, {}, reply.id);
+    if (message.row.contextKind === 'LEAD' && message.row.leadId)
+      await stopPendingWorkflowExecutions(tx, { leadId: message.row.leadId, reason: 'REPLIED', evidenceId: reply.id });
     return result;
   });
 }

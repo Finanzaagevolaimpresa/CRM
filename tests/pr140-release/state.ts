@@ -284,7 +284,7 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 77);
+    assert.equal(data.ledger.length, 78);
     assert.deepEqual(data.sharedUpdates.map(row => row.id).sort(), [...sharedFixture.updates].sort());
     assert.equal(data.sharedAudit.length, 2);
     assert.equal(data.sharedUpdates.filter(row => row.correctionOfId).length, 1);
@@ -306,7 +306,7 @@ async function main() {
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
     assert.equal(data.ledger.at(-2)?.migration_name, '20261108110000_shared_operational_updates_v1');
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261125120000_lead_setter_workflow_v1');
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261126120000_operational_flow_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);

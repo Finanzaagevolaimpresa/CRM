@@ -5,13 +5,23 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createLead, updateLeadCommercial, convertLeadToClient, resolveLeadDuplicateCaseAction, initializeCommercialLeadInboxAction, claimCommercialLeadInboxAction, assignCommercialLeadInboxAction, unassignCommercialLeadInboxAction, recordCommercialLeadFirstResponseAction, closeCommercialLeadInboxAction, reopenCommercialLeadInboxAction, createCommercialOffer, updateCommercialOffer, createProject, registerDocument, createPreAnalysis, updatePreAnalysis, createDossier, createContract, registerPayment, runMockAgent, reviewAiOutput, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask, updateClientServicePipeline, generateClientDossier, updateClientDossier, approveClientDossier, archiveClientDossier, runClientAiAgent, createClientDossierFromAiOutput, createTechnicalPractice, updateTechnicalPractice, updateTechnicalPracticeStatus, assignTechnicalPractice, archiveTechnicalPractice, createPracticeCommunicationDraft, updatePracticeCommunicationDraft, approvePracticeCommunicationDraft, markPracticeCommunicationAsUsed, archivePracticeCommunication } from './actions';
 import { UserFacingActionError } from './action-errors';
+import { CalendarError } from './personal-calendar-contract';
 import type { UploadResult } from './document-upload-contract';
 export async function createLeadAndRedirect(form: FormData) {
   await assertTechnicalServerAction("form-actions:createLeadAndRedirect"); await createLead(form); revalidatePath('/leads'); revalidatePath('/leads/inbox'); redirect('/leads?created=1'); }
 export async function updateLeadStatus(form: FormData) {
   await assertTechnicalServerAction("form-actions:updateLeadStatus"); await updateLeadCommercial(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/dashboard'); }
 export async function updateLeadCommercialAndRedirect(form: FormData) {
-  await assertTechnicalServerAction("form-actions:updateLeadCommercialAndRedirect"); await updateLeadCommercial(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/dashboard'); }
+  await assertTechnicalServerAction("form-actions:updateLeadCommercialAndRedirect");
+  const id = String(form.get('id') || '');
+  try { await updateLeadCommercial(form); }
+  catch (error) {
+    if (error instanceof CalendarError && ['BUSY', 'INVALID'].includes(error.code))
+      redirect(`/leads/${encodeURIComponent(id)}?appointment=${error.code === 'BUSY' ? 'use-panel' : 'invalid-time'}#appuntamento`);
+    throw error;
+  }
+  revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/dashboard');
+}
 export async function resolveLeadDuplicateCaseAndRefresh(form: FormData) {
   await assertTechnicalServerAction("form-actions:resolveLeadDuplicateCaseAndRefresh"); await resolveLeadDuplicateCaseAction(form); revalidatePath('/leads/duplicates'); revalidatePath('/leads'); revalidatePath('/leads/inbox'); revalidatePath('/leads/work'); revalidatePath('/dashboard'); revalidatePath('/notifications'); }
 export async function convertLeadToClientAndRedirect(form: FormData) {

@@ -4,6 +4,7 @@ import { buildDashboardCounterGroups, type DashboardCounterCounts } from '../src
 import { operationalDashboardView, operationalNavigationAllows } from '../src/lib/operational-role-view';
 
 const counts: DashboardCounterCounts = {
+  lavoroOggi: 9, proposteReferente: 10,
   entratiOggi: 7, daAssegnare: 8, leadDaContattare: 11, trattativeAperte: 12, offerteInviate: 13, offerteAccettate: 14,
   activeTechnicalPracticesCount: 21, overdueClientUpdates: 22, commsToReview: 23, approvedUnusedComms: 24,
   clientiAttivi: 31, progettiAttivi: 32, serviziAcquistati: 33, tasks: 41, todayTasksCount: 42,
@@ -15,7 +16,7 @@ test('sales keeps lead, offers and own progress while excluding administrative a
   const view = operationalDashboardView('commerciale', () => true);
   const groups = buildDashboardCounterGroups({ ...view, isAdmin: false }, counts);
   assert.deepEqual(groups.map(g => g.id), ['commerciale', 'clienti-servizi', 'attivita-scadenze']);
-  assert.deepEqual(groups[0].counters.map(c => c.value), [7, 8, 11, 12, 13, 14]);
+  assert.deepEqual(groups[0].counters.map(c => c.value), [9, 10, 7, 8, 11, 12, 13, 14]);
   assert.deepEqual(groups[1].counters.map(c => c.value), [31]);
   assert.equal(view.canReadCommercialProgress, true);
   assert.equal(view.showPipeline, false);

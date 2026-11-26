@@ -3,7 +3,7 @@ export type TechnicalPageMode = 'original' | 'workspace' | 'record' | 'denied';
 /** Audited server surfaces. A new route defaults to denied for a technical
  * account until its projection and direct-access path have been qualified. */
 export function technicalPageMode(route: string): TechnicalPageMode {
-  if (['/', '/login', '/settings/account', '/technical-uploads/[kind]/[id]',
+  if (['/', '/login', '/settings/account', '/calendars', '/technical-uploads/[kind]/[id]',
     '/notifications/updates', '/notifications/updates/[id]', '/technical-office/integrations',
     '/admin-requests', '/admin-requests/new', '/admin-requests/[id]', '/assignments', '/assignments/[kind]/[id]',
     '/communications', '/videos', '/videos/[id]', '/videos/drive/[id]', '/drive-folders', '/drive-folders/[id]',
@@ -19,6 +19,7 @@ export function technicalPageMode(route: string): TechnicalPageMode {
   return 'denied';
 }
 const fileRoutes = new Set([
+  '/settings/integrations/google-calendar/callback',
   '/api/operational-updates',
   '/api/notifications/count',
   '/videos/[id]/content',
@@ -31,6 +32,7 @@ const fileRoutes = new Set([
 ]);
 export function technicalFileRouteAllowed(route: string) { return fileRoutes.has(route); }
 const allowedActions = new Set([
+  'personal-calendar-actions:saveAvailabilityAction', 'personal-calendar-actions:connectGoogleCalendarAction',
   'shared-operational-actions:saveSharedOperationalAction', 'shared-operational-actions:settleSharedOperationalAction',
   'login-actions:loginAction', 'login-actions:logoutAction',
   'user-account-actions:saveAccountProfile', 'user-account-actions:saveOwnPassword',

@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 60
     env:
       VNX03_EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      VNX03_QUALIFICATION_PROFILE: candidate-schema77
+      VNX03_QUALIFICATION_PROFILE: candidate-schema78
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,8 +79,8 @@ jobs:
             const receipt = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/${file}`, 'utf8'));
             assert.equal(receipt.sourceCommit, process.env.VNX03_EXPECTED_SOURCE_COMMIT);
             assert.equal(receipt.sourceTree, process.env.VNX03_EXPECTED_SOURCE_TREE);
-            assert.equal(receipt.profile, 'candidate-schema77');
-            assert.equal(receipt.migrations, 77);
+            assert.equal(receipt.profile, 'candidate-schema78');
+            assert.equal(receipt.migrations, 78);
             assert.equal(receipt.productionContact, false);
             if (file === 'n14-runtime.json') {
               assert.equal(receipt.adminAssignmentBrowserCompleted, true);
@@ -89,8 +89,8 @@ jobs:
             }
           }
           const browser = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/n14-browser.json`, 'utf8'));
-          for (const key of ['sourceReceiptProjectionAndPrivacyCorrelated', 'personalAcceptanceCompleted',
-            'acceptanceReplayAndForeignDenialsUnchanged', 'datedNextActionCompleted']) assert.equal(browser[key], true);
+          for (const key of ['sourceReceiptProjectionAndPrivacyCorrelated', 'assignmentImmediatelyOperative',
+            'recipientConfirmationAbsent', 'datedNextActionCompleted']) assert.equal(browser[key], true);
           const producer = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/browser.json`, 'utf8'));
           for (const key of ['captureFailureVisibleWithoutConfirmation', 'captureFailureFormValuesRetained',
             'correctedSubmissionRecovered']) assert.equal(producer[key], true);

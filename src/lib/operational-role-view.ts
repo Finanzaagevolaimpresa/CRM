@@ -4,8 +4,8 @@ import type { Permission } from './permissions';
 // Presentation policy only. Every destination retains its server-side record,
 // session and selective-access checks; appearing here never grants access.
 const commonDestinations = new Set(['/dashboard', '/settings/account', '/notifications', '/search', '/videos', '/drive-folders', '/shared-projects']);
-const salesDestinations = new Set(['/leads', '/commercial-offers', '/clients', '/progress', '/assignments', '/tasks', '/deadlines', '/communications', '/admin-requests']);
-const technicalDestinations = new Set(['/projects', '/technical-office', '/technical-office/practices', '/technical-office/integrations', '/technical-work', '/assignments', '/tasks', '/deadlines', '/documents', '/document-checklists', '/communications', '/admin-requests']);
+const salesDestinations = new Set(['/leads', '/leads/work', '/calendars', '/document-library', '/commercial-offers', '/clients', '/progress', '/assignments', '/tasks', '/deadlines', '/communications', '/admin-requests']);
+const technicalDestinations = new Set(['/projects', '/technical-office', '/technical-office/practices', '/technical-office/integrations', '/technical-work', '/assignments', '/calendars', '/tasks', '/deadlines', '/documents', '/document-checklists', '/communications', '/admin-requests']);
 const limitedDestinations = new Set(['/clients', '/projects', '/tasks', '/deadlines', '/documents', '/communications']);
 
 export function operationalNavigationAllows(role: RoleCode | null | undefined, destination: string) {

@@ -46,7 +46,7 @@ export function ProjectHandoffForm({ setup, resumeCommandId }: { setup: Setup; r
     try {
       const { digest, expiresAt, proof } = preview;
       const result = await confirmProjectHandoffAction(command, { digest, expiresAt, proof });
-      if (result.ok) { setPracticeId(result.result.practiceId); setNeedsStepUp(false); setMessage('Pratica preparata. La presa in carico e l’avvio del servizio restano da verificare.'); }
+      if (result.ok) { setPracticeId(result.result.practiceId); setNeedsStepUp(false); setMessage('Pratica preparata. Assegna il referente tecnico e registra l’avvio del servizio quando avviene.'); }
       else {
         setMessage(result.message); setUncertain(!result.definite);
         setNeedsStepUp(result.stepUpRequired);

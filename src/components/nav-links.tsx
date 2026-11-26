@@ -36,6 +36,8 @@ const sections: NavSection[] = [
     title: "Operatività",
     items: [
       { label: "Dashboard", href: "/dashboard" },
+      { label: "Oggi", href: "/leads/work", requiredPermission: "lead.read" },
+      { label: "Calendari", href: "/calendars", requiredAnyPermissions: ["lead.read", "technical.read"] },
       { label: "Controllo Admin", href: "/admin/records", adminOnly: true },
       { label: "Il mio account", href: "/settings/account" },
       { label: "Notifiche", href: "/notifications" },
@@ -53,6 +55,7 @@ const sections: NavSection[] = [
     title: "Commerciale",
     items: [
       { label: "Lead e offerte", href: "/leads", requiredPermission: "lead.read" },
+      { label: "Documenti e Contratti", href: "/document-library", roles: ['admin','direzione','commerciale'], requiredPermission: "lead.read" },
       { label: "Acquisizione lead", href: "/leads/acquisition", adminOnly: true },
       { label: "Acquisizioni controllate", href: "/controlled-intakes", requiredPermission: "lead.read" },
       { label: "Revisione duplicati", href: "/leads/duplicates", requiredPermission: "lead.duplicate.resolve" },
@@ -75,6 +78,8 @@ const sections: NavSection[] = [
       { label: "Comunicazioni", href: "/communications", requiredAnyPermissions: ["practice_communications.read", "communications.internal.read"] },
       { label: "Richieste all’Admin", href: "/admin-requests", roles: ["admin", "commerciale", "consulente", "backoffice"] },
       { label: "Caselle e risposte", href: "/settings/communications", adminOnly: true },
+      { label: "Automazioni", href: "/automations", adminOnly: true },
+      { label: "Impostazioni integrazioni", href: "/settings/integrations", adminOnly: true },
     ],
   },
   {

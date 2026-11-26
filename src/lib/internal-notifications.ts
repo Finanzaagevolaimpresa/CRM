@@ -10,6 +10,10 @@ import { companyClientContextOutsideSelection } from './selective-client-policy'
 import { listSelectedRecordNotices } from './record-reminder-notifications';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { internalSessionMode } from './session';
+import { notificationSnapshot, unreadNotifications, notificationOccurrenceId, notificationSourceId } from './internal-notification-read-contract';
+import { readSelectedRecordNotice } from './record-reminder-notifications';
+import { romeWorkDay } from './lead-work-queues';
+import { readWorkflowInternalNotices } from './workflow-internal-notices';
 
 export type InternalNotification = {
   id: string;
@@ -19,21 +23,19 @@ export type InternalNotification = {
   date: Date | null;
   related: string | null;
   href: string;
+  readAt?: Date | null;
 };
 
 function todayBounds(now = new Date()) {
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
-  return { startOfToday, endOfToday };
+  const bounds = romeWorkDay(now);
+  return { startOfToday: bounds.gte, endOfToday: new Date(bounds.lt.getTime() - 1) };
 }
 
-export async function getInternalNotifications(session: AuthSession, options?: { limit?: number }) {
+async function notificationCandidates(session: AuthSession, includeResolved = false) {
   if (isTechnicalAccount(session)) return [] as InternalNotification[];
   const now = new Date();
   const { startOfToday, endOfToday } = todayBounds(now);
-  const limit = options?.limit ?? 100;
+  const limit = 500;
   const canReadServices = hasPermission(session, "service.read");
   const canReadTechnical = hasPermission(session, "technical.read");
   const canReadPracticeCommunications = hasPermission(session, "practice_communications.read");
@@ -50,19 +52,17 @@ export async function getInternalNotifications(session: AuthSession, options?: {
     prisma.lead.findMany({ where: { deletedAt: null, AND: [leadVisibilityWhere(session)] }, select: { id: true, assignedToId: true, clientId: true } }),
   ]);
   const access = buildNotificationAccess(session, { clients, projects, services, practices: practiceContexts, leads: leadContexts });
-  const openTaskWhere = { technicalPrivate: false, deletedAt: null, status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] }, AND: [access.taskWhere] };
+  const openTaskWhere = { technicalPrivate: false, deletedAt: null, ...(includeResolved ? {} : { status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] } }), AND: [access.taskWhere] };
 
   const [aiAuthorizationNotifications, tasks, communicationsToReview, approvedCommunications, practices, leads, offers] = await Promise.all([
     session.role === "admin"
       ? prisma.aiExecutionAdminNotification.findMany({
           where: {
             recipientAdminId: session.userId,
-            isRead: false,
-            decidedAt: null,
+            ...(includeResolved ? {} : { isRead: false, decidedAt: null }),
             request: {
               AND: [contextOutsideSelection(session), companyClientContextOutsideSelection(session)],
-              status: "PENDING_ADMIN_APPROVAL",
-              expiresAt: { gt: now },
+              ...(includeResolved ? {} : { status: "PENDING_ADMIN_APPROVAL", expiresAt: { gt: now } }),
             },
           },
           include: {
@@ -75,49 +75,42 @@ export async function getInternalNotifications(session: AuthSession, options?: {
             },
           },
           orderBy: { createdAt: "asc" },
-          take: limit,
         })
       : [],
     canReadServices
       ? prisma.task.findMany({
-          where: { ...openTaskWhere, dueAt: { lte: endOfToday } },
+          where: { ...openTaskWhere, ...(includeResolved ? {} : { dueAt: { lte: endOfToday } }) },
           orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
-          take: limit,
         })
       : [],
     canReviewPracticeCommunications
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, status: "da_revisionare", technicalPracticeId: { in: access.practiceIds } },
+          where: { deletedAt: null, ...(includeResolved ? {} : { status: "da_revisionare" }), technicalPracticeId: { in: access.practiceIds } },
           orderBy: { createdAt: "asc" },
-          take: limit,
         })
       : [],
     canReadPracticeCommunications
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, status: "approvata", usedAt: null, technicalPracticeId: { in: access.practiceIds } },
+          where: { deletedAt: null, ...(includeResolved ? {} : { status: "approvata", usedAt: null }), technicalPracticeId: { in: access.practiceIds } },
           orderBy: { updatedAt: "asc" },
-          take: limit,
         })
       : [],
     canReadTechnical
       ? prisma.technicalPractice.findMany({
-          where: { deletedAt: null, id: { in: access.practiceIds }, status: { notIn: ["approvata", "respinta", "archiviata"] } },
+          where: { deletedAt: null, id: { in: access.practiceIds }, ...(includeResolved ? {} : { status: { notIn: ["approvata", "respinta", "archiviata"] } }) },
           orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
-          take: limit,
         })
       : [],
     canReadLeads
       ? prisma.lead.findMany({
-          where: { deletedAt: null, ...leadWhere, nextActionDate: { lte: endOfToday }, status: { notIn: ["vinto", "perso", "archiviato", "cliente_acquisito"] } },
+          where: { deletedAt: null, ...leadWhere, ...(includeResolved ? {} : { nextActionDate: { lte: endOfToday }, status: { notIn: ["vinto", "perso", "archiviato", "cliente_acquisito", "non_qualificato"] } }) },
           orderBy: { nextActionDate: "asc" },
-          take: limit,
         })
       : [],
     canReadLeads
       ? prisma.commercialOffer.findMany({
-          where: { deletedAt: null, AND: [access.offerWhere], followUpAt: { lte: endOfToday }, status: { notIn: ["accettata", "rifiutata"] } },
+          where: { deletedAt: null, AND: [access.offerWhere], ...(includeResolved ? {} : { followUpAt: { lte: endOfToday }, status: { notIn: ["accettata", "rifiutata"] } }) },
           orderBy: { followUpAt: "asc" },
-          take: limit,
         })
       : [],
   ]);
@@ -129,7 +122,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   const visibleOffers = offers.filter(access.canViewOffer);
   const visibleTasks = tasks.filter(access.canViewTask);
   const notifications: InternalNotification[] = [
-    ...await currentAssignmentNotices(session,limit),
+    ...await currentAssignmentNotices(session,Number.MAX_SAFE_INTEGER,includeResolved),
     ...aiAuthorizationNotifications.map((notification) => ({
       id: `ai-authorization-${notification.id}`,
       title: `${notification.request.functionCode.replaceAll("_", " ")} · ${notification.request.requester?.name ?? "Sistema"}`,
@@ -138,9 +131,10 @@ export async function getInternalNotifications(session: AuthSession, options?: {
       date: notification.createdAt,
       related: notification.request.client?.displayName ?? notification.request.project?.title ?? "Richiesta amministrativa",
       href: notification.approvalPath,
+      readAt: notification.isRead ? notification.createdAt : null,
     })),
     ...visibleTasks.map((task) => ({
-      id: `task-${task.id}`,
+      id: notificationOccurrenceId(`task-${task.id}`, task.dueAt),
       title: task.title,
       category: task.dueAt && task.dueAt < startOfToday ? "Task scaduto" : "Task in scadenza oggi",
       priority: task.dueAt && task.dueAt < startOfToday ? "alta" as const : "media" as const,
@@ -157,13 +151,70 @@ export async function getInternalNotifications(session: AuthSession, options?: {
 
   const priorityOrder = { alta: 0, media: 1, bassa: 2 };
   if (internalSessionMode() === 'registry' && session.sessionId) {
-    const updates = await listSelectedRecordNotices(prisma, session, await loadActivePrivilegedStepUpKey(prisma), limit);
+    notifications.push(...await readWorkflowInternalNotices(session, Number.MAX_SAFE_INTEGER, includeResolved));
+    const updates = await listSelectedRecordNotices(prisma, session, await loadActivePrivilegedStepUpKey(prisma), limit, !includeResolved, true);
     notifications.push(...updates.map(row => ({ id: `record-update-${row.id}`, title: row.title,
-      category: row.category, related: row.related, date: row.date, priority: row.priority, href: row.href })));
+      category: row.category, related: row.related, date: row.date, priority: row.priority, href: row.href, readAt: row.readAt })));
   }
-  return notifications.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0)).slice(0, limit);
+  return notifications.map(row => ['lead-', 'offer-'].some(prefix => row.id.startsWith(prefix) && !row.id.startsWith('lead-selection-'))
+    ? { ...row, id: notificationOccurrenceId(row.id, row.date) } : row)
+    .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+}
+
+export async function getInternalNotifications(session: AuthSession, options?: { limit?: number; state?: 'active' | 'read' }) {
+  const read = options?.state === 'read';
+  const [candidates, receipts] = await Promise.all([
+    notificationCandidates(session, read),
+    prisma.internalNotificationRead.findMany({ where: { recipientId: session.userId }, orderBy: [{ readAt: 'desc' }, { id: 'desc' }] }),
+  ]);
+  if (!read) {
+    const rows = unreadNotifications(candidates, new Set(receipts.map(row => row.notificationId)));
+    return options?.limit ? rows.slice(0, options.limit) : rows;
+  }
+  // Retain the read identity after its queue is completed. Current authorization
+  // and current labels are recalculated, including after a relationship changes.
+  const admitted = new Map(candidates.map(row => [notificationSourceId(row.id), row]));
+  const rows: InternalNotification[] = candidates.filter(row => row.readAt);
+  for (const receipt of receipts) {
+    const parsed = notificationSnapshot.safeParse(receipt.snapshot);
+    const current = admitted.get(notificationSourceId(receipt.notificationId));
+    if (!parsed.success || parsed.data.id !== receipt.notificationId || !current) continue;
+    // The receipt is historical; labels and links follow today's authorized
+    // context. A task moved between clients cannot reveal its old private label.
+    if (!rows.some(row => row.id === parsed.data.id)) rows.push({ ...current, id: parsed.data.id,
+      date: parsed.data.date ? new Date(parsed.data.date) : null, readAt: receipt.readAt });
+  }
+  return options?.limit ? rows.slice(0, options.limit) : rows;
+}
+
+export async function markInternalNotificationRead(session: AuthSession, id: string) {
+  // Neither the destination nor the recipient are accepted from the browser.
+  const prior = await prisma.internalNotificationRead.findUnique({ where: { recipientId_notificationId: { recipientId: session.userId, notificationId: id } } });
+  const nativeRead = !prior && id.startsWith('record-update-') ? await readSelectedRecordNotice(prisma, session,
+    await loadActivePrivilegedStepUpKey(prisma), id.slice('record-update-'.length), false) : null;
+  const nativeAi = id.startsWith('ai-authorization-');
+  const candidates = await notificationCandidates(session, Boolean(prior || nativeRead?.readAt || nativeAi));
+  let notice = candidates.find(row => row.id === id);
+  if (!prior && nativeAi && !notice?.readAt) notice = (await notificationCandidates(session)).find(row => row.id === id);
+  if (!notice) {
+    const parsed = notificationSnapshot.safeParse(prior?.snapshot);
+    const current = candidates.find(row => notificationSourceId(row.id) === notificationSourceId(id));
+    if (parsed.success && parsed.data.id === id && current) notice = { ...current, id };
+  }
+  if (!notice) return null;
+  if (id.startsWith('record-update-')) {
+    const selected = await readSelectedRecordNotice(prisma, session, await loadActivePrivilegedStepUpKey(prisma), id.slice('record-update-'.length), true);
+    if (!selected) return null;
+  }
+  const snapshot = notificationSnapshot.parse({ id: notice.id, title: notice.title, category: notice.category,
+    priority: notice.priority, date: notice.date?.toISOString() ?? null, related: notice.related, href: notice.href });
+  await prisma.internalNotificationRead.upsert({
+    where: { recipientId_notificationId: { recipientId: session.userId, notificationId: id } },
+    create: { recipientId: session.userId, notificationId: id, snapshot }, update: {},
+  });
+  return notice;
 }
 
 export async function getInternalNotificationCount(session: AuthSession) {
-  return (await getInternalNotifications(session, { limit: 500 })).length;
+  return (await getInternalNotifications(session)).length;
 }

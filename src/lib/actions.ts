@@ -1,5 +1,7 @@
 'use server';
 import { leadAssignees } from './lead-assignee';
+import { assertPipelineAppointmentUnchanged } from './personal-calendar';
+import { pipelineNextActionDate } from './personal-calendar-contract';
 import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
@@ -667,7 +669,9 @@ export async function reopenCommercialLeadInboxAction(form: FormData) {
 export async function updateLeadCommercial(form: FormData) {
   await assertTechnicalServerAction("actions:updateLeadCommercial");
   const s = await requirePermission('lead.write');
-  const data = leadCommercialUpdateSchema.parse(clean(form));
+  // Resolve the declared wall-clock value only after locking the current Lead,
+  // so an unchanged ambiguous autumn time preserves its already known instant.
+  const data = leadCommercialUpdateSchema.parse({ ...clean(form), nextActionDate: undefined });
   const before = await requireLeadEditAccess(s, data.id);
   const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
     where: { leadId: data.id }, select: { id: true },
@@ -685,13 +689,15 @@ export async function updateLeadCommercial(form: FormData) {
   if (assignment !== undefined) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
     const { current, lead: before } = await lockLeadForMutation(tx, s, data.id, data.expectedVersion);
+    const nextActionDate = pipelineNextActionDate(form.get('nextActionDate'), before.nextActionDate, form.get('nextActionTimezone'));
+    await assertPipelineAppointmentUnchanged(tx, before, nextActionDate);
     const freshInbox = await tx.commercialLeadInboxItem.findUnique({ where: { leadId: data.id } });
     if (assignment && !(await leadAssignees(tx,assignment)).length) denyManualAssignment();
     if (freshInbox && ((assignment !== undefined && assignment !== before.assignedToId)
       || (before.status !== data.status && (protectedTerminalStatus.includes(before.status) || protectedTerminalStatus.includes(data.status))))) {
       throw new UserFacingActionError('Owner e stati terminali si gestiscono dalla Commercial Lead Inbox.');
     }
-    const lead = await tx.lead.update({ where: { id: data.id, updatedAt: before.updatedAt, deletedAt: null }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal, updatedAt: nextConcurrencyTimestamp(before.updatedAt) } });
+    const lead = await tx.lead.update({ where: { id: data.id, updatedAt: before.updatedAt, deletedAt: null }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate, nextAction: nextActionDate, notes: data.notes, commercialProposal: data.commercialProposal, updatedAt: nextConcurrencyTimestamp(before.updatedAt) } });
     const events = ['lead_update'];
     if (before.status !== lead.status) events.push('lead_status_change');
     if (assignment !== undefined) events.push('lead_assign');
