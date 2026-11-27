@@ -179,7 +179,7 @@ try {
     // Suspend every retained native preparation entry, including event capture
     // and newsletter admission. Recovery must remain closed when the previous
     // release environment still contains an enabled gate.
-    if (content.includes(workflowGateOff) || content.includes(workflowGateOn)) {
+    if (path.startsWith('src/') && (content.includes(workflowGateOff) || content.includes(workflowGateOn))) {
       content = content.replaceAll(workflowGateOff, 'workflowPreparationSuspended()')
         .replaceAll(workflowGateOn, '!workflowPreparationSuspended()');
       const ast = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);

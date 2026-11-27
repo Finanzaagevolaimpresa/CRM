@@ -23,6 +23,7 @@ import { assertNewsletterMessageAction, denyManualNewsletterTransport } from '..
 import { ordinaryTransportQualificationReference, createOrdinaryTransportResolver } from '../../src/lib/ordinary-email-transport-binding';
 import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
 import { newsletterTlsPeer, type NewsletterTlsWire } from '../helpers/newsletter-smtp-tls';
+import { SerializableConflictError } from '../../src/lib/serializable';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1';
 let admin: Awaited<ReturnType<typeof syntheticPerson>>, intake: Awaited<ReturnType<typeof syntheticIntakeFixture>>;
@@ -121,13 +122,27 @@ async function send(f: Awaited<ReturnType<typeof fixture>>, wire: NewsletterTlsW
   } finally { await t.close(); }
 }
 
-test('native newsletter prepares one bound draft, requires native approval and reconciles only actual native evidence', options, async () => {
-  const base = await fixture(false), preparation = await Promise.all([
+test('native newsletter prepares one bound draft, requires native approval and reconciles only actual native evidence', options, async context => {
+  const base = await fixture(false), preparation = await Promise.allSettled([
     prepareNativeWorkflowNewsletter(db, admin.session, base.command, source), prepareNativeWorkflowNewsletter(db, admin.session, base.command, source),
   ]);
-  assert.equal(preparation.reduce((sum, item) => sum + item.prepared, 0), 1);
+  assert.equal(preparation.reduce((sum, item) => sum + (item.status === 'fulfilled' ? item.value.prepared : 0), 0), 1);
+  for (const item of preparation) {
+    if (item.status === 'fulfilled') { assert.equal(item.value.providerCalls, 0); continue; }
+    // The shared transaction boundary exposes a rolled-back serialization
+    // conflict to its caller. Only that typed outcome permits this replay.
+    assert(item.reason instanceof SerializableConflictError);
+    assert.equal(item.reason.code, 'SERIALIZABLE_CONFLICT');
+    assert.deepEqual(await prepareNativeWorkflowNewsletter(db, admin.session, base.command, source),
+      { prepared: 0, examined: 1, providerCalls: 0 });
+  }
+  context.diagnostic(`concurrent preparations: ${preparation.filter(item => item.status === 'fulfilled').length} completed, ${preparation.filter(item => item.status === 'rejected').length} rolled-back conflicts replayed`);
   const f = { ...base, row: await db.workflowNewsletterRecipient.findUniqueOrThrow({ where: { id: base.row.id } }) };
   assert.equal(f.row.state, 'PREPARED'); assert.equal(f.row.attemptCount, 0);
+  assert.equal(await db.approvedCommunication.count({ where: { leadId: f.leadId } }), 1);
+  assert.equal(await db.approvedCommunication.count({ where: { id: f.row.id, state: 'DRAFT', currentRevision: f.row.nativeRevision! } }), 1);
+  assert.equal(await db.communicationAttempt.count({ where: { messageId: f.row.id } }), 0);
+  assert.equal(await db.ordinaryEmailAttempt.count({ where: { messageId: f.row.id } }), 0);
   await assert.rejects(db.workflowNewsletterRecipient.update({ where: { id: f.row.id }, data: { nativeSnapshotHash: 'b'.repeat(64) } }));
   const deniedActor = await syntheticPerson(db, 'Consulente newsletter non autorizzato', 'commerciale');
   await assert.rejects(prepareNativeWorkflowNewsletter(db, deniedActor.session, f.command, source), /DENIED/);
