@@ -371,6 +371,26 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  workflowServiceCredentials WorkflowServiceCredential[]
+  workflowServiceGrants WorkflowServiceGrant[]
+  workflowServiceNotices WorkflowServiceNotice[]
+  workflowExecutionNotices WorkflowExecution[]
+  leadAppointmentsUpdater LeadAppointment[] @relation("LeadAppointmentUpdater")
+  leadAppointmentsCreator LeadAppointment[] @relation("LeadAppointmentCreator")
+  leadProposalsDecider LeadAssignmentProposal[] @relation("LeadProposalDecider")
+  leadProposalsTarget LeadAssignmentProposal[] @relation("LeadProposalTarget")
+  leadProposalsAuthor LeadAssignmentProposal[] @relation("LeadProposalAuthor")
+  workflowEnrollments WorkflowEnrollment[]
+  workflowTests WorkflowAutomationTest[]
+  workflowAutomations WorkflowAutomation[]
+  workflowTemplates WorkflowEmailTemplate[]
+  workflowNewsletterRuns WorkflowNewsletterRun[]
+  operationalDocuments OperationalDocument[] @relation("OperationalDocumentActor")
+  operationalDocumentDecisions OperationalDocumentDecision[] @relation("OperationalDocumentDecisionActor")
+  internalNotificationReads InternalNotificationRead[]
+  personalCalendar PersonalCalendar?
+  calendarOAuthStates GoogleCalendarOAuthState[]
+  googleCalendarCredential GoogleCalendarCredential?
   setterCalls LeadSetterCall[]
   operationalUpdates SharedOperationalUpdate[] @relation("SharedOperationalAuthor")
   ordinaryEmailReconciliations OrdinaryEmailReconciliation[]
@@ -467,6 +487,10 @@ model User {
 }
 
 model InternalSession {
+  workflowServiceGrants WorkflowServiceGrant[]
+  googleCalendarOAuthStates GoogleCalendarOAuthState[]
+  operationalDocuments OperationalDocument[] @relation("OperationalDocumentSession")
+  operationalDocumentDecisions OperationalDocumentDecision[] @relation("OperationalDocumentDecisionSession")
   ordinaryConfirmedAt DateTime? @db.Timestamptz(3)
   ordinaryLastActiveAt DateTime? @db.Timestamptz(3)
   ordinaryKeyVersion Int?
@@ -567,6 +591,11 @@ model ClientReadGrant {
 }
 
 model Lead {
+  newsletterRecipients WorkflowNewsletterRecipient[]
+  assignmentProposals LeadAssignmentProposal[]
+  workflowEnrollments WorkflowEnrollment[]
+  operationalDocuments OperationalDocument[]
+  appointment LeadAppointment?
   setterCalls LeadSetterCall[]
   setterNextKind String? @db.VarChar(12)
   adminRequests AdminRequest[]
@@ -699,6 +728,7 @@ model CommercialOffer {
 }
 
 model Client {
+  operationalDocuments OperationalDocument[]
   operationalUpdates SharedOperationalUpdate[]
   operationalState String? @db.VarChar(24)
   historicalLeadConversion CommercialLeadHistoricalConversion?
@@ -1484,6 +1514,7 @@ model EngagementDossierDeliveryReceipt {
 }
 
 model Contract {
+  operationalDocuments OperationalDocument[]
   id                 String         @id @default(cuid())
   clientId           String
   projectId          String?
@@ -3070,6 +3101,7 @@ model SecureLeadGatewayRateLimitBucket {
 }
 
 model SecureLeadGatewayReceipt {
+  workflowEnrollments WorkflowEnrollment[]
   id                     String                     @id @default(uuid()) @db.Uuid
   inboxEventId           String                     @unique(map: "SecureLeadGatewayReceipt_inboxEventId_key") @db.Uuid
   receiptVersion         Int                        @default(1)
@@ -3334,6 +3366,8 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  workflowServiceMessage WorkflowServiceMessage?
+  workflowNewsletterRecipient WorkflowNewsletterRecipient?
   operationalState AdminOperationalState? @relation("AdminMessageState")
   adminRequestDraft AdminRequestDraft?
   updateDeliveryId String? @unique @db.Uuid
@@ -3427,6 +3461,7 @@ model CommunicationContextFile {
   @@index([internalThreadId, createdAt])
 }
 model CommunicationVersion {
+  workflowServiceMessage WorkflowServiceMessage?
   updateSource Json?
   updateSourceHash String? @db.Char(64)
   ordinaryEmailDecisions OrdinaryEmailDecision[]
@@ -3531,11 +3566,13 @@ model OrdinaryEmailChannel {
   mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 }
 model OrdinaryEmailDecision {
+  serviceMessageId String? @unique @db.Uuid
+  serviceMessage WorkflowServiceMessage? @relation(fields: [serviceMessageId], references: [messageId], onDelete: Restrict, onUpdate: NoAction)
   id String @id @db.Uuid
   messageId String @db.Uuid
   versionId String @db.Uuid
   actorId String
-  sessionId String @db.Uuid
+  sessionId String? @db.Uuid
   decision Json
   decisionHash String @db.Char(64)
   proof String @db.Char(64)
@@ -3544,7 +3581,7 @@ model OrdinaryEmailDecision {
   message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session InternalSession? @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   attempt OrdinaryEmailAttempt?
 }
 model OrdinaryEmailAttempt {
@@ -4187,6 +4224,7 @@ model RecordUpdateReminderCancellation {
 // Administrative corrections retain their original operational values. This
 // journal never changes approvals, signatures, delivery or personal acceptance.
 model AdminRecordRevision {
+  operationalDocuments OperationalDocument[]
   operationalState AdminOperationalState? @relation("AdminOperationalStateCommand")
   commandId String @id @db.Uuid
   actorId String
@@ -4270,4 +4308,356 @@ model LeadSetterCall {
   actor        User @relation(fields: [actorId], references: [id], onDelete: Restrict)
 
   @@index([leadId, recordedAt(sort: Desc), id])
+}
+
+model InternalNotificationRead {
+  id String @id @default(cuid())
+  recipientId String
+  notificationId String
+  readAt DateTime @default(now())
+  snapshot Json
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict)
+  @@unique([recipientId, notificationId])
+  @@index([recipientId, readAt])
+}
+model PersonalCalendar {
+  id String @id @default(cuid())
+  userId String @unique
+  availability Json
+  mode String @default("LOCAL")
+  googleCalendarId String?
+  credentialReference String?
+  lastTestAt DateTime?
+  lastTestStatus String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appointments LeadAppointment[]
+}
+model LeadAppointment {
+  updater User @relation("LeadAppointmentUpdater", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator User @relation("LeadAppointmentCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  generation Int @default(1)
+  id String @id @db.Uuid
+  leadId String @unique
+  calendarId String
+  startsAt DateTime
+  endsAt DateTime
+  status String @default("BOOKED")
+  syncState String @default("LOCAL")
+  externalEventId String?
+  externalEtag String?
+  syncError String?
+  version Int @default(1)
+  createdById String
+  updatedById String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  calendar PersonalCalendar @relation(fields: [calendarId], references: [id], onDelete: Restrict)
+  @@index([calendarId, status, startsAt])
+}
+model GoogleCalendarOAuthState {
+  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  stateHash String @id @db.Char(64)
+  userId String
+  sessionId String @db.Uuid
+  verifierCiphertext String
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId, expiresAt])
+}
+model GoogleCalendarCredential {
+  userId String @id
+  googleSubject String
+  accessTokenCiphertext String
+  refreshTokenCiphertext String
+  expiresAt DateTime
+  scopes String
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+model OperationalDocument {
+  actor User @relation("OperationalDocumentActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  session InternalSession @relation("OperationalDocumentSession", fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead Lead? @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  contract Contract? @relation(fields: [contractId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  template AdminRecordRevision @relation(fields: [templateCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  sourceDocument OperationalDocument? @relation("OperationalDocumentSource", fields: [sourceDocumentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  derivedDocuments OperationalDocument[] @relation("OperationalDocumentSource")
+  decision OperationalDocumentDecision?
+  id String @id @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  leadId String?
+  clientId String?
+  contractId String?
+  sourceDocumentId String? @db.Uuid
+  templateCommandId String @db.Uuid
+  kind String @db.VarChar(12)
+  sourceHash String @db.Char(64)
+  contentHash String @db.Char(64)
+  requestHash String @db.Char(64)
+  dedupKey String? @unique @db.Char(64)
+  snapshot Json
+  content String
+  dueDate String? @db.VarChar(10)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([leadId, createdAt])
+  @@index([clientId, createdAt])
+}
+model OperationalDocumentDecision {
+  document OperationalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor User @relation("OperationalDocumentDecisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  session InternalSession @relation("OperationalDocumentDecisionSession", fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  commandId String @id @db.Uuid
+  documentId String @unique @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  contentHash String @db.Char(64)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+}
+model WorkflowEmailTemplate {
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id String @id @db.Uuid
+  familyId String @db.Uuid
+  version Int
+  name String @db.VarChar(160)
+  purpose String @db.VarChar(40)
+  subject String @db.VarChar(200)
+  body String
+  state String @default("DRAFT") @db.VarChar(20)
+  authorizationReference String? @db.VarChar(200)
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([familyId, version])
+}
+model WorkflowAutomation {
+  serviceGrants WorkflowServiceGrant[]
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  newsletterRuns WorkflowNewsletterRun[]
+  enrollments WorkflowEnrollment[]
+  tests WorkflowAutomationTest[]
+  id String @id @db.Uuid
+  name String @db.VarChar(160)
+  event String @db.VarChar(40)
+  state String @default("DRAFT") @db.VarChar(20)
+  delayMinutes Int
+  configuration Json
+  version Int @default(1)
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+model WorkflowAutomationTest {
+  performedBy User @relation(fields: [performedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  automation WorkflowAutomation @relation(fields: [automationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id String @id @db.Uuid
+  automationId String @db.Uuid
+  automationVersion Int
+  result Json
+  performedById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([automationId, createdAt])
+}
+model WorkflowEnrollment {
+  sourceReceipt SecureLeadGatewayReceipt? @relation(fields: [sourceReceiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  automation WorkflowAutomation @relation(fields: [automationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  executions WorkflowExecution[]
+  id String @id @db.Uuid
+  automationId String @db.Uuid
+  automationVersion Int
+  eventKey String @db.VarChar(160)
+  leadId String
+  sourceReceiptId String? @db.Uuid
+  sourceHash String @db.Char(64)
+  synthetic Boolean @default(false)
+  state String @default("PENDING") @db.VarChar(20)
+  snapshot Json
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@unique([automationId, eventKey])
+  @@index([leadId, createdAt])
+}
+model WorkflowExecution {
+  serviceMessage WorkflowServiceMessage?
+  serviceNotice WorkflowServiceNotice?
+  recipientUserId String?
+  recipient User? @relation(fields: [recipientUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  enrollment WorkflowEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id String @id @db.Uuid
+  enrollmentId String @db.Uuid
+  step String @db.VarChar(20)
+  state String @default("PENDING") @db.VarChar(20)
+  dueAt DateTime @db.Timestamptz(3)
+  requestKey String @unique @db.Char(64)
+  attemptCount Int @default(0)
+  templateSnapshot Json
+  receipt Json?
+  stopReason String? @db.VarChar(120)
+  history Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@unique([enrollmentId, step])
+  @@index([state, dueAt])
+}
+
+model WorkflowNewsletterRun {
+  automation WorkflowAutomation @relation(fields: [automationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipients WorkflowNewsletterRecipient[]
+  id String @id @db.Uuid
+  automationId String @db.Uuid
+  automationVersion Int
+  synthetic Boolean @default(false)
+  state String @default("PENDING") @db.VarChar(20)
+  scheduledAt DateTime @db.Timestamptz(3)
+  snapshot Json
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@index([automationId, createdAt])
+}
+
+model WorkflowNewsletterRecipient {
+  serviceMessage WorkflowServiceMessage?
+  nativeMessage ApprovedCommunication? @relation(fields: [nativeMessageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  nativeMessageId String? @unique @db.Uuid
+  nativeRevision Int?
+  nativeSnapshotHash String? @db.Char(64)
+  run WorkflowNewsletterRun @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id String @id @db.Uuid
+  runId String @db.Uuid
+  leadId String
+  state String @default("PENDING") @db.VarChar(20)
+  requestKey String @unique @db.Char(64)
+  attemptCount Int @default(0)
+  snapshot Json
+  policySnapshot Json?
+  receipt Json?
+  history Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@unique([runId, leadId])
+  @@index([state, runId])
+}
+
+model WorkflowServiceCredential {
+  id String @id @db.Uuid
+  keyFingerprint String @db.Char(64)
+  state String @default("REVOKED") @db.VarChar(20)
+  revision Int @default(1)
+  validUntil DateTime @db.Timestamptz(3)
+  qualificationReference String @db.VarChar(200)
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grants WorkflowServiceGrant[]
+}
+
+model WorkflowServiceGrant {
+  id String @id @db.Uuid
+  automationId String @db.Uuid
+  automationVersion Int
+  credentialId String @db.Uuid
+  credentialRevision Int
+  issuedById String
+  issuedSessionId String @db.Uuid
+  state String @default("REVOKED") @db.VarChar(20)
+  revision Int @default(1)
+  validFrom DateTime @db.Timestamptz(3)
+  validUntil DateTime @db.Timestamptz(3)
+  maxMessages Int
+  maxPerDay Int
+  policy Json
+  policyHash String @db.Char(64)
+  approvedAt DateTime @default(now()) @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  automation WorkflowAutomation @relation(fields: [automationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credential WorkflowServiceCredential @relation(fields: [credentialId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  issuedBy User @relation(fields: [issuedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  issuedSession InternalSession @relation(fields: [issuedSessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invocations WorkflowServiceInvocation[]
+  messages WorkflowServiceMessage[]
+  notices WorkflowServiceNotice[]
+  @@index([state, validUntil])
+}
+
+model WorkflowServiceInvocation {
+  id String @id @db.Uuid
+  grantId String @db.Uuid
+  requestHash String @db.Char(64)
+  expiresAt DateTime @db.Timestamptz(3)
+  startedAt DateTime @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  result Json?
+  grant WorkflowServiceGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  messages WorkflowServiceMessage[]
+  notices WorkflowServiceNotice[]
+}
+
+model WorkflowServiceNotice {
+  executionId String @id @db.Uuid
+  grantId String @db.Uuid
+  invocationId String @db.Uuid
+  recipientUserId String
+  policyHash String @db.Char(64)
+  sourceHash String @db.Char(64)
+  textHash String @db.Char(64)
+  decision Json
+  decisionHash String @db.Char(64)
+  proof String @db.Char(64)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grant WorkflowServiceGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invocation WorkflowServiceInvocation @relation(fields: [invocationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation(fields: [recipientUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+model WorkflowServiceMessage {
+  messageId String @id @db.Uuid
+  versionId String @unique @db.Uuid
+  grantId String @db.Uuid
+  invocationId String @db.Uuid
+  executionId String? @unique @db.Uuid
+  recipientId String? @unique @db.Uuid
+  policyHash String @db.Char(64)
+  sourceHash String @db.Char(64)
+  snapshotHash String @db.Char(64)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grant WorkflowServiceGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invocation WorkflowServiceInvocation @relation(fields: [invocationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  execution WorkflowExecution? @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient WorkflowNewsletterRecipient? @relation(fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decision OrdinaryEmailDecision?
+}
+
+model LeadAssignmentProposal {
+  decider User? @relation("LeadProposalDecider", fields: [decidedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  target User @relation("LeadProposalTarget", fields: [targetUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  author User @relation("LeadProposalAuthor", fields: [proposedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id String @id @db.Uuid
+  leadId String
+  proposedById String
+  targetUserId String
+  inboxVersion Int
+  state String @default("PENDING") @db.VarChar(20)
+  reason String @db.VarChar(500)
+  decidedById String?
+  decidedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([leadId, createdAt])
+  @@index([state, createdAt])
 }

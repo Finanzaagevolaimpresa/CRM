@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { parseLeadSubmittedEventV1 } from '../../src/lib/lead-event-contract';
-import { responsibilityAcceptance, responsibilityDecision } from '../../src/lib/responsibility-contract';
+import { responsibilityDecision } from '../../src/lib/responsibility-contract';
 
 const db = new PrismaClient();
 
@@ -80,15 +80,7 @@ async function main() {
     assert.equal(decision.state.commercialOwnerId, lead.assignedToId);
     assert.equal(decision.version, 1);
   }
-  assert.equal(accepted.length, ['accepted', 'scheduled'].includes(checkpoint ?? '') ? 1 : 0);
-  if (accepted.length) {
-    const acceptance = responsibilityAcceptance.parse(accepted[0]!.after);
-    assert.equal(accepted[0]!.actorId, lead.assignedToId);
-    assert.equal(acceptance.userId, lead.assignedToId);
-    assert.equal(acceptance.decisionId, decisions[0]!.id);
-    assert.equal(acceptance.role, 'commerciale');
-    assert.ok(accepted[0]!.createdAt >= decisions[0]!.createdAt);
-  }
+  assert.equal(accepted.length, 0, 'Assignment must not manufacture a recipient acceptance');
   assert.equal(item.slaCycles.length, 1);
   assert.equal(item.slaCycles[0]?.dueAt.getTime(), item.slaCycles[0]!.availableAt.getTime() + 86_400_000);
   if (checkpoint === 'projected') {
@@ -123,7 +115,7 @@ async function main() {
     assert.equal(lead.nextAction?.toISOString(), lead.nextActionDate?.toISOString());
     assert.equal(updates.length, 1);
     assert.equal(updates[0]!.actorId, lead.assignedToId);
-    assert.ok(updates[0]!.createdAt >= accepted[0]!.createdAt);
+    assert.ok(updates[0]!.createdAt >= decisions[0]!.createdAt);
   } else {
     assert.equal(lead.nextActionDate, null);
     assert.equal(lead.nextActionNote, null);

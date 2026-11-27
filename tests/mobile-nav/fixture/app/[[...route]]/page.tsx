@@ -50,6 +50,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
     canReviewAiOutputs: can("ai.review"),
     isAdmin: profile === "admin",
   }, {
+    lavoroOggi: count(9), proposteReferente: count(10),
     entratiOggi: count(7), daAssegnare: count(8), leadDaContattare: count(24), trattativeAperte: count(8), offerteInviate: count(6), offerteAccettate: count(3),
     activeTechnicalPracticesCount: count(11), overdueClientUpdates: count(2), commsToReview: count(5), approvedUnusedComms: count(4),
     clientiAttivi: count(38), progettiAttivi: count(16), serviziAcquistati: count(52),

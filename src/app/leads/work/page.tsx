@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 async function Page({ searchParams }: { searchParams: Promise<{ queue?: string; page?: string }> }) {
   const session = await requirePermission('lead.read');
-  const params = await searchParams, queue = params.queue ?? 'contact';
+  const params = await searchParams, queue = params.queue ?? 'workday';
   if (!Object.hasOwn(leadWorkQueues, queue)) notFound();
   const key = queue as LeadWorkQueue, where = leadWorkWhere(session, key, new Date());
   const pageNumber = parseCoreQueryPage(params.page);

@@ -133,12 +133,13 @@ export async function readRecordReminderNotice(db: PrismaClient, claimed: AuthSe
  * Each notice has its own current source/permission transaction; opening it
  * repeats admission. The final session/clock check covers long scans. */
 export async function listRecordReminderNotices(db: PrismaClient, claimed: AuthSession, key: PrivilegedStepUpKey,
-  limit = 100, unreadOnly = true) {
+  limit = 100, unreadOnly = true, exhaustiveInbox = false) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new RecordUpdateError('INVALID');
+  const effectiveLimit = exhaustiveInbox ? Number.MAX_SAFE_INTEGER : limit;
   type Cursor = { id: string; availableAt: Date };
   let cursor: Cursor | undefined;
   const result: NonNullable<Awaited<ReturnType<typeof readNotice>>>[] = [];
-  while (result.length < limit) {
+  while (result.length < effectiveLimit) {
     const rows: Cursor[] = await confirmedReadRetry(() => db.$transaction(async tx => {
       if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) throw new RecordUpdateError('DENIED');
       const auth = await updateActor(tx, claimed), now = await auth.finish();
@@ -155,7 +156,7 @@ export async function listRecordReminderNotices(db: PrismaClient, claimed: AuthS
     for (const candidate of rows) {
       const row = await readNotice(db, claimed, key, candidate.id);
       if (row && (!unreadOnly || row.readAt === null)) result.push(row);
-      if (result.length === limit) break;
+      if (result.length === effectiveLimit) break;
     }
     if (rows.length < 100) break;
     cursor = rows.at(-1)!;

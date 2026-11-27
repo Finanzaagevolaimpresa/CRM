@@ -8,7 +8,7 @@ import { commercialLeadInboxMode } from './commercial-lead-inbox-contract';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import { latestResponsibility, readResponsibility } from './responsibility';
-import { responsibilityAcceptance } from './responsibility-contract';
+
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { internalSessionMode } from './session';
 import { SerializableConflictError, withSerializableTransaction } from './serializable';
@@ -336,20 +336,12 @@ export async function readHistoricalConversionInTransaction(tx: Tx, actor: Actor
   const item = items[0];
   if (!item || item.originKind !== 'MANUAL_CRM') return unavailable();
   // After conversion a lead is no longer workable. Verify the unchanged
-  // assignment and its explicit acceptance directly for reconciliation; this
+  // current administrative assignment directly for reconciliation; this
   // does not revive an assignment or authorize a new operation on a closed lead.
   const assignment = await latestResponsibility(tx, 'Lead', lead.id);
   if (!assignment || !assignment.decision.allowed || assignment.decision.state.commercialOwnerId !== actor.userId
     || assignment.decision.state.clientId !== null || assignment.decision.state.projectId !== null
     || assignment.decision.state.clientServiceId !== null || assignment.decision.state.technicalOwnerId !== null) return unavailable();
-  const acceptances = await tx.auditLog.findMany({ where: { entityType: 'Lead', entityId: lead.id,
-    event: 'responsibility_accepted', actorId: actor.userId, after: { path: ['decisionId'], equals: assignment.id } },
-    select: { after: true } });
-  if (!acceptances.some(row => {
-    const parsed = responsibilityAcceptance.safeParse(row.after);
-    return parsed.success && parsed.data.role === 'commerciale' && parsed.data.userId === actor.userId
-      && parsed.data.decisionId === assignment.id;
-  })) return unavailable();
   const rows = await tx.$queryRaw<unknown[]>`
     SELECT id,input,"actorId","sessionId","inboxItemId","cycleId","contactId","clientId","recordedAt",
       "inboxVersionBefore","inboxVersionAfter","payloadHash","auditId","transactionId"

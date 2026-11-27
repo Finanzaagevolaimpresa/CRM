@@ -80,14 +80,20 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
 
 /** Fresh Admin admission and signed receipt verification for the embedded lead panel. */
 export async function readAdminLeadAttribution(db: PrismaClient, actor: Actor, leadId: string) {
-  const page = await readLeadAcquisitions(db, actor, { leadId }, true);
+  return readLeadAttribution(db, actor, leadId, true);
+}
+
+/** Only receipts linked to a currently readable lead; never exposes the raw request or privacy evidence. */
+export async function readLeadAttribution(db: PrismaClient, actor: Actor, leadId: string, adminOnly = false) {
+  const page = await readLeadAcquisitions(db, actor, { leadId }, adminOnly);
   return page.items.map((row) => ({
-    id: row.id, createdAt: row.createdAt, verified: row.verified,
+    id: row.id, createdAt: row.createdAt, verified: row.verified, state: row.state,
     event: row.event ? {
       source: row.event.source,
       campaignPlatform: row.event.payload.campaignPlatform ?? null,
       campaignCode: row.event.payload.campaignCode ?? null,
       adCode: row.event.payload.adCode ?? null,
+      sourcePagePath: row.event.payload.sourcePagePath ?? null,
     } : null,
   }));
 }

@@ -20,10 +20,13 @@ import { currentAssignmentNotices } from '../../src/lib/assignment-notices';
 import { openOrdinaryWindow, ordinaryWindowExpiry, endOrdinaryWindow } from '../../src/lib/admin-ordinary-window';
 import { resolveInternalSession, revokeInternalSession } from '../../src/lib/internal-session-registry';
 import { createPrivilegedStepUpToken, verifyPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
+import { saveCalendarAvailability } from '../../src/lib/personal-calendar';
+import { defaultCalendarAvailability } from '../../src/lib/personal-calendar-contract';
 
 const db = new PrismaClient();
 type Person = Awaited<ReturnType<typeof syntheticPerson>>;
 let admin: Person, owner: Person, other: Person, tech: Person;
+let calendarId: string;
 const actor = (p: Person) => ({ userId: p.user.id, sessionId: p.session.sessionId! });
 const key = { version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), secret: process.env.PRIVILEGED_STEP_UP_SECRET! };
 before(async () => {
@@ -33,6 +36,7 @@ before(async () => {
   owner = await syntheticPerson(db,'Setter sintetico','commerciale');
   other = await syntheticPerson(db,'Altro referente sintetico','commerciale');
   tech = await syntheticPerson(db,'Tecnico sintetico','consulente');
+  calendarId = await saveCalendarAvailability(db, owner.session, defaultCalendarAvailability);
 });
 after(async () => { await db.$disconnect(); });
 
@@ -91,12 +95,15 @@ test('Tentativo, doppio clic, risposta persa, primo contatto, rinvio, assenza e 
   const cycle = () => db.commercialLeadSlaCycle.findFirstOrThrow({where:{inboxItemId:assigned.id}});
   assert.equal((await cycle()).firstResponseAt,null);
   await assert.rejects(saveSetterCall(db,actor(owner),await nextCommand(id,{outcome:'VIDEO_HELD',details:detail})));
-  const book = await nextCommand(id,{outcome:'VIDEO_BOOKED',nextKind:'VIDEO',nextLocal:'2027-01-14T13:10',details:detail});
+  const book = await nextCommand(id,{outcome:'VIDEO_BOOKED',nextKind:'VIDEO',nextLocal:'2030-01-07T13:10',details:detail,
+    appointment: { id: randomUUID(), calendarId, expectedVersion: 0, durationMinutes: 30 }});
   await saveSetterCall(db,actor(owner),book);
   assert((await saveSetterCall(db,actor(owner),book)).replay);
   const first = (await cycle()).firstResponseAt;
   assert(first); assert.equal(await listed(owner,id,'contact'),0); assert.equal(await listed(owner,id,'videos'),1);
-  await saveSetterCall(db,actor(owner),await nextCommand(id,{outcome:'VIDEO_DEFERRED',nextKind:'VIDEO',nextLocal:'2027-01-18T11:00',details:detail}));
+  const appointment = await db.leadAppointment.findUniqueOrThrow({ where: { leadId: id } });
+  await saveSetterCall(db,actor(owner),await nextCommand(id,{outcome:'VIDEO_DEFERRED',nextKind:'VIDEO',nextLocal:'2030-01-08T11:00',details:detail,
+    appointment: { id: appointment.id, calendarId, expectedVersion: appointment.version, durationMinutes: 30 }}));
   await saveSetterCall(db,actor(owner),await nextCommand(id,{outcome:'VIDEO_ABSENT'}));
   assert.equal(await listed(owner,id,'videos'),0); assert.equal((await cycle()).firstResponseAt?.toISOString(),first.toISOString());
   assert.equal(await db.leadSetterCall.count({where:{leadId:id}}),4);

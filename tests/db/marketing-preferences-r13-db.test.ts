@@ -35,7 +35,6 @@ test.before(async () => {
   const prisma = resolve('node_modules/prisma/build/index.js');
   const env = { ...process.env, DATABASE_URL: url.toString() };
   execFileSync(process.execPath, [prisma, 'migrate', 'deploy'], { env, stdio: 'pipe' });
-  execFileSync(process.execPath, [prisma, 'db', 'execute', '--file', 'prisma/proposals/r13-marketing-preferences/migration.sql', '--schema', 'prisma/schema.prisma'], { env, stdio: 'pipe' });
   db = new PrismaClient({ datasources: { db: { url: url.toString() } } });
 });
 test.after(async () => {
@@ -44,14 +43,14 @@ test.after(async () => {
   await root?.$disconnect();
 });
 
-test('R13 proposal creates empty ledgers without advancing the operational migration chain', { skip: !enabled }, async () => {
+test('schema78 carries R13 ledgers without provisioning any policy or epoch', { skip: !enabled }, async () => {
   const [row] = await client().$queryRaw<Array<{ migrations: number; subjects: number; events: number; epochs: number }>>(Prisma.sql`
     SELECT (SELECT count(*)::INT FROM "_prisma_migrations" WHERE "finished_at" IS NOT NULL) AS migrations,
       (SELECT count(*)::INT FROM "MarketingPreferenceSubject") AS subjects,
       (SELECT count(*)::INT FROM "MarketingPreferenceEvent") AS events,
       (SELECT count(*)::INT FROM "MarketingPreferenceEpoch") AS epochs
   `);
-  assert.deepEqual(row, { migrations: 77, subjects: 0, events: 0, epochs: 0 });
+  assert.deepEqual(row, { migrations: 78, subjects: 0, events: 0, epochs: 0 });
 });
 
 test('SQL persists an anonymous block atomically and denies replay mutation and direct ledger rewriting', { skip: !enabled }, async () => {

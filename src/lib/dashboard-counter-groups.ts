@@ -15,6 +15,8 @@ export type DashboardCounterAccess = {
 };
 
 export type DashboardCounterCounts = {
+  lavoroOggi: number;
+  proposteReferente: number;
   leadDaContattare: number;
   entratiOggi: number;
   daAssegnare: number;
@@ -71,6 +73,8 @@ const groups: GroupDefinition[] = [
     description: "Contatti, trattative e offerte nel tuo perimetro.",
     tone: "blue",
     counters: [
+      { count: "lavoroOggi", permission: "canReadLeads", label: "Oggi", description: "Lead da seguire entro oggi o senza prossimo passo", href: "/leads/work?queue=workday" },
+      { count: "proposteReferente", permission: "canReadLeads", label: "Proposte da confermare", description: "Lead con una proposta di referente in attesa dell’Admin", href: "/leads/work?queue=proposals" },
       { count: "entratiOggi", permission: "canReadLeads", label: "Entrati oggi", description: "Lead creati oggi, ora di Roma", href: "/leads/work?queue=today" },
       { count: "daAssegnare", permission: "canReadLeads", label: "Da assegnare", description: "Lead aperti senza referente", href: "/leads/work?queue=unassigned" },
       { count: "leadDaContattare", permission: "canReadLeads", label: "Assegnati da contattare", description: "Lead aperti assegnati senza contatto registrato", href: "/leads/work?queue=contact" },

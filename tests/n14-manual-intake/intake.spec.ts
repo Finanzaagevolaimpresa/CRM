@@ -72,7 +72,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => db.$disconnect());
 
-test('manual unassigned intake uses native identity confirmation, explicit owner, acceptance and real-time response before one conversion', async ({ browser }) => {
+test('manual unassigned intake uses native identity confirmation, immediately operational owner and real-time response before one conversion', async ({ browser }) => {
   const ac = await browser.newContext(), cc = await browser.newContext(), oc = await browser.newContext();
   const admin = await ac.newPage(), owner = await cc.newPage(), excluded = await oc.newPage();
   const assertRendering = trackHydrationErrors([admin, owner, excluded]);
@@ -96,8 +96,11 @@ test('manual unassigned intake uses native identity confirmation, explicit owner
   await expect(excluded.getByRole('link', { name: row.lead.companyName!, exact: true })).toHaveCount(0);
   await excluded.goto(`/leads/${row.lead.id}`); await expect(excluded.getByRole('heading', { name: 'Lead non trovato', exact: true })).toBeVisible();
   await login(owner, f.emails.commercial); await owner.goto(`/assignments/Lead/${row.lead.id}`);
-  await owner.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true }).click();
+  await expect(owner.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toBeVisible();
   await expect(owner.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
+  await expect(owner.getByText('Responsabilità commerciale: incarico operativo dalla decisione Admin', { exact: true })).toBeVisible();
+  await expect(owner.getByRole('heading', { name: 'Storico delle decisioni e conferme', exact: true })).toBeVisible();
+  expect(await db.auditLog.count({ where: { entityId: row.lead.id, event: 'responsibility_accepted' } })).toBe(0);
   await owner.goto(`/leads/${row.lead.id}`);
   await expect(owner.getByRole('button', { name: 'Converti in cliente', exact: true })).toHaveCount(0);
   const beforeResponse = Date.now();

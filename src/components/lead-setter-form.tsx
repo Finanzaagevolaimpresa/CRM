@@ -1,12 +1,14 @@
 'use client';
 import { useState, useSyncExternalStore, useTransition, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useInteractiveReady } from './interactive-ready-marker';
 import { saveSetterCallAction } from '@/lib/lead-setter-actions';
 import { assistanceOptions, riskFields, riskOrigins, setterFields, setterOutcomes, type SetterDetails, type SetterOutcome, type SetterCommand } from '@/lib/lead-setter-contract';
+import { LeadAppointmentFields, type AppointmentChoice, type CalendarChoice } from './lead-appointment-fields';
 
 type Props = { leadId: string; actorId: string; confirmedIds: string[]; initialId: string; version: number | null; leadVersion: string; scheduledVideo: boolean;
-  defaults: Partial<SetterDetails> };
+  defaults: Partial<SetterDetails>; calendars: CalendarChoice[]; appointment: AppointmentChoice | null; legacyDate: string | null };
 const inputClass = 'block w-full rounded-xl border p-2';
 const pendingEvent = 'fai-lead-setter-receipt';
 function subscribePending(notify: () => void) {
@@ -22,7 +24,7 @@ function rememberCommand(scope: string, id: string | null) {
     // The in-memory command and server history remain available.
   }
 }
-export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, version, leadVersion, scheduledVideo, defaults }: Props) {
+export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, version, leadVersion, scheduledVideo, defaults, calendars, appointment, legacyDate }: Props) {
   const router = useRouter();
   const ready = useInteractiveReady();
   const [id, setId] = useState(initialId);
@@ -51,7 +53,9 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
     const assessment = outcome === 'UNREACHABLE' ? null : { ...details, ...risks, assistance: field('assistance') || 'UNKNOWN' } as SetterDetails;
     const commandId = pendingId || id;
     rememberCommand(scope, commandId);
-    const value = { id: commandId, leadId, leadVersion, version, outcome, nextKind: next, nextLocal: field('nextLocal'), details: assessment };
+    const value = { id: commandId, leadId, leadVersion, version, outcome, nextKind: next, nextLocal: field('nextLocal'), details: assessment,
+      ...(next === 'VIDEO' ? { appointment: { id: appointment?.id ?? commandId, calendarId: field('calendar'),
+        expectedVersion: appointment?.version ?? 0, durationMinutes: Number(field('duration')) } } : {}) };
     start(async () => {
       try {
         const result = await saveSetterCallAction(value);
@@ -88,9 +92,12 @@ export function LeadSetterForm({ leadId, actorId, confirmedIds, initialId, versi
       {['VIDEO_BOOKED','VIDEO_DEFERRED'].includes(outcome) ? <option value="VIDEO">Videochiamata</option> : <>
         <option value="CALLBACK">Richiamo</option>{!['UNREACHABLE','VIDEO_ABSENT'].includes(outcome) && <option value="NONE">Nessuna ulteriore azione prevista</option>}</>}
     </select></label>
-    {next !== 'NONE' && <label>{next === 'VIDEO' ? 'Data e ora della videochiamata (Roma)' : 'Data del richiamo'}
-      <input name="nextLocal" type={next === 'VIDEO' ? 'datetime-local' : 'date'} key={next} className={inputClass} required/></label>}
-    <button className="rounded-xl bg-blue-900 px-4 py-2 font-bold text-white" disabled={pending}>
+    {next === 'VIDEO' ? <div className="grid gap-3 md:grid-cols-3">
+      <LeadAppointmentFields calendars={calendars} appointment={appointment} assignedToId={actorId} legacyDate={legacyDate} setter />
+      {!calendars.length && <div className="md:col-span-3"><p>Il referente deve prima salvare le proprie fasce in <Link href="/calendars" target="_blank" className="underline">Calendari</Link>. Le informazioni della chiamata restano in questa scheda.</p>
+        <button type="button" className="underline" onClick={() => router.refresh()}>Rileggi calendari disponibili</button></div>}
+    </div> : next === 'CALLBACK' && <label>Data del richiamo<input name="nextLocal" type="date" className={inputClass} required/></label>}
+    <button className="rounded-xl bg-blue-900 px-4 py-2 font-bold text-white" disabled={pending || next === 'VIDEO' && !calendars.length}>
       {pending ? 'Salvataggio in corso…' : 'Salva chiamata e prossimo passo'}</button>
     {message && <p role="status">{message}</p>}
     {pendingId && <button type="button" className="underline" disabled={pending} onClick={() => router.refresh()}>Rileggi esito del salvataggio</button>}

@@ -24,7 +24,7 @@ before(async () => {
   if (!enabled) return;
   assert.equal(process.env.CI, 'true');
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
-  assert.equal(await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`.then(r => Number(r[0].n)), 77);
+  assert.equal(await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`.then(r => Number(r[0].n)), 78);
   admin = await syntheticAuthority(db);
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
 });

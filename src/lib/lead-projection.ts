@@ -1,5 +1,6 @@
 import { canonicalSha256 } from './canonical-json';
 import { Prisma, type PrismaClient } from '@prisma/client';
+import { captureWorkflowLeadReceiptAfterCommit } from './workflow-native-runner';
 import {
   BusinessEventBackboneError,
   failBusinessQueueEvent,
@@ -154,6 +155,24 @@ async function dismissSingleEvaluationNameMatch(
   }
   if (lead.deletedAt) return 'TRASHED_NAME_ONLY';
   return email && isLeadEventEmail(email) && phone ? 'DISTINCT_CONTACTS_NAME_ONLY' : null;
+}
+
+// The same generic label may occur on several unrelated requests. Every match
+// must independently satisfy the existing conservative contact counterproof;
+// one incomplete, strong or potentially shared contact keeps the whole review.
+async function dismissEvaluationNameMatches(
+  tx: Prisma.TransactionClient,
+  event: LeadSubmittedEventV1,
+  candidates: readonly LeadIdentityCandidate[],
+) {
+  if (!candidates.length) return null;
+  const reasons = [];
+  for (const candidate of candidates) {
+    const reason = await dismissSingleEvaluationNameMatch(tx, event, [candidate]);
+    if (!reason) return null;
+    reasons.push(reason);
+  }
+  return candidates.length === 1 ? reasons[0] : 'MULTIPLE_DISTINCT_CONTACTS_NAME_ONLY' as const;
 }
 
 function projectionError(error: unknown): LeadProjectionError | null {
@@ -368,7 +387,7 @@ async function projectInTransaction(
     identityKeyVersionId: activeKey.id,
     signals: identitySignals,
   });
-  const dismissed = await dismissSingleEvaluationNameMatch(context.tx, context.envelope, candidates);
+  const dismissed = await dismissEvaluationNameMatches(context.tx, context.envelope, candidates);
   const snapshots = candidateSnapshots(context.recordHash, dismissed ? [] : candidates);
   const result = snapshots.length === 0
     ? await createProjectedLead(context.tx, {
@@ -409,7 +428,7 @@ async function projectInTransaction(
         normalizationVersion: LEAD_NORMALIZATION_VERSION,
         state: result.state,
         candidateCount: result.candidateCount,
-        ...(dismissed && { dismissalReasonCode: dismissed, matchedSignalCode: candidates[0].matchedSignalCodes[0] }),
+        ...(dismissed && { dismissalReasonCode: dismissed, matchedSignalCode: candidates[0].matchedSignalCodes[0], dismissedCandidateCount: candidates.length }),
         privacyEvidenceCount: evidence.count,
       },
     },
@@ -451,11 +470,13 @@ export async function projectClaimedLeadInboxEvent(
     throw classified;
   }
   try {
-    return await processClaimedBusinessInboxEventInTransaction(
+    const result = await processClaimedBusinessInboxEventInTransaction(
       prisma,
       leaseIdentity,
       (context) => projectInTransaction(context, key, options),
     );
+    await captureWorkflowLeadReceiptAfterCommit(prisma, leaseIdentity.eventRowId);
+    return result;
   } catch (error) {
     if (error instanceof BusinessEventBackboneError) {
       if (error.code === 'BUSINESS_QUEUE_DATABASE_CONFLICT') {

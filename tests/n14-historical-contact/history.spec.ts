@@ -18,7 +18,7 @@ async function login(page: Page, email: string) {
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno', exact: true }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
-async function ownedLead(browser: Browser, accept = true) {
+async function ownedLead(browser: Browser, inspectAssignmentHistory = true) {
   const ac = await browser.newContext(), cc = await browser.newContext();
   const admin = await ac.newPage(), owner = await cc.newPage();
   const title = `Contatto precedente sintetico ${randomUUID()}`;
@@ -37,11 +37,14 @@ async function ownedLead(browser: Browser, accept = true) {
   await admin.getByRole('button', { name: 'Assegna', exact: true }).click();
   await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId).toBe(f.commercialId);
   await login(owner, f.emails.commercial);
-  if (accept) {
+  if (inspectAssignmentHistory) {
     await owner.goto(`/assignments/Lead/${lead.id}`);
-    await owner.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true }).click();
+    await expect(owner.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toBeVisible();
     await expect(owner.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
+    await expect(owner.getByText('Responsabilità commerciale: incarico operativo dalla decisione Admin', { exact: true })).toBeVisible();
+    await expect(owner.getByRole('heading', { name: 'Storico delle decisioni e conferme', exact: true })).toBeVisible();
   }
+  expect(await db.auditLog.count({ where: { entityId: lead.id, event: 'responsibility_accepted' } })).toBe(0);
   const item = await db.commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: lead.id } });
   const cycle = await db.commercialLeadSlaCycle.findFirstOrThrow({ where: { inboxItemId: item.id } });
   return { ac, cc, admin, owner, lead, item, cycle, route: `/leads/${lead.id}/historical-contact` };
@@ -94,7 +97,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => db.$disconnect());
 
-test('native assignment and personal acceptance lead to an exact historical preview and durable receipt without a fabricated first response', async ({ browser }) => {
+test('Admin assignment immediately permits an exact historical preview and durable receipt without personal acceptance or fabricated first response', async ({ browser }) => {
   const x = await ownedLead(browser), checkHydration = hydration(x.owner);
   await x.owner.goto(`/leads/${x.lead.id}`);
   await x.owner.getByRole('link', { name: 'Registra contatto precedente al CRM', exact: true }).click();

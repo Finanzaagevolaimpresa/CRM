@@ -1,4 +1,8 @@
 import { canAccessFinancialDocument } from './financial-document-access';
+import { assertWorkflowMessageAction, stopPendingWorkflowExecutions } from './workflow-executions';
+import { assertNewsletterMessageAction, denyManualNewsletterTransport } from './workflow-newsletter-admission';
+import { assertServiceAdmission, denyPersonalServiceMessage, readWorkflowServiceMessageAuthority, type WorkflowServiceAdmission } from './workflow-service-authority';
+import type { NativeNewsletterPolicySource } from './workflow-newsletter-policy';
 import { captureInternalDisclosure, assertInternalDisclosureCurrent } from './internal-content-disclosure-db';
 import { selectedInternalDisclosure } from './internal-content-disclosure';
 import { assertOperationalAccess, readOperationalState, AdminOperationalStateError, type AdminOperationalModel, type OperationalStateRow } from './admin-operational-state';
@@ -38,7 +42,7 @@ type Tx = Prisma.TransactionClient;
 import { adminRequestDraftSource, admitAdminRequestDraft, linkAdminRequestDraft } from './admin-request-draft-source';
 import { requestDraftOrigin } from './admin-request-storage';
 import { isRequestUnavailable } from './admin-request-service';
-type Runtime = { readDocument?: typeof readPrivateDocumentBounded; failAudit?: boolean };
+type Runtime = { readDocument?: typeof readPrivateDocumentBounded; failAudit?: boolean; newsletterPolicySource?: NativeNewsletterPolicySource };
 const uuid = z.string().uuid(), identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const revision = z.number().int().positive();
 const digest = (value: Buffer) => createHash('sha256').update(value).digest('hex');
@@ -421,6 +425,59 @@ const editSchema = z.object({
   requestSource: adminRequestDraftSource.optional(),
 }).strict();
 
+/** Internal service composition only. A transaction-bound grant admission is
+ * required; this function never accepts an AuthSession substitute. The caller
+ * binds the resulting immutable version to its exact workflow source. */
+export async function saveWorkflowServiceDraft(tx: Tx, auth: WorkflowServiceAdmission,
+  input: { messageId: string; leadId: string; to: string; subject: string; body: string }) {
+  assertServiceAdmission(tx,auth);
+  const current = auth.actor, context = { kind: 'LEAD' as const,id: input.leadId };
+  const scope = await contextScope(tx,current,context,true), box = await mailbox(tx,auth.box.id,current,'ORDINARY');
+  await responsibleMailbox(tx,box);
+  if (!mailboxQualification(mailboxSnapshot(box)).enabled) denied();
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.messageId},0))`;
+  if (await tx.approvedCommunication.findUnique({ where: { id: input.messageId } })) conflict();
+  const selection = { to: { userIds: [],groups: [] },cc: { userIds: [],groups: [] },bcc: { userIds: [],groups: [] } };
+  const externalRecipients = { to: [input.to],cc: [],bcc: [] };
+  const resolved = await lockedCommunicationRecipients(tx,selection,externalRecipients);
+  const snapshot = parse(approvedMessageSnapshotSchema,{ schema: 'fai.approved-email.v2',messageId: input.messageId,revision: 1,
+    context,clientId: scope.client?.id ?? null,channel: 'EMAIL_MANUAL',mailboxId: box.id,mailboxRevision: box.revision,
+    from: box.address,replyTo: box.address,...resolved.recipients,subject: input.subject,body: input.body,attachments: [],classification: 'ORDINARY',
+    recipientSelection: resolved.selection,externalRecipients,recipientEvidenceHash: resolved.evidenceHash,
+    contextEvidenceHash: canonicalSha256(JSON.parse(JSON.stringify(scope))) });
+  await assertCommunicationTechnicalRecipients(tx,snapshot);
+  await tx.approvedCommunication.create({ data: { id: input.messageId,contextKind: 'LEAD',leadId: input.leadId,
+    clientId: scope.client?.id ?? null,mailboxId: box.id,createdById: current.id } });
+  const version = await tx.communicationVersion.create({ data: { messageId: input.messageId,revision: 1,snapshot: json(snapshot),
+    snapshotHash: approvedMessageHash(snapshot),createdById: current.id } });
+  await tx.communicationEvent.create({ data: { messageId: input.messageId,actorId: current.id,event: 'WORKFLOW_SERVICE_DRAFT',
+    evidence: { grantId: auth.grant.id,policyHash: auth.grant.policyHash,revision: 1,snapshotHash: version.snapshotHash,
+      authorityKind: 'WORKFLOW_SERVICE',personalApproval: false } } });
+  await auth.finish(); return { id: input.messageId,revision: 1,snapshotHash: version.snapshotHash,versionId: version.id };
+}
+
+export async function loadWorkflowServiceMessageContext(tx: Tx, auth: WorkflowServiceAdmission, messageId: string,
+  runtime: Runtime = {}) {
+  assertServiceAdmission(tx,auth);
+  const loaded = await messageScope(tx,auth.actor,messageId,true);
+  if (loaded.row.contextKind !== 'LEAD' || loaded.snapshot.attachments.length || loaded.snapshot.to.length !== 1
+    || loaded.snapshot.cc.length || loaded.snapshot.bcc.length || loaded.snapshot.classification !== 'ORDINARY'
+    || loaded.snapshot.mailboxId !== auth.box.id || loaded.snapshot.replyTo !== auth.box.address) denied();
+  await assertWorkflowMessageAction(tx,{ messageId,revision: loaded.version.revision,snapshotHash: loaded.version.snapshotHash });
+  const newsletterCheck = await assertNewsletterMessageAction(tx,{ messageId,revision: loaded.version.revision,
+    snapshotHash: loaded.version.snapshotHash },runtime.newsletterPolicySource);
+  await revalidateSnapshotRecipients(tx,loaded.scope,loaded.snapshot);
+  await responsibleMailbox(tx,loaded.box);
+  if (!mailboxQualification(mailboxSnapshot(loaded.box)).enabled) denied();
+  const contextHash = canonicalSha256(JSON.parse(JSON.stringify({ scope: loaded.scope,actorId: auth.actor.id,
+    role: auth.actor.role,overrides: auth.actor.permissionOverrides,clientReadScope: auth.actor.clientReadScope,
+    selectiveLeadIds: auth.actor.selectiveLeadIds,selectiveProjectIds: auth.actor.selectiveProjectIds,
+    operationalLifecycle: (await operationalCommunicationContext(tx,loaded.scope.context,messageId))
+      .map(row => ({ model: row.model,id: row.recordId,state: row.state,version: row.version })) })));
+  await auth.finish();
+  return { ...loaded,contextHash,newsletterCheck,materials: new Map<string,Buffer>() };
+}
+
 /** Server-only building block for the isolated ordinary-mail persistence
  * candidate. Reuses M4 locks and current document/financial/ABAC checks. It is
  * not a route, a manual approval conversion or a transport authorization. */
@@ -429,6 +486,9 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
   const current = await actor(tx, claimed, 'practice_communications.mark_used', true);
   if (!hasPermission(current, 'practice_communications.read')) denied();
   const loaded = await messageScope(tx, current, messageId, true);
+  await denyPersonalServiceMessage(tx,messageId);
+  await assertWorkflowMessageAction(tx, { messageId, revision: loaded.version.revision, snapshotHash: loaded.version.snapshotHash });
+  await assertNewsletterMessageAction(tx, { messageId, revision: loaded.version.revision, snapshotHash: loaded.version.snapshotHash }, runtime.newsletterPolicySource);
   await revalidateSnapshotRecipients(tx, loaded.scope, loaded.snapshot);
   if (selectedInternalDisclosure(loaded.snapshot) && (!loaded.version.approval
     || loaded.version.approval.snapshotHash !== loaded.version.snapshotHash)) throw new ApprovedCommunicationError('CONTENT_APPROVAL_REQUIRED');
@@ -477,6 +537,7 @@ export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: Aut
     const box = await mailbox(tx, input.mailboxId, current, input.classification);
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.messageId}, 0))`;
     const existing = await tx.approvedCommunication.findUnique({ where: { id: input.messageId } });
+    if (existing) await denyPersonalServiceMessage(tx,input.messageId);
     let replyAccessUntil = Infinity;
     let updateAdmission: UpdateEmailAdmission | null = null;
     let requestAdmission: Awaited<ReturnType<typeof admitAdminRequestDraft>> | null = null;
@@ -518,6 +579,10 @@ export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: Aut
     }
     if (existing) {
       const prior = await messageScope(tx, current, input.messageId, true, false);
+      await assertWorkflowMessageAction(tx, { messageId: input.messageId, revision: prior.version.revision,
+        snapshotHash: prior.version.snapshotHash, edit: true });
+      await assertNewsletterMessageAction(tx, { messageId: input.messageId, revision: prior.version.revision,
+        snapshotHash: prior.version.snapshotHash, edit: true }, runtime.newsletterPolicySource);
       if (prior.row.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(prior.row.state)
         || canonicalSha256(rowContext(prior.row)) !== canonicalSha256(input.context)) conflict();
       if ((prior.box.restricted && !box.restricted)
@@ -590,11 +655,14 @@ export async function admitAdminDraftTarget(tx: Tx, claimed: AuthSession, contex
 }
 
 const transitionSchema = z.object({ messageId: uuid, expectedRevision: revision, snapshotHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-export async function submitApprovedMessage(db: Db, claimed: AuthSession, raw: unknown) {
+export async function submitApprovedMessage(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parse(transitionSchema, raw);
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.write');
     const { row, version, updateUntil } = await messageScope(tx, current, input.messageId, true);
+    await denyPersonalServiceMessage(tx,row.id);
+    await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
+    await assertNewsletterMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash }, runtime.newsletterPolicySource);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['DRAFT', 'PENDING'].includes(row.state)) conflict();
     if (row.state === 'PENDING') { await assertCurrentClock(tx, current, expiryDate(updateUntil)); return; }
     await tx.approvedCommunication.update({ where: { id: row.id }, data: { state: 'PENDING' } });
@@ -608,6 +676,9 @@ export async function approveExactMessage(db: Db, claimed: AuthSession, raw: unk
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.read', true);
     const { row, version, snapshot, scope, box, updateUntil } = await messageScope(tx, current, input.messageId, true);
+    await denyPersonalServiceMessage(tx,row.id);
+    await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
+    await assertNewsletterMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash }, runtime.newsletterPolicySource);
     await revalidateSnapshotRecipients(tx, scope, snapshot);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['PENDING', 'APPROVED'].includes(row.state)) conflict();
     if (scope.leadLifecycle && scope.leadLifecycle.createdAt >= version.createdAt) conflict();
@@ -631,6 +702,9 @@ export async function prepareManualMessage(db: Db, claimed: AuthSession, raw: un
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.mark_used');
     const { row, version, snapshot, scope, box, updateUntil } = await messageScope(tx, current, input.messageId, true);
+    await denyPersonalServiceMessage(tx,row.id);
+    await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
+    await denyManualNewsletterTransport(tx, row.id);
     await revalidateSnapshotRecipients(tx, scope, snapshot);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !version.approval) conflict();
     const approval = version.approval;
@@ -728,6 +802,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       // Only admitted messages reach the receipt query. Locks stay held until
       // the final DB-clock expiry check; consultation needs no new step-up.
       const ordinaryReceipts = await readAdmittedOrdinaryEmailReceipts(tx, row.id);
+      const serviceAuthority = await readWorkflowServiceMessageAuthority(tx,row.id);
       accessUntil = Math.min(accessUntil, messageUntil, detail.updateUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
         snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, requestSource: detail.requestSource,
@@ -739,7 +814,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
           recipientId: detail.updateAdmission.recipient.id, recipientName: detail.updateAdmission.recipient.name,
           recipientAddress: detail.updateAdmission.proposal.source.recipientAddress,
           stale: detail.version.updateSourceHash !== detail.updateAdmission.proposal.sourceHash } : null,
-        replies: replies.map(reply => ({ ...reply, receivedAttachments: receivedAttachments.get(reply.id) ?? [] })), ordinaryReceipts });
+        replies: replies.map(reply => ({ ...reply, receivedAttachments: receivedAttachments.get(reply.id) ?? [] })), ordinaryReceipts,serviceAuthority });
     }
     const boxes = await tx.communicationMailbox.findMany({ where: current.role === 'admin' ? {} : { restricted: false }, orderBy: { address: 'asc' } });
     const documents = [];
@@ -966,6 +1041,8 @@ export async function acquireManualReply(db: Db, claimed: AuthSession, raw: unkn
     const reply = await tx.communicationReply.create({ data: { ...payload, canonicalMailboxId, contentHash,
       evidenceReference: input.evidenceReference, receivedAt: new Date(input.receivedAt), acquiredById: current.userId, messageId } });
     await event(tx, current, messageId, messageId ? 'REPLY_LINKED_FROM_REFERENCE' : 'REPLY_NEEDS_RECONCILIATION', { replyId: reply.id, contentHash, method: 'MANUAL_ACQUISITION' }, {}, reply.id);
+    if (messageId && version?.message.contextKind === 'LEAD' && version.message.leadId)
+      await stopPendingWorkflowExecutions(tx, { leadId: version.message.leadId, reason: 'REPLIED', evidenceId: reply.id });
     return reply;
   });
 }
@@ -985,6 +1062,8 @@ export async function linkAmbiguousReply(db: Db, claimed: AuthSession, raw: unkn
     if (reply.messageId) return reply;
     const result = await tx.communicationReply.update({ where: { id: reply.id }, data: { messageId: message.row.id, linkedById: current.userId } });
     await event(tx, current, message.row.id, 'REPLY_LINKED_MANUALLY', { replyId: reply.id, reason: input.reason, contentHash: reply.contentHash }, {}, reply.id);
+    if (message.row.contextKind === 'LEAD' && message.row.leadId)
+      await stopPendingWorkflowExecutions(tx, { leadId: message.row.leadId, reason: 'REPLIED', evidenceId: reply.id });
     return result;
   });
 }

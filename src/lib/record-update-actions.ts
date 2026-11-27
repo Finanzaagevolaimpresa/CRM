@@ -12,8 +12,10 @@ import { readSelectedRecordNotice } from './record-reminder-notifications';
 import { RecordUpdateError } from './record-update-contract';
 import { updateCommandSchema } from './record-update-input';
 import { SerializableConflictError } from './serializable';
+import { CalendarError } from './personal-calendar-contract';
 
 function errorMessage(error: unknown) {
+  if (error instanceof CalendarError) return 'Per fissare o spostare una videochiamata usa Appuntamento nella scheda lead: il calendario deve verificare la disponibilità.';
   if (error instanceof ZodError) return 'Controlla i campi, le date e la scelta dei destinatari.';
   if (error instanceof SerializableConflictError || (error instanceof RecordUpdateError && error.code === 'STALE'))
     return 'La scheda o le autorizzazioni sono cambiate. Ricarica la pagina e prepara un nuovo riepilogo.';
@@ -46,7 +48,7 @@ export async function confirmRecordUpdateAction(raw: unknown, digest: string) {
     return { ok: true as const, result };
   } catch (error) {
     if (error instanceof PrivilegedAdmissionRequired) return error.formState;
-    return { ok: false as const, stepUpRequired: false, uncertain: !(error instanceof ZodError || error instanceof SerializableConflictError || error instanceof RecordUpdateError), message: errorMessage(error) };
+    return { ok: false as const, stepUpRequired: false, uncertain: !(error instanceof ZodError || error instanceof SerializableConflictError || error instanceof RecordUpdateError || error instanceof CalendarError), message: errorMessage(error) };
   }
 }
 export async function verifyRecordUpdateResultAction(commandId: string) {

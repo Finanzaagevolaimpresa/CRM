@@ -309,8 +309,8 @@ test("contatori zero restano visibili e numeri grandi non causano overflow mobil
   const areas = page.getByRole("region", { name: "Contatori per area" });
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
   const counters = areas.getByRole("link");
-  expect(await counters.count()).toBe(22);
-  for (const queue of ['today','unassigned','contact']) {
+  expect(await counters.count()).toBe(24);
+  for (const queue of ['workday','proposals','today','unassigned','contact']) {
     await expect(areas.locator('a[href="/leads/work?queue=' + queue + '"]')).toHaveCount(1);
   }
   for (const link of await counters.all()) await expect(link).toHaveText(/0$/);

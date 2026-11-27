@@ -18,6 +18,7 @@ import { recordUpdateContext, currentRecordUpdateUser, recordUpdatePermission, r
 import { mapSerializableConflict } from './serializable';
 import { recordUpdateEmailAuthority } from './record-update-email-authority';
 import { assertProjectParametersCurrent } from './project-parameters-state';
+import { assertVideoNextActionUnchanged } from './personal-calendar-contract';
 
 type Tx = Prisma.TransactionClient;
 export type UpdateCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken: string };
@@ -163,10 +164,13 @@ export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession
       const patch = input.patch;
       const date = (value: string) => value ? new Date(value) : null;
       switch (patch.kind) {
-        case 'LEAD':
+        case 'LEAD': {
+          const current = await tx.lead.findUniqueOrThrow({ where: { id: input.recordId }, select: { setterNextKind: true, nextActionDate: true } });
+          assertVideoNextActionUnchanged(current, date(patch.nextActionDate));
           await tx.lead.update({ where, data: { nextActionDate: date(patch.nextActionDate), nextAction: date(patch.nextActionDate),
             nextActionNote: patch.nextActionNote || null, updatedAt } });
           break;
+        }
         case 'CLIENT':
           await tx.client.update({ where, data: { displayName: patch.displayName, type: patch.type, updatedAt } });
           break;

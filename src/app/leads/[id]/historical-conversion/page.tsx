@@ -34,7 +34,7 @@ export const dynamic = 'force-dynamic';
   }
   if (completed) return <HistoricalConversionReceipt receipt={completed} />;
   if (!scope?.canCreateClient || !scope.receipt) {
-    return <PageHeader title="Conversione storica non disponibile" description="Servono il referente corrente con presa in carico, il contatto precedente registrato e i permessi correnti sul cliente. Un esito incerto va riconciliato senza ripetere il salvataggio." />;
+    return <PageHeader title="Conversione storica non disponibile" description="Servono l’assegnazione corrente confermata dall’Admin, il contatto precedente registrato e i permessi correnti sul cliente. Un esito incerto va riconciliato senza ripetere il salvataggio." />;
   }
   return <div className="crm-space-y-6 min-w-0"><PageHeader title="Registra il cliente già contattato" description="Una decisione distinta dal contatto, senza modificare la data della prima risposta." />
     <SecondaryLink href={`/leads/${id}`}>Torna al lead</SecondaryLink>

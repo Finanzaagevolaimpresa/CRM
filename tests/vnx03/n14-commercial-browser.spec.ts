@@ -152,7 +152,7 @@ async function submitSyntheticLead(page: Page) {
   assert.match(consumer, /"projectedNew":1/u);
 }
 
-test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptance and dated next action', async ({ browser, page }) => {
+test('PRELANCIO02 qualifies website receipt, admin assignment, immediately operative assignment and dated next action', async ({ browser, page }) => {
   test.setTimeout(5 * 60_000);
   mkdirSync(evidenceDirectory, { recursive: true });
   await submitSyntheticLead(page);
@@ -299,7 +299,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-commercial-inbox.png'), fullPage: false });
   assertState('contacted');
 
-  // Assignment and first response must not imply the owner's personal acceptance.
+  // The administrative assignment makes the record operative without a recipient acceptance.
   await ownerWorkPage.goto(`${crmUrl}${leadHref}`);
   await ownerWorkPage.getByRole('link', { name: 'Richieste e provenienza', exact: true }).click();
   await expect(ownerWorkPage.getByText('Fonte: WORDPRESS · modulo VNX03_SYNTHETIC_WPFORMS', { exact: false })).toBeVisible();
@@ -307,7 +307,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await expect(ownerWorkPage.getByText('Informativa e consensi sono consultabili dagli utenti autorizzati.', { exact: true })).toBeVisible();
   await ownerWorkPage.getByRole('link', { name: 'Torna al lead', exact: true }).click();
   await expect(ownerWorkPage).toHaveURL(`${crmUrl}${leadHref}`);
-  const acceptanceLink = ownerWorkPage.getByRole('link', { name: 'Responsabilità e presa in carico', exact: true });
+  const acceptanceLink = ownerWorkPage.getByRole('link', { name: 'Responsabilità e assegnazioni', exact: true });
   const acceptanceHref = await acceptanceLink.getAttribute('href');
   assert.ok(acceptanceHref);
   await acceptanceLink.click();
@@ -317,75 +317,21 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await adminPage.goto(acceptanceUrl);
   await expect(adminPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
   await otherPage.goto(acceptanceUrl);
-  await expect(otherPage.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
+  await expect(otherPage.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toHaveCount(0);
 
-  // Capture the actual bound React action, rather than inventing its identifier or body.
-  writeCheckpoint('acceptance-page', { path: new URL(acceptanceUrl).pathname, expectedOrigin: new URL(acceptanceUrl).origin === new URL(crmUrl).origin });
-  const acceptanceRequestPromise = ownerWorkPage.waitForRequest((request) =>
-    request.method() === 'POST' && request.url() === acceptanceUrl, { timeout: 20_000 });
-  const [acceptanceRequest] = await Promise.all([acceptanceRequestPromise,
-    ownerWorkPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true }).click()]);
-  writeCheckpoint('acceptance-request', { path: new URL(acceptanceRequest.url()).pathname,
-    reactActionHeaderPresent: Boolean(acceptanceRequest.headers()['next-action']) });
-  assert.ok(acceptanceRequest.headers()['next-action'], 'Acceptance must use the observed React action');
-  const acceptanceReply = await acceptanceRequest.response();
-  assert.ok(acceptanceReply);
-  assert.equal(acceptanceReply.status(), 200);
-  assert.equal(responseMediaType(acceptanceReply), 'text/x-component');
-  await expect(ownerWorkPage.getByText('Presa in carico commerciale: registrata il', { exact: false })).toBeVisible();
-  const acceptedSnapshot = assertState('accepted');
-  const acceptanceBody = acceptanceRequest.postDataBuffer();
-  assert.ok(acceptanceBody);
-  // Preserve the observed Next action protocol, including routing context. Cookies
-  // are deliberately not copied: each replay uses only the acting context's session.
-  const headerEntries = await Promise.all(['accept', 'content-type', 'next-action',
-    'next-router-state-tree', 'next-url', 'x-deployment-id', 'origin']
-    .map(async (name) => [name, await acceptanceRequest.headerValue(name)] as const));
-  const actionHeaders: Record<string, string> = {};
-  for (const [name, value] of headerEntries) if (value !== null) actionHeaders[name] = value;
-  assert.equal(actionHeaders.accept, 'text/x-component');
-  assert.equal(actionHeaders.origin, new URL(crmUrl).origin);
-  assert.ok(actionHeaders['next-router-state-tree']);
-  const replayAcceptance = async (actingPage: Page, identity: 'owner' | 'admin' | 'other') => {
-    // Use the actual browser cookie policy on the bank's loopback HTTP origin;
-    // APIRequestContext does not send Secure cookies to 127.0.0.1 in this version.
-    assert.equal(new URL(actingPage.url()).origin, new URL(crmUrl).origin);
-    const response = await actingPage.evaluate(async ({ url, headers, bytes }) => {
-      if (new URL(url).origin !== location.origin) throw new Error('VNX03_REPLAY_ORIGIN_MISMATCH');
-      const result = await fetch(url, { method: 'POST', headers, body: new Uint8Array(bytes),
-        credentials: 'same-origin', redirect: 'manual', signal: AbortSignal.timeout(20_000) });
-      return { status: result.status, contentType: result.headers.get('content-type')?.split(';', 1)[0],
-        redirected: result.type === 'opaqueredirect' || Boolean(result.headers.get('location') || result.headers.get('x-action-redirect')),
-        body: await result.text() };
-    }, { url: acceptanceRequest.url(), headers: Object.fromEntries(Object.entries(actionHeaders).filter(([name]) => name !== 'origin')),
-      bytes: [...acceptanceBody] });
-    const { body, contentType } = response;
-    writeCheckpoint(`acceptance-replay-${identity}`, { httpStatus: response.status, contentType,
-      transport: 'browser_same_origin_fetch', redirected: response.redirected,
-      expectedSuccess: body.includes('Presa in carico personale registrata'),
-      expectedDenial: body.includes('Solo il referente individuale corrente'),
-      emptyObject: body.trim() === '{}' });
-    assert.equal(response.status, 200);
-    assert.equal(contentType, 'text/x-component');
-    assert.equal(response.redirected, false);
-    return body;
-  };
-  assert.match(await replayAcceptance(ownerWorkPage, 'owner'), /Presa in carico personale registrata/u);
-  assert.equal(assertState('accepted'), acceptedSnapshot, 'Personal acceptance replay changed rows or audit');
-  for (const [identity, actingPage] of [['admin', adminPage], ['other', otherPage]] as const) {
-    // Controlled action failure is encoded in the RSC payload, never inferred from HTTP alone.
-    assert.match(await replayAcceptance(actingPage, identity), /Solo il referente individuale corrente/u);
-    assert.equal(assertState('accepted'), acceptedSnapshot, 'Foreign acceptance changed rows or audit');
-  }
-  await ownerWorkPage.reload();
+  const assignedSnapshot = assertState('contacted');
   await expect(ownerWorkPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
-  await expect(ownerWorkPage.getByText('Presa in carico commerciale: registrata il', { exact: false })).toBeVisible();
-  await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-personal-acceptance.png'), fullPage: false });
+  await ownerWorkPage.reload();
+  await expect(ownerWorkPage.getByText('Responsabilità commerciale: incarico operativo dalla decisione Admin', { exact: true })).toBeVisible();
+  assert.equal(assertState('contacted'), assignedSnapshot, 'Opening and reloading must not create an acceptance or change the assignment');
+  await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-operative-assignment.png'), fullPage: false });
 
   await ownerWorkPage.getByRole('link', { name: 'Torna alla scheda', exact: true }).click();
   await expect(ownerWorkPage).toHaveURL(`${crmUrl}${leadHref}`);
   await ownerWorkPage.locator('input[name="nextActionNote"]').fill('PRELANCIO02 synthetic follow-up');
-  await ownerWorkPage.locator('input[name="nextActionDate"]').fill('2030-10-15T10:30');
+  // Preserve the original 10:30 UTC fixture through the explicitly Rome-local form.
+  await expect(ownerWorkPage.locator('input[name="nextActionTimezone"]')).toHaveValue('Europe/Rome');
+  await ownerWorkPage.getByLabel('Data e ora del prossimo passo (Roma)', { exact: true }).fill('2030-10-15T12:30');
   const nextActionReply = ownerWorkPage.waitForResponse((response) => response.request().method() === 'POST'
     && response.request().url() === `${crmUrl}${leadHref}` && Boolean(response.request().headers()['next-action']), { timeout: 30_000 });
   await ownerWorkPage.getByRole('button', { name: 'Salva aggiornamenti', exact: true }).click();
@@ -395,7 +341,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   assertState('scheduled');
   await ownerWorkPage.reload();
   await expect(ownerWorkPage.locator('input[name="nextActionNote"]')).toHaveValue('PRELANCIO02 synthetic follow-up');
-  await expect(ownerWorkPage.locator('input[name="nextActionDate"]')).toHaveValue('2030-10-15T10:30');
+  await expect(ownerWorkPage.getByLabel('Data e ora del prossimo passo (Roma)', { exact: true })).toHaveValue('2030-10-15T12:30');
   await ownerWorkPage.goto(`${crmUrl}/leads`);
   const scheduledRow = ownerWorkPage.getByRole('row').filter({ hasText: 'VNX03 N14 Browser' });
   await expect(scheduledRow).toContainText('PRELANCIO02 synthetic follow-up');
@@ -403,11 +349,12 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-next-action.png'), fullPage: false });
   const scheduledSnapshot = assertState('scheduled');
   writeCheckpoint('personal-handoff', {
-    sourceReceiptProjectionAndPrivacyCorrelated: true, explicitOwnerAcceptance: true,
-    acceptanceReplayIdempotent: true, adminCannotAcceptForOwner: true, otherCommercialDenied: true,
+    sourceReceiptProjectionAndPrivacyCorrelated: true, assignmentImmediatelyOperative: true,
+    recipientConfirmationAbsent: true, otherCommercialDenied: true,
     denialRowsAndAuditUnchanged: true, nextActionNoteAndDatePersisted: true,
     nextActionUtc: '2030-10-15T10:30:00.000Z', nextActionVisibleInLeadList: true,
-    dateScope: 'Synthetic UTC fixture; not a business SLA', snapshotSha256: scheduledSnapshot,
+    nextActionRome: '2030-10-15T12:30', inputTimezone: 'Europe/Rome',
+    dateScope: 'Synthetic UTC instant preserved through the Rome-local form; not a business SLA', snapshotSha256: scheduledSnapshot,
   });
 
   writeFileSync(join(evidenceDirectory, 'n14-browser.json'), `${JSON.stringify({
@@ -419,8 +366,8 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
     secondCommercialMutationRejected: true, rejectedMutationStatus: rejectedMutation.status,
     firstResponseObserved: true, firstResponseHttpStatus: firstResponse.status(),
     firstResponseContentType, firstResponseUiAppliedBeforeReload: true, firstResponseRecorded: true,
-    sourceReceiptProjectionAndPrivacyCorrelated: true, personalAcceptanceCompleted: true,
-    acceptanceReplayAndForeignDenialsUnchanged: true, datedNextActionCompleted: true,
+    sourceReceiptProjectionAndPrivacyCorrelated: true, assignmentImmediatelyOperative: true,
+    recipientConfirmationAbsent: true, datedNextActionCompleted: true,
     n15Effects: 0,
   }, null, 2)}\n`, { mode: 0o600 });
   await other.close();

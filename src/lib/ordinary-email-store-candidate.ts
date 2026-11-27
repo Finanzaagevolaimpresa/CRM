@@ -14,6 +14,8 @@ import type { OrdinaryAttemptLease, OrdinaryAttemptRequest, OrdinarySmtpResult }
 import type { readPrivateDocumentBounded } from './storage';
 import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 import { tokenDigestFromCookie } from './internal-session-registry';
+import { assertNewsletterMessageAction } from './workflow-newsletter-admission';
+import type { NativeNewsletterPolicySource } from './workflow-newsletter-policy';
 
 /** PostgreSQL store promoted into additive migration51. This module itself
  * creates no binding, connector, environment reader, worker or automatic retry.
@@ -23,6 +25,7 @@ import { tokenDigestFromCookie } from './internal-session-registry';
 type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
 export type OrdinaryEmailStoreRuntime = { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded;
+  newsletterPolicySource?: NativeNewsletterPolicySource;
   observationSink?: OrdinaryObservationSink;
   /** Synchronous server configuration check; never supplied by a browser. */
   assertTransport?: (channel: OrdinaryChannel) => void;
@@ -57,7 +60,9 @@ async function load(tx: Tx, claimed: AuthSession, messageId: string, runtime: Ru
     address: loaded.box.address, providerReference: loaded.box.providerReference, configurationReference: loaded.box.configurationReference,
     channelRevision: qualification.revision, qualificationReference: qualification.qualificationReference };
   runtime.assertTransport?.(channel);
-  return { ...loaded, material: { snapshot: loaded.snapshot, channel, materials: loaded.materials },
+  const checkNewsletter = await assertNewsletterMessageAction(tx, { messageId, revision: loaded.version.revision,
+    snapshotHash: loaded.version.snapshotHash }, runtime.newsletterPolicySource);
+  return { ...loaded, checkNewsletter, material: { snapshot: loaded.snapshot, channel, materials: loaded.materials },
     current: { actor: loaded.actor, contextHash: loaded.contextHash, contextExpiresAt: loaded.contextExpiresAt,
       authority: { ...binding, id: 'ordinary-email' as const, purpose: 'ORDINARY_EMAIL' as const } } };
 }
@@ -146,6 +151,7 @@ export async function reserveStoredOrdinaryEmail(db: Db, claimed: AuthSession,
     // the reservation blocking; it never grants permission to open a socket.
     const finalClock = await clock(tx);
     runtime.assertTransport?.(state.material.channel);
+    await state.checkNewsletter?.();
     confirmOrdinaryDecision(input.previewToken, state.material, state.current, runtime.key, credentials, finalClock);
     return { attemptId, decisionId: decision.decisionId };
   }, { timeout: 30_000 });
@@ -187,6 +193,7 @@ export async function takeStoredOrdinaryEmailAttempt(db: Db, claimed: AuthSessio
     const finalClock = await clock(tx);
     if (expiresAt <= finalClock) deny();
     runtime.assertTransport?.(value.state.material.channel);
+    await value.state.checkNewsletter?.();
     checkPersistedOrdinaryDecision(value.row.decision, value.row.proof, value.state.material, value.state.current, runtime.key, finalClock);
     return Object.freeze({ attemptId: request.attemptId, leaseId, expiresAt: expiresAt.toISOString(), committed: true as const });
   }, { timeout: 30_000 });
@@ -206,6 +213,7 @@ async function lockedLease(tx: Tx, claimed: AuthSession, lease: OrdinaryAttemptL
     if (value.row.state !== 'CLAIMED' || !claims[0] || claims[0].expiresAt.toISOString() !== lease.expiresAt
       || claims[0].expiresAt <= now || !lease.committed) deny();
     runtime.assertTransport?.(value.state.material.channel);
+    await value.state.checkNewsletter?.();
     checkPersistedOrdinaryDecision(value.row.decision, value.row.proof, value.state.material, value.state.current, runtime.key, now);
   };
   await check();

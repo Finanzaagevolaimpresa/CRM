@@ -27,7 +27,7 @@ function encodedHeader(text: string) {
   return chunks.map(value => `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`).join('\r\n ');
 }
 
-export function prepareOrdinaryEmail(raw: ApprovedMessageSnapshot, channelInput: OrdinaryChannel, materials: Map<string, Buffer>, preparedAt: Date) {
+export function prepareOrdinaryEmail(raw: ApprovedMessageSnapshot, channelInput: OrdinaryChannel, materials: Map<string, Buffer>, preparedAt: Date, authority: 'PERSONAL'|'WORKFLOW' = 'PERSONAL') {
   const message = approvedMessageSnapshotSchema.parse(raw), channel = ordinaryChannelSchema.parse(channelInput);
   if (!Number.isFinite(preparedAt.getTime()) || channel.mailboxId !== message.mailboxId || channel.mailboxRevision !== message.mailboxRevision
     || message.from !== channel.address || message.replyTo !== channel.address || message.classification !== 'ORDINARY') throw new Error('ORDINARY_CHANNEL_MISMATCH');
@@ -37,7 +37,7 @@ export function prepareOrdinaryEmail(raw: ApprovedMessageSnapshot, channelInput:
     return { item, bytes: Buffer.from(bytes) };
   });
   const messageReference = `<fai-smtp-${message.messageId}-v${message.revision}@crm.finanzaagevolaimpresa.it>`;
-  const intent = { protocol: 'FAI_PERSONAL_ORDINARY_SMTP_V1', draftHash: approvedMessageHash(message), channel,
+  const intent = { protocol: authority === 'WORKFLOW' ? 'FAI_WORKFLOW_ORDINARY_SMTP_V1' : 'FAI_PERSONAL_ORDINARY_SMTP_V1', draftHash: approvedMessageHash(message), channel,
     messageReference, preparedAt: preparedAt.toISOString() };
   const intentHash = canonicalSha256(intent), boundary = `fai_${intentHash}`;
   const lines = [

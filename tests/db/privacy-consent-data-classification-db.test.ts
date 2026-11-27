@@ -85,7 +85,7 @@ async function migrationQualification(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(allNames.length, 77);
+  assert.equal(allNames.length, 78);
   assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const names = allNames.slice(0, 35);
@@ -291,7 +291,16 @@ test('evidence is append-only and notice lifecycle cannot move backwards', { ski
   const row = await client().privacyEvidenceReceipt.findFirstOrThrow({ where: { websiteLeadReceiptId: source.receipt.id } });
   await assert.rejects(client().privacyEvidenceReceipt.update({ where: { id: row.id }, data: { formVersion: 'changed-v2' } }), /append-only/i);
   await assert.rejects(client().privacyEvidenceReceipt.delete({ where: { id: row.id } }), /append-only/i);
-  await assert.rejects(client().$executeRawUnsafe('TRUNCATE TABLE "PrivacyEvidenceReceipt"'), /cannot be truncated/i);
+  const evidenceBefore = await client().privacyEvidenceReceipt.findMany({ orderBy: { id: 'asc' } });
+  const marketingBefore = await client().$queryRaw`SELECT to_jsonb(e) AS row FROM "MarketingPreferenceEvent" e ORDER BY "contactKey", "eventId"`;
+  await assert.rejects(client().$transaction(async tx => {
+    // CASCADE reaches the original append-only guard even with incoming FKs.
+    // Always roll back if that guard is missing; this probe must never commit.
+    await tx.$executeRawUnsafe('TRUNCATE TABLE "PrivacyEvidenceReceipt" CASCADE');
+    throw new Error('Privacy truncate guard missing; rollback required');
+  }), /cannot be truncated/i);
+  assert.deepEqual(await client().privacyEvidenceReceipt.findMany({ orderBy: { id: 'asc' } }), evidenceBefore);
+  assert.deepEqual(await client().$queryRaw`SELECT to_jsonb(e) AS row FROM "MarketingPreferenceEvent" e ORDER BY "contactKey", "eventId"`, marketingBefore);
   await assert.rejects(client().privacyNoticeVersion.update({
     where: { noticeCode_noticeVersion_purposeCode: { noticeCode: 'N04_TEST_PRIVACY', noticeVersion: 'n04-v1', purposeCode: 'SERVICE_REQUEST_FOLLOW_UP' } },
     data: { status: 'DRAFT' },

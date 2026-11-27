@@ -29,7 +29,7 @@ ledger | cmp - "$SETTER_EVIDENCE/prefix-ledger"
 legacy | cmp - "$SETTER_EVIDENCE/legacy-before.json"
 npm run prisma:migrate:deploy > "$SETTER_EVIDENCE/migrate.log"
 ledger > "$SETTER_EVIDENCE/ledger"
-test "$(wc -l < "$SETTER_EVIDENCE/ledger")" -eq 77
+test "$(wc -l < "$SETTER_EVIDENCE/ledger")" -eq 78
 head -n 76 "$SETTER_EVIDENCE/ledger" | cmp - "$SETTER_EVIDENCE/prefix-ledger"
 legacy | cmp - "$SETTER_EVIDENCE/legacy-before.json"
 test "$(query 'SELECT count(*) FROM "LeadSetterCall"')" = 0

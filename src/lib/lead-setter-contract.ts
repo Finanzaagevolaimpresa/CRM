@@ -44,6 +44,8 @@ const command = z.object({
   id: z.string().uuid(), leadId: z.string().min(1).max(128), version: z.number().int().positive().nullable(), leadVersion: z.string().datetime(),
   outcome: z.enum(outcomes), nextKind: z.enum(['CALLBACK','VIDEO','NONE']),
   nextLocal: z.string().max(19), details: setterDetails.nullable(),
+  appointment: z.object({ id: z.string().uuid(), calendarId: z.string().min(1).max(128),
+    expectedVersion: z.number().int().min(0), durationMinutes: z.number().int().min(15).max(180) }).strict().optional(),
 }).strict();
 export type SetterCommand = z.output<typeof command>;
 export class SetterInputError extends Error {}
@@ -51,6 +53,7 @@ export function prepareSetterCommand(input: unknown) {
   const parsed = command.safeParse(input);
   if (!parsed.success) throw new SetterInputError(parsed.error.issues[0]?.message ?? 'Scheda chiamata non valida.');
   const value = parsed.data;
+  if (value.appointment && value.nextKind !== 'VIDEO') throw new SetterInputError('I dati del calendario appartengono alla prenotazione della videochiamata.');
   const video = value.outcome === 'VIDEO_BOOKED' || value.outcome === 'VIDEO_DEFERRED';
   if ((video && value.nextKind !== 'VIDEO') || (value.nextKind === 'VIDEO' && !video)
     || (['UNREACHABLE','VIDEO_ABSENT'].includes(value.outcome) && value.nextKind !== 'CALLBACK'))

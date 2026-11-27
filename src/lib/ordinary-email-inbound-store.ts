@@ -1,4 +1,5 @@
 import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
+import { stopPendingWorkflowExecutions } from './workflow-executions';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -142,6 +143,8 @@ async function associateInTransaction(tx: Tx, claimed: AuthSession, itemId: stri
         event: 'ORDINARY_REPLY_LINKED', evidence } });
       await tx.auditLog.create({ data: { actorId: state.current.userId, entityType: 'CommunicationReply', entityId: replyId,
         event: 'ordinary_email_inbound_linked', after: { action: 'link', ...evidence } } });
+      if (state.row.contextKind === 'LEAD' && state.row.leadId)
+        await stopPendingWorkflowExecutions(tx, { leadId: state.row.leadId, reason: 'REPLIED', evidenceId: replyId });
     }
     if ((await clock(tx)).getTime() >= state.accessUntil) deny();
     return { replyId };

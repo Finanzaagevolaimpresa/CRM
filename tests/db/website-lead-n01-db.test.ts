@@ -45,14 +45,22 @@ async function counts() {
   return { leads: leadRows.length, audits, receipts, evidence, buckets };
 }
 async function clean() {
-  const leadRows = await db.lead.findMany({ where: { email: { endsWith: `@${syntheticDomain}` } }, select: { id: true } });
-  await db.$executeRawUnsafe('ALTER TABLE "PrivacyEvidenceReceipt" DISABLE TRIGGER "PrivacyEvidenceReceipt_deny_truncate_v1"');
-  try { await db.$executeRawUnsafe('TRUNCATE TABLE "PrivacyEvidenceReceipt"'); }
-  finally { await db.$executeRawUnsafe('ALTER TABLE "PrivacyEvidenceReceipt" ENABLE TRIGGER "PrivacyEvidenceReceipt_deny_truncate_v1"'); }
-  await db.websiteLeadRateLimitBucket.deleteMany({ where: { namespace: 'website-lead:legacy:v1' } });
-  await db.websiteLeadReceipt.deleteMany({ where: { namespace: 'website-lead:legacy:v1' } });
-  await db.auditLog.deleteMany({ where: { entityId: { in: leadRows.map(({ id }) => id) }, event: { in: ['website_lead_received', 'website_lead_duplicate_detected'] } } });
-  await db.lead.deleteMany({ where: { email: { endsWith: `@${syntheticDomain}` } } });
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  await db.$transaction(async tx => {
+    const leadRows = await tx.lead.findMany({ where: { email: { endsWith: `@${syntheticDomain}` } }, select: { id: true } });
+    const leadIds = leadRows.map(({ id }) => id);
+    const evidence = await tx.privacyEvidenceReceipt.findMany({ where: { leadId: { in: leadIds },
+      websiteLeadReceipt: { namespace: 'website-lead:legacy:v1' } }, select: { id: true, websiteLeadReceiptId: true } });
+    // The isolated fixture owns only these website receipts. Keep every other
+    // privacy/marketing row and every FK; DDL also rolls back on any failure.
+    await tx.$executeRawUnsafe('ALTER TABLE "PrivacyEvidenceReceipt" DISABLE TRIGGER "PrivacyEvidenceReceipt_append_only_v1"');
+    await tx.privacyEvidenceReceipt.deleteMany({ where: { id: { in: evidence.map(({ id }) => id) } } });
+    await tx.$executeRawUnsafe('ALTER TABLE "PrivacyEvidenceReceipt" ENABLE TRIGGER "PrivacyEvidenceReceipt_append_only_v1"');
+    await tx.websiteLeadRateLimitBucket.deleteMany({ where: { namespace: 'website-lead:legacy:v1' } });
+    await tx.websiteLeadReceipt.deleteMany({ where: { id: { in: evidence.flatMap(row => row.websiteLeadReceiptId ? [row.websiteLeadReceiptId] : []) } } });
+    await tx.auditLog.deleteMany({ where: { entityId: { in: leadIds }, event: { in: ['website_lead_received', 'website_lead_duplicate_detected'] } } });
+    await tx.lead.deleteMany({ where: { id: { in: leadIds } } });
+  });
 }
 
 before(async () => {

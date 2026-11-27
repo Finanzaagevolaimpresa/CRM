@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
-          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 77
+          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 78
           node scripts/m4/verify-schema.mjs
           evidence="$RUNNER_TEMP/m3-browser"
           mkdir -p "$evidence"
@@ -53,8 +53,8 @@ jobs:
           psql 'postgresql://postgres:synthetic-m3-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           node --import tsx tests/lead-acquisition-browser/provision.ts
-      - name: Verify WPForms 4 projection, duplicate review and receipt replay on PostgreSQL
-        run: node --import tsx --test --test-name-pattern="WPForms 4 preserves the signed request" tests/db/lead-projection-normalization-manual-duplicate-resolution-db.test.ts
+      - name: Verify WPForms 4 projection, attribution and fresh access scope on PostgreSQL
+        run: node --import tsx --test --test-name-pattern="WPForms 4 preserves the signed request|M3 multiple submissions retain original campaign|M3 acquisition reads recheck revoked" tests/db/lead-projection-normalization-manual-duplicate-resolution-db.test.ts
       - name: Qualify the new read views with Chromium
         env: { COMMERCIAL_LEAD_INBOX_MODE: enforced }
         shell: bash

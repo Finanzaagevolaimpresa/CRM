@@ -125,6 +125,7 @@ test('a linked lead opens its existing dossier only when that dossier is readabl
   await page.goto(`/leads/${lead.id}`);
   const dossier = page.getByRole('link', { name: 'Apri fascicolo cliente', exact: true });
   await expect(dossier).toHaveAttribute('href', `/clients/${f.client.id}`);
+  await expect(page.getByRole('link', { name: 'Apri cartelle Drive del cliente', exact: true })).toHaveAttribute('href', `/clients/${f.client.id}#file-condivisi`);
   await expect(page.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
   await dossier.click(); await expect(page).toHaveURL(new RegExp(`/clients/${f.client.id}$`));
   const heading = page.getByRole('heading', { level: 1 });
@@ -136,12 +137,14 @@ test('a linked lead opens its existing dossier only when that dossier is readabl
     await login(salesPage, sales.email, false); await salesPage.goto(`/leads/${lead.id}`);
     await expect(salesPage.getByText('Il fascicolo collegato non è disponibile nel tuo perimetro.')).toBeVisible();
     await expect(salesPage.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
+    await expect(salesPage.getByRole('link', { name: 'Apri cartelle Drive del cliente', exact: true })).toHaveCount(0);
     await expect(salesPage.getByText(f.client.displayName, { exact: true })).toHaveCount(0);
     await expect(salesPage.locator('input[name="clientId"]')).toHaveCount(0);
     await expect(salesPage.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
   } finally { await salesContext.close(); }
   await db.client.update({ where: { id: f.client.id }, data: { deletedAt: new Date() } });
   await page.goto(`/leads/${lead.id}`); await expect(dossier).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Apri cartelle Drive del cliente', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Converti in cliente' })).toHaveCount(0);
   expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
 });
@@ -181,6 +184,7 @@ test('a stale conversion form and a new conversion do not expose a client to a w
       expect(captured.post).toBeDefined();
       expect(captured.post!.body + JSON.stringify(captured.post!.headers)).not.toContain(client.id);
       await expect(page.getByRole('link', { name: 'Apri fascicolo cliente' })).toHaveCount(0);
+      await expect(page.getByRole('link', { name: 'Apri cartelle Drive del cliente', exact: true })).toHaveCount(0);
       await expect(convert).toHaveCount(0);
       expect(await db.client.count({ where: { leadId: lead.id } })).toBe(1);
     } finally { await page.unroute(matchesLead); }

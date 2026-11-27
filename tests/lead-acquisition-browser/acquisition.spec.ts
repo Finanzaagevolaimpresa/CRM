@@ -70,7 +70,13 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   await expect(operator.getByRole('link', { name: /Richieste da verificare/ })).toHaveCount(0);
   await expect(operator.getByText('Valutazione sintetica da verificare', { exact: true })).toHaveCount(0);
   await operator.goto(`${app}/leads/${fixture.leadId}`);
-  await expect(operator.getByRole('heading', { name: 'Attribuzione campagne', exact: true })).toHaveCount(0);
+  for (let pass = 0; pass < 2; pass += 1) {
+    await expect(operator.getByRole('heading', { name: 'Attribuzione campagne', exact: true })).toBeVisible();
+    for (const value of ['Meta', 'ChatGPT', 'M3-CAMPAIGN-1', 'M3-CAMPAIGN-2', 'AD-1', 'AD-2']) {
+      await expect(operator.getByText(value, { exact: true })).toBeVisible();
+    }
+    if (pass === 0) await operator.reload();
+  }
   await operator.goto(`${app}/leads/${fixture.leadId}/requests`);
   await expect(operator.getByText('Richiesta sintetica M3 numero 2', { exact: true })).toBeVisible();
   await expect(operator.getByText(/SYNTHETIC_PRIVACY_NOTICE/)).toHaveCount(0);
@@ -79,12 +85,19 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   expect(global?.status() === 404 || !operator.url().endsWith('/leads/acquisition')).toBe(true);
   await expect(operator.getByText('Richiesta sintetica M3 numero 3', { exact: true })).toHaveCount(0);
   await db.lead.update({ where: { id: fixture.leadId }, data: { assignedToId: null } });
+  await operator.goto(`${app}/leads/${fixture.leadId}`);
+  await expect(operator.getByRole('heading', { name: 'Lead non trovato', exact: true })).toBeVisible();
+  await expect(operator.getByRole('heading', { name: 'Attribuzione campagne', exact: true })).toHaveCount(0);
+  for (const value of ['M3-CAMPAIGN-1', 'M3-CAMPAIGN-2', 'AD-1', 'AD-2']) {
+    await expect(operator.getByText(value, { exact: true })).toHaveCount(0);
+  }
   const denied = await operator.goto(`${app}/leads/${fixture.leadId}/requests`);
   expect(denied?.status()).toBe(404);
   await expect(operator.getByText('Richiesta sintetica M3 numero 2', { exact: true })).toHaveCount(0);
   writeFileSync(join(evidence, 'browser-proof.json'), JSON.stringify({ status: 'PASS', synthetic: true,
     requestsPreserved: 2, retryVisible: true, replayDuplicated: false, reassignmentDenied: true,
     adminOnlyGlobalView: true, wpforms4: { declaredFieldsVisible: true, pendingReviewCount: 1, restrictedOperatorView: true },
-    attributionPanel: { platforms: ['META', 'CHATGPT'], reloadPersisted: true, adminOnly: true }, productionConnected: false }));
+    attributionPanel: { platforms: ['META', 'CHATGPT'], reloadPersisted: true, adminAndCurrentOwner: true,
+      outOfScopeDenied: true }, productionConnected: false }));
   await adminContext.close(); await operatorContext.close();
 });

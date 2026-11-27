@@ -9,6 +9,9 @@ export async function middleware(request: NextRequest) {
   if (pathname === '/_next/image') {
     return new NextResponse(null, { status: 404 });
   }
+  // Exact public opt-out surface; its own runtime remains default-off and
+  // exposes no CRM session, navigation or record. Descendants stay private.
+  if (pathname === '/preferenze-email' || pathname === '/preferenze-email/') return NextResponse.next();
   if (publicPaths.some((p) => pathname.startsWith(p)) || pathname.startsWith('/_next')) {
     return NextResponse.next();
   }

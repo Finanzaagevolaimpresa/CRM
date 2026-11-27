@@ -28,7 +28,8 @@ async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof curr
     date: work.event.occurredAt, readAt: work.readAt, changed: admitted.summary.changed, event: admitted.summary.event,
     priority: 'bassa' as const, accessUntil: admitted.accessUntil };
 }
-export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, limit = 100, unreadOnly = true) {
+export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, limit = 100, unreadOnly = true, exhaustiveInbox = false) {
+  const effectiveLimit = exhaustiveInbox ? Number.MAX_SAFE_INTEGER : Math.min(500, Math.max(1, limit));
   return confirmedReadRetry(() => db.$transaction(async tx => {
     const auth = await updateActor(tx, claimed, undefined, { readOnly: true }), directory = await updateDirectory(tx);
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
@@ -36,21 +37,21 @@ export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, 
     // Filter before the result limit. No inaccessible titles, IDs or counts are
     // returned; stable batches prevent old revoked work starving valid work.
     let cursor: string | undefined;
-    while (result.length < Math.min(500, Math.max(1, limit))) {
+    while (result.length < effectiveLimit) {
       const rows = await tx.recordUpdateDelivery.findMany({ where: { recipientId: auth.actor.id,
         ...(unreadOnly ? { readAt: null } : {}) }, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         include, orderBy: [{ event: { occurredAt: 'desc' } }, { id: 'desc' }], take: 100 });
       for (const row of rows) {
         const admitted = await visible(tx, { ...claimed, ...auth.actor, sessionId: auth.registry.id }, row, directory, clock.now);
         if (admitted) result.push(admitted);
-        if (result.length >= limit) break;
+        if (result.length >= effectiveLimit) break;
       }
       if (rows.length < 100) break;
       cursor = rows.at(-1)!.id;
     }
     const finishedAt = await auth.finish();
     return result.filter(item => item.accessUntil > finishedAt.getTime())
-      .sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, limit)
+      .sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, effectiveLimit)
       .map(({ accessUntil, ...item }) => { void accessUntil; return item; });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }));
 }

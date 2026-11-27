@@ -4,6 +4,8 @@ import { leadVisibilityWhere } from './core-query-policy';
 import { romeDateTimeInput, resolveRomeDateTime } from './rome-date-time';
 
 export const leadWorkQueues = {
+  workday: 'Oggi',
+  proposals: 'Proposte da confermare',
   today: 'Entrati oggi', unassigned: 'Da assegnare', contact: 'Assegnati da contattare',
   callbacks: 'Richiami di oggi', overdue: 'Scaduti', videos: 'Videochiamate fissate', missing: 'Assegnati senza prossimo passo',
 } as const;
@@ -22,6 +24,12 @@ export function leadWorkWhere(actor: Parameters<typeof leadVisibilityWhere>[0], 
     OR: [{ commercialInboxItem: { is: null } }, { commercialInboxItem: { is: { state: 'OPEN' } } }] };
   const conditions: Prisma.LeadWhereInput[] = [visible, open];
   switch (queue) {
+    case 'proposals': conditions.push({ assignmentProposals: { some: { state: 'PENDING' } } }); break;
+    case 'workday': conditions.push({ assignedToId: { not: null }, OR: [
+      { nextActionDate: { lt: day.lt } },
+      { nextActionDate: null, nextAction: { lt: day.lt } },
+      { nextActionDate: null, nextAction: null },
+    ] }); break;
     case 'unassigned': conditions.push({ assignedToId: null }); break;
     case 'contact':
       conditions.push({ assignedToId: { not: null }, setterCalls: { none: { outcome: { in: ['CONTACT','VIDEO_BOOKED','VIDEO_HELD'] } } },

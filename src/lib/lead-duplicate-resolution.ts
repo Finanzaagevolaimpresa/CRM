@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { canonicalJson, canonicalSha256 } from './canonical-json';
+import { captureWorkflowDuplicateResolutionAfterCommit } from './workflow-native-runner';
 import {
   BUSINESS_EVENT_BACKBONE_MANIFEST,
   calculateBusinessInboxRecordHash,
@@ -794,10 +795,12 @@ export async function resolveLeadDuplicateCase(
     throw error;
   }
   try {
-    return await withDuplicateResolutionTransaction(
+    const result = await withDuplicateResolutionTransaction(
       prisma,
       (tx) => resolveInTransaction(tx, input, key),
     );
+    await captureWorkflowDuplicateResolutionAfterCommit(prisma, input.caseId);
+    return result;
   } catch (error) {
     if (error instanceof LeadDuplicateResolutionError) throw error;
     if (error instanceof LeadIdentityError) {

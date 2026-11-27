@@ -68,7 +68,7 @@ async function record(session: AuthSession, route: string, props: Props) {
     description="Dati tecnici del perimetro corrente. Note, documenti non classificati e informazioni commerciali riservate non sono inclusi." />
     <Link className="underline" href="/technical-work">Apri i miei incarichi e le operazioni autorizzate</Link>
     <SharedOperationalPanel target={{ kind: project ? 'PROJECT' : 'PRACTICE', id: p.id }} actorId={session.userId} />
-    {!project && <Link className="block underline" href={'/assignments/TechnicalPractice/' + encodeURIComponent(p.id)}>Responsabilità e presa in carico personale</Link>}
+    {!project && <Link className="block underline" href={'/assignments/TechnicalPractice/' + encodeURIComponent(p.id)}>Responsabilità e assegnazioni</Link>}
     <Card title="Informazioni disponibili"><dl className="grid gap-3 sm:grid-cols-2">{fields.map(f => <div key={f.key}>
       <dt className="font-semibold">{f.label}</dt><dd className="break-words">{f.value}</dd></div>)}</dl></Card>
     <Card title="Documenti tecnici disponibili">{!documents || documents.limited

@@ -224,6 +224,9 @@ test('non-Admin notices use native source privacy; late restriction/conflict den
         await expect(reader.locator('a[href="' + href + '"]')).toHaveCount(1);
         await reader.goto('/notifications');
         expect(await reader.getByText(/^\d+ attive$/).textContent()).not.toBe(baselineCount);
+        const activeNotice = reader.locator('article[data-notification-href="' + href + '"]');
+        await expect(activeNotice).toHaveCount(1);
+        await expect(activeNotice.getByRole('button', { name: 'Apri', exact: true })).toBeVisible();
         await reader.goto(href); await expect(reader.getByRole('button', { name: 'Segna come letto' })).toBeVisible();
         const readForm = reader.locator('form').filter({ has: reader.getByRole('button', { name: 'Segna come letto', exact: true }) });
         await expect(readForm).toHaveCount(1);
@@ -254,7 +257,7 @@ test('non-Admin notices use native source privacy; late restriction/conflict den
       }
       await reader.goto('/notifications');
       await expect(reader.getByText(/^\d+ attive$/)).toHaveText(baselineCount!);
-      await expect(reader.locator('a[href="' + href + '"]')).toHaveCount(0);
+      await expect(reader.locator('article[data-notification-href="' + href + '"]')).toHaveCount(0);
       expect(await reader.content()).not.toContain('PRIVATE SYNTHETIC');
       if (restriction === 'conflict') {
         await reader.setViewportSize({ width: 390, height: 844 });

@@ -49,7 +49,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => db.$disconnect());
 
-test('department does not grant access; actual admin decisions and personal acceptance remain distinct across reassignments', async ({ browser }) => {
+test('department grants no access; Admin assignment is immediately operational and preserves historical acceptances across reassignments', async ({ browser }) => {
   const ac = await browser.newContext({ baseURL }), tc = await browser.newContext({ baseURL }), oc = await browser.newContext({ baseURL });
   const admin = await ac.newPage(), tech = await tc.newPage(), other = await oc.newPage();
   await login(admin, 'admin'); await login(tech, 'tech'); await login(other, 'other');
@@ -74,32 +74,37 @@ test('department does not grant access; actual admin decisions and personal acce
   await expect(admin.getByText('Identità confermata. La conferma dura 30 minuti. Le scelte sono conservate; scegli personalmente quando proseguire.', { exact: true })).toBeVisible();
   expect(await decisions()).toHaveLength(0); await form.getByRole('button', { name: 'Registra decisione', exact: true }).click();
   await expect.poll(async () => (await decisions()).length).toBe(1);
-  await expect(admin.getByText('Referente individuale mancante: presa in carico tecnica non avvenuta.', { exact: true })).toBeVisible();
-  await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
+  await expect(admin.getByText('Referente individuale mancante: assegnazione tecnica da completare.', { exact: true })).toBeVisible();
+  await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toHaveCount(0);
   expect(await acceptances()).toHaveLength(0);
-  await assign(ids.tech); await expect.poll(async () => (await decisions()).length).toBe(2);
+  const assignedRequest = await assign(ids.tech); await expect.poll(async () => (await decisions()).length).toBe(2);
   await admin.goto(search);
   await expect(admin.getByText('Referente tecnico: ' + tag + '-tech', { exact: true })).toBeVisible();
-  await captureManual(admin, 'S02-decisione', 'admin', 'Decisione corrente registrata con il referente tecnico; la sua presa in carico personale è ancora da confermare.', admin.getByRole('heading', { name: 'Decisione corrente', exact: true }));
+  await captureManual(admin, 'S02-decisione', 'admin', 'Decisione corrente registrata: il referente tecnico è subito operativo.', admin.getByRole('heading', { name: 'Decisione corrente', exact: true }));
   await tech.goto('/assignments?kind=TechnicalPractice');
   await expect(tech.getByRole('link', { name: tag + '-practice', exact: true })).toBeVisible();
   await captureManual(tech, 'S02-assegnazioni', 'consulente', 'Stesso caso sintetico nella coda personale del referente tecnico.');
   await tech.goto('/assignments?kind=TechnicalPractice'); await tech.getByRole('link', { name: tag + '-practice', exact: true }).click();
-  await capture(tech, path); await tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true }).click();
-  const acceptedRequest = await captured(tech); await expect.poll(async () => (await acceptances()).length).toBe(1);
+  await expect(tech.getByRole('button', { name: /Confermo la presa in carico/ })).toHaveCount(0);
+  await expect(tech.getByText('Operativo dalla decisione Admin. Non è richiesta un’ulteriore conferma del destinatario.', { exact: true }).first()).toBeVisible();
+  expect(await acceptances()).toHaveLength(0);
+  // Simulate a receipt recorded before this UI change; later assignments must preserve it.
+  const currentDecision = (await decisions()).at(-1)!;
+  await db.auditLog.create({ data: { actorId: ids.tech, entityId: practiceId, entityType: 'TechnicalPractice', event: 'responsibility_accepted',
+    after: { type: 'R05_RESPONSIBILITY_ACCEPTANCE_V1', decisionId: currentDecision.id, role: 'tecnico', userId: ids.tech } } });
   const history = await acceptances(); expect(history[0].actorId).toBe(ids.tech);
-  await captureManual(tech, 'S02-accettazione', 'consulente', 'Conferma personale registrata dal referente corrente, distinta dalla decisione admin.');
-  await replay(tech, acceptedRequest); expect(await acceptances()).toEqual(history);
-  const denied = await replay(admin, acceptedRequest); expect(await denied.text()).toContain('Solo il referente individuale corrente');
-  await replay(other, acceptedRequest); expect(await acceptances()).toEqual(history);
-  await other.goto(path); await expect(other.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
+  await tech.reload(); await captureManual(tech, 'S02-accettazione', 'consulente', 'Conferma precedente conservata nello storico; nessuna nuova conferma richiesta.');
+  await replay(tech, assignedRequest); await replay(other, assignedRequest); expect(await decisions()).toHaveLength(2); expect(await acceptances()).toEqual(history);
+  await other.goto(path); await expect(other.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toHaveCount(0);
   await assign(ids.other); await expect.poll(async () => (await decisions()).length).toBe(3);
-  await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
-  await replay(tech, acceptedRequest); expect(await acceptances()).toEqual(history);
+  await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toHaveCount(0);
+  await replay(tech, assignedRequest); expect(await decisions()).toHaveLength(3); expect(await acceptances()).toEqual(history);
+  await other.goto(path); await expect(other.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toBeVisible();
+  await expect(other.getByRole('button', { name: /Confermo la presa in carico/ })).toHaveCount(0);
   await assign(ids.tech); await expect.poll(async () => (await decisions()).length).toBe(4);
-  await tech.goto(path); await expect(tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true })).toBeVisible();
-  await replay(tech, acceptedRequest); expect(await acceptances()).toEqual(history);
-  await tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true }).click(); await expect.poll(async () => (await acceptances()).length).toBe(2);
+  await tech.goto(path); await expect(tech.getByRole('button', { name: /Confermo la presa in carico/ })).toHaveCount(0);
+  await expect(tech.getByText('Operativo dalla decisione Admin. Non è richiesta un’ulteriore conferma del destinatario.', { exact: true }).first()).toBeVisible();
+  await replay(tech, assignedRequest); expect(await decisions()).toHaveLength(4); expect(await acceptances()).toEqual(history);
   expect(await db.auditLog.findUniqueOrThrow({ where: { id: history[0].id } })).toEqual(history[0]);
   expect(await db.client.findUniqueOrThrow({ where: { id: clientId } })).toMatchObject({ salesOwnerId: null, consultantId: null });
   await ac.close(); await tc.close(); await oc.close();
@@ -116,5 +121,5 @@ test('personal work list is pageable and does not include another assignee', asy
   await expect(page).toHaveURL(/after=/); await expect(page.getByRole('link', { name: 'Altre assegnazioni', exact: true })).toHaveCount(0);
   const last = await db.lead.findFirstOrThrow({ where: { id: { in: created } }, orderBy: { id: 'desc' } });
   await expect(page.getByRole('link', { name: last.companyName!, exact: true })).toBeVisible();
-  await page.goto(`/assignments/Lead/${foreign.id}`); await expect(page.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
+  await page.goto(`/assignments/Lead/${foreign.id}`); await expect(page.getByRole('heading', { name: 'Responsabilità e assegnazioni', exact: true })).toHaveCount(0);
 });

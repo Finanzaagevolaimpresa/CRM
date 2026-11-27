@@ -9,7 +9,7 @@ function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(item => item.isDirectory()
     ? files(path.join(dir, item.name)) : /\.tsx?$/.test(item.name) ? [path.join(dir, item.name)] : []);
 }
-const publicRoutes = new Set(['/api/health', '/api/integrations/website/leads', '/api/integrations/website/leads/v2']);
+const publicRoutes = new Set(['/api/health', '/api/integrations/website/leads', '/api/integrations/website/leads/v2', '/preferenze-email']);
 function exported(node: ts.Node) {
   return ts.canHaveModifiers(node) && ts.getModifiers(node)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
 }
@@ -78,4 +78,38 @@ test('all pages, API/file handlers and server actions enforce the technical ceil
   }
   assert(pages > 130 && routes >= 25 && actions > 60, 'inventory unexpectedly incomplete');
   assert.deepEqual(failures, []);
+});
+
+test('the public preference route only delegates GET and POST to the guarded suppression runtime', () => {
+  const file = path.join(root, 'app/preferenze-email/route.ts');
+  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  const imports = source.statements.filter(ts.isImportDeclaration);
+  assert.deepEqual(imports.map(item => item.moduleSpecifier.getText(source)), [
+    "'@/lib/prisma'", "'@/lib/workflow-marketing-withdrawal'",
+  ]);
+  const declarations = source.statements.filter(ts.isVariableStatement);
+  assert.deepEqual(declarations.flatMap(item => [...item.declarationList.declarations].map(declaration => {
+    assert(exported(item));
+    assert(declaration.initializer && ts.isStringLiteral(declaration.initializer));
+    return [declaration.name.getText(source), declaration.initializer.text];
+  })), [['runtime', 'nodejs'], ['dynamic', 'force-dynamic']]);
+  const handlers = source.statements.filter(ts.isFunctionDeclaration);
+  assert.deepEqual(handlers.map(item => item.name?.text).sort(), ['GET', 'POST']);
+  assert.equal(source.statements.length, imports.length + declarations.length + handlers.length);
+  for (const handler of handlers) {
+    assert(exported(handler));
+    assert.equal(handler.parameters.length, 1);
+    assert.equal(handler.parameters[0].name.getText(source), 'request');
+    assert(handler.body && handler.body.statements.length === 1);
+    const statement = handler.body.statements[0];
+    assert(ts.isReturnStatement(statement) && statement.expression && ts.isCallExpression(statement.expression));
+    const call = statement.expression;
+    assert.equal(call.arguments.length, 1);
+    assert(ts.isIdentifier(call.arguments[0]) && call.arguments[0].text === 'request');
+    assert(ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === handler.name?.text);
+    const factory = call.expression.expression;
+    assert(ts.isCallExpression(factory) && ts.isIdentifier(factory.expression) && factory.expression.text === 'marketingWithdrawalHandlers');
+    assert.equal(factory.arguments.length, 1);
+    assert(ts.isIdentifier(factory.arguments[0]) && factory.arguments[0].text === 'prisma');
+  }
 });

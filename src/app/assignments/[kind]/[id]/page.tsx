@@ -4,7 +4,7 @@ import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
-import { ResponsibilityAcceptanceForm, ResponsibilityAssignmentForm } from '@/components/responsibility-forms';
+import { ResponsibilityAssignmentForm } from '@/components/responsibility-forms';
 import { requirePermission, hasPermission } from '@/lib/auth';
 import { canViewLead, canViewTechnicalPractice } from '@/lib/access-control';
 import { loadTechnicalPracticeAccessContext } from '@/lib/technical-practice-access';
@@ -45,21 +45,21 @@ export const dynamic = 'force-dynamic';
   const candidates = session.role === 'admin' ? await prisma.user.findMany({ where: { active: true, deletedAt: null, role: { in: ['admin', 'direzione', 'commerciale', 'consulente', 'backoffice'] },
     ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { email: { contains: q, mode: 'insensitive' as const } }] } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true, email: true, role: true } }) : [];
   const choices = [...new Map([...named.filter(user => [currentState?.commercialOwnerId, currentState?.technicalOwnerId].includes(user.id)).map(user => ({ ...user, name: nameOf(user.id) })), ...candidates.slice(0, 25)].map(user => [user.id, user])).values()];
-  return <div className="crm-space-y-6"><PageHeader title="Responsabilità e presa in carico" description="La decisione dell’amministratore e la conferma personale del referente sono registrazioni distinte." />
+  return <div className="crm-space-y-6"><PageHeader title="Responsabilità e assegnazioni" description="La decisione dell’amministratore rende operativo l’incarico. Autore, data e conferme storiche restano consultabili." />
     <div className="flex gap-4"><Link href={source}>Torna alla scheda</Link><Link href="/assignments">Le mie assegnazioni</Link></div>
     {kind === 'Lead' && session.role === 'admin' && hasPermission(session, 'lead.inbox.assign') && <Link href={`/leads/inbox?lead=${encodeURIComponent(id)}`}>Apri coda e assegnazione del referente</Link>}
     <Card title="Decisione corrente">
       <p>Commerciale: {nameOf(currentState?.commercialOwnerId)}</p>
       {kind === 'TechnicalPractice' && <><p>Reparto tecnico: {data.current?.decision.departmentCode ?? 'Non indicato'}</p><p>Referente tecnico: {nameOf(currentState?.technicalOwnerId)}</p>
-        {!currentState?.technicalOwnerId && <p>Referente individuale mancante: presa in carico tecnica non avvenuta.</p>}</>}
+        {!currentState?.technicalOwnerId && <p>Referente individuale mancante: assegnazione tecnica da completare.</p>}</>}
       {data.current ? <p>Decisione di {nameOf(data.current.actorId)} · {formatDateTime(data.current.createdAt)} · revisione {data.current.decision.version}</p> : <p>Assegnazione preesistente: l’amministratore può registrare la decisione corrente.</p>}
-      {!data.valid && <p>La decisione non è utilizzabile per una nuova presa in carico. È necessaria la verifica dell’amministratore.</p>}
+      {!data.valid && <p>La decisione non è più coerente con la responsabilità corrente. È necessaria la verifica dell’amministratore.</p>}
       {(['commerciale', ...(kind === 'TechnicalPractice' ? ['tecnico'] : [])] as Array<'commerciale' | 'tecnico'>).map(role => {
         const ownerId = role === 'commerciale' ? currentState?.commercialOwnerId : currentState?.technicalOwnerId;
         const owner = ownerId ? userMap.get(ownerId) : null, accepted = data.accepted.find(row => row.acceptance.role === role && row.acceptance.userId === ownerId);
         const available = owner?.active && !owner.deletedAt;
         return <div key={role} className="mt-3 rounded-xl border p-3"><p>{accepted ? 'Presa in carico' : 'Responsabilità'} {role}: {accepted ? `registrata il ${formatDateTime(accepted.createdAt)}` : data.valid && available ? 'incarico operativo dalla decisione Admin' : 'incarico da verificare'}{owner && !available ? ' · account non operativo, attività nella coda amministrativa' : ''}</p>
-          {data.valid && data.current && !accepted && available && ownerId === session.userId && hasPermission(session, 'assignment.accept') && (role !== 'tecnico' || data.current.decision.departmentCode) && <ResponsibilityAcceptanceForm kind={kind} id={id} decisionId={data.current.id} role={role} />}</div>;
+          {data.valid && available && <p>Operativo dalla decisione Admin. Non è richiesta un’ulteriore conferma del destinatario.</p>}</div>;
       })}
     </Card>
     {session.role === 'admin' && data.context?.workable && <Card title="Decisione amministrativa">

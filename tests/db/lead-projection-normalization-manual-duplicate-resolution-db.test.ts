@@ -47,7 +47,7 @@ import {
 } from '../../src/lib/lead-intake-consumer';
 import { listLeadDuplicateReviewCases, openLeadDuplicateReviewWhere } from '../../src/lib/lead-duplicate-review';
 import { CORE_QUERY_MAX_CANDIDATES } from '../../src/lib/core-query-policy';
-import { LeadAcquisitionDenied, readAdminLeadAttribution, readLeadAcquisitions, readLeadAcquisitionSummary } from '../../src/lib/lead-acquisition';
+import { LeadAcquisitionDenied, readAdminLeadAttribution, readLeadAttribution, readLeadAcquisitions, readLeadAcquisitionSummary } from '../../src/lib/lead-acquisition';
 import { revokeInternalSession } from '../../src/lib/internal-session-registry';
 import {
   createLeadSubmittedEventV1,
@@ -481,7 +481,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 77);
+  assert.equal(allNames.length, 78);
   assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const names = allNames.slice(0, 40);
@@ -605,7 +605,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 77);
+  assert.equal(names.length, 78);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[39], migrationName);
@@ -763,7 +763,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 77);
+  assert.equal(names.length, 78);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[40], correctiveMigrationName);
@@ -2097,13 +2097,13 @@ async function m3Claim(eventRowId: string, ordinal: number) {
   return lease;
 }
 
-test('WPForms 4 preserves the signed request and classifies only a single weak name match as new', {
+test('WPForms 4 preserves the signed request and classifies independently disproven weak name matches as new', {
   skip: !runDbTests,
 }, async () => {
   const cases = [
     ['new', true], ['planned', true], ['different-contacts', true], ['same-person-name', true],
     ['trashed-name', true], ['strong', false], ['trashed-strong', false],
-    ['missing-contact', false], ['national-equivalent', false], ['two-candidates', false],
+    ['missing-contact', false], ['national-equivalent', false], ['two-candidates', true], ['two-one-shared', false], ['two-one-incomplete', false],
     ['two-weak-signals', false], ['specific-company', false], ['legacy', false], ['trashed-specific-company', false],
   ] as const;
   await withSyntheticActiveCommercialPolicy(async () => {
@@ -2113,7 +2113,7 @@ test('WPForms 4 preserves the signed request and classifies only a single weak n
       const status = scenario === 'planned' ? 'Da costituire' : 'Già costituita';
       const label: Partial<Record<typeof cases[number][0], string>> = {
         'different-contacts': 'Progetto', 'trashed-name': 'Nuovo progetto', 'missing-contact': 'Nuova impresa',
-        'national-equivalent': 'Impresa da costituire', 'two-candidates': 'Progetto imprenditoriale',
+        'national-equivalent': 'Impresa da costituire', 'two-candidates': 'Progetto imprenditoriale', 'two-one-shared':'Nuova impresa', 'two-one-incomplete':'Da costituire',
         'two-weak-signals': 'Nuova attività', 'legacy': 'Startup',
       };
       const event = syntheticEvent(ordinal, {
@@ -2129,12 +2129,12 @@ test('WPForms 4 preserves the signed request and classifies only a single weak n
       if (scenario !== 'new' && scenario !== 'planned') {
         const matchesName = scenario === 'same-person-name' || scenario === 'two-weak-signals';
         const matchesEmail = scenario === 'strong' || scenario === 'trashed-strong';
-        for (let n = 0; n < (scenario === 'two-candidates' ? 2 : 1); n++) {
+        for (let n = 0; n < (scenario.startsWith('two-') && scenario !== 'two-weak-signals' ? 2 : 1); n++) {
           previous.push(await client().lead.create({ data: {
             firstName: matchesName ? payload.firstName! : 'Altro', lastName: matchesName ? payload.lastName! : 'Referente',
             companyName: scenario === 'same-person-name' ? null : payload.companyName,
             email: matchesEmail ? payload.email : 'altro-' + ordinal + '-' + n + '@fixture.invalid',
-            phone: scenario === 'missing-contact' ? null : scenario === 'national-equivalent'
+            phone: scenario === 'missing-contact' || (scenario === 'two-one-incomplete' && n === 1) ? null : scenario === 'national-equivalent' || (scenario === 'two-one-shared' && n === 1)
               ? payload.phone!.slice(3) : '+390004' + ordinal,
             deletedAt: scenario.startsWith('trashed-') ? new Date('2026-01-01T00:00:00Z') : null,
           } }));
@@ -2179,7 +2179,7 @@ test('WPForms 4 preserves the signed request and classifies only a single weak n
             where: { event: LEAD_PROJECTION_MANIFEST.auditEvent }, orderBy: { createdAt: 'desc' },
           });
           const after = audit.after as Record<string, string>;
-          assert.equal(after.dismissalReasonCode, scenario === 'trashed-name' ? 'TRASHED_NAME_ONLY' : 'DISTINCT_CONTACTS_NAME_ONLY');
+          assert.equal(after.dismissalReasonCode, scenario === 'two-candidates' ? 'MULTIPLE_DISTINCT_CONTACTS_NAME_ONLY' : scenario === 'trashed-name' ? 'TRASHED_NAME_ONLY' : 'DISTINCT_CONTACTS_NAME_ONLY');
           assert.equal(after.matchedSignalCode, scenario === 'same-person-name' ? 'PERSON_NAME_EXACT_V1' : 'COMPANY_NAME_EXACT_V1');
           assert.equal(audit.entityId, null);
         }
@@ -2226,6 +2226,11 @@ test('M3 multiple submissions retain original campaign, request and privacy afte
   const scopedHistory = await readLeadAcquisitions(client(), scopedReader, { leadId });
   assert.equal(scopedHistory.items.length, 2);
   await assert.rejects(readAdminLeadAttribution(client(), scopedReader, leadId), LeadAcquisitionDenied);
+  const scopedAttribution = await readLeadAttribution(client(), scopedReader, leadId);
+  assert.deepEqual(scopedAttribution, attribution);
+  assert.ok(scopedAttribution.every(row => !Object.hasOwn(row, 'privacyEvidence') && !Object.hasOwn(row.event!, 'payload')));
+  await client().lead.update({ where: { id: leadId }, data: { assignedToId: null } });
+  await assert.rejects(readLeadAttribution(client(), scopedReader, leadId), LeadAcquisitionDenied);
   assert.ok(scopedHistory.items.every((row) => row.privacyEvidence === null && row.event && !Object.hasOwn(row.event, 'privacy')));
   const summary = (await readLeadAcquisitionSummary(client(), actor)).find((row) => row.form === 'M3_HISTORY')!;
   assert.equal(summary.requests, 2n); assert.equal(summary.leads, 1n); assert.equal(summary.paidLeads, 0n);
