@@ -189,6 +189,10 @@ test.afterEach(async ({}, info) => {
 test("standard, quote-only and forming-subject paths reach an explicit synchronized start", async ({
   browser,
 }) => {
+  // This scenario traverses three complete practices, independent reviews,
+  // exports and all denial/replay paths. Keep its cumulative budget separate
+  // from bounded action waits; a slower CI runner must not truncate the audit.
+  test.setTimeout(300_000);
   const anonymous = await browser.newPage();
   await anonymous.goto(`${app}/practice-readiness`);
   await expect(anonymous).toHaveURL(`${app}/login`);
@@ -924,13 +928,17 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     title: "Fixture legacy sintetica", content: "Contenuto legacy sintetico", createdById: "readiness-browser-owner",
   } });
   for (const [actorPage, buttonName] of [[page, "Salva modifiche"], [reviewerPage, "Conferma revisione dossier"]] as const) {
+    currentPhase = buttonName === "Salva modifiche" ? "DOSSIER_LEGACY_UPDATE" : "DOSSIER_LEGACY_REVIEW";
     await actorPage.goto(`${app}/client-dossiers/${legacy.id}`);
     const form = actorPage.locator("form").filter({ has: actorPage.getByRole("button", { name: buttonName }) });
+    const button = form.getByRole("button", { name: buttonName, exact: true });
+    await expect(button).toBeVisible();
     const before = await db.clientDossier.findUniqueOrThrow({ where: { id: protectedDossier.id } });
     const auditCount = await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: protectedDossier.id } });
-    const responsePromise = actorPage.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
-    await form.getByRole("button", { name: buttonName }).click();
-    const legitimateResponse = await responsePromise;
+    const [legitimateResponse] = await Promise.all([
+      actorPage.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]), { timeout: 20_000 }),
+      button.click({ timeout: 20_000 }),
+    ]);
     expect(legitimateResponse.status()).toBe(200);
     await expect.poll(async () => {
       const saved = await db.clientDossier.findUniqueOrThrow({ where: { id: legacy.id } });

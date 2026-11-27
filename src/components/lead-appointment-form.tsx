@@ -1,5 +1,5 @@
 'use client';
-import { useState, useTransition } from 'react';
+import { useId, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveAppointmentAction, reconcileAppointmentAction } from '@/lib/personal-calendar-actions';
 import { calendarSyncLabels } from '@/lib/personal-calendar-contract';
@@ -9,6 +9,7 @@ export type LeadAppointmentFormProps = { leadId: string; leadVersion: string; as
   calendars: { id: string; userId: string; name: string }[]; appointment: { id: string; calendarId: string; version: number;
     startsAt: string; endsAt: string; status: string; syncState: string; syncError: string | null } | null };
 export function LeadAppointmentForm({ leadId, leadVersion, calendars, appointment, assignedToId, legacyDate }: LeadAppointmentFormProps) {
+  const calendarFieldId = useId();
   const [id] = useState(() => appointment?.id ?? crypto.randomUUID()), [pending, start] = useTransition();
   const [message, setMessage] = useState(''), router = useRouter();
   if (!calendars.length) return <p>Il referente deve prima salvare le proprie fasce in Calendari.</p>;
@@ -20,9 +21,9 @@ export function LeadAppointmentForm({ leadId, leadVersion, calendars, appointmen
         expectedVersion: appointment?.version ?? 0, operation, startLocal: form.get('start'), durationMinutes: Number(form.get('duration')) });
         setMessage(result.message); if (result.ok) router.refresh(); });
     }}>
-      <label className="grid gap-1 text-sm font-bold">Referente<select name="calendar" defaultValue={appointment?.calendarId ?? calendars.find(row => row.userId === assignedToId)?.id} className="rounded border p-2" disabled={Boolean(appointment)}>
+      <div className="grid gap-1 text-sm font-bold"><label htmlFor={calendarFieldId}>Referente</label><select id={calendarFieldId} name="calendar" defaultValue={appointment?.calendarId ?? calendars.find(row => row.userId === assignedToId)?.id} className="rounded border p-2" disabled={Boolean(appointment)}>
         {calendars.map(calendar => <option key={calendar.id} value={calendar.id}>{calendar.name}</option>)}
-      </select>{appointment && <input type="hidden" name="calendar" value={appointment.calendarId} />}</label>
+      </select>{appointment && <input type="hidden" name="calendar" value={appointment.calendarId} />}</div>
       <label className="grid gap-1 text-sm font-bold">Data e ora di Roma<input type="datetime-local" name="start" defaultValue={romeDateTimeInput(appointment?.startsAt ?? legacyDate).slice(0, 16)} required className="rounded border p-2" /></label>
       <label className="grid gap-1 text-sm font-bold">Durata (minuti)<input type="number" name="duration" min="15" max="180" step="15" defaultValue={appointment ? (Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt)) / 60_000 : 30} required className="rounded border p-2" /></label>
       <div className="flex flex-wrap gap-3 md:col-span-3">

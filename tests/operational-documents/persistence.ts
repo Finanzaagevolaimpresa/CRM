@@ -5,7 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { documentFixture } from './fixture';
 import { clientProof } from '../selective-clients/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
-import { confirmOperationalDocument, createOperationalDocument, createOperationalProforma, listOperationalTemplates, prepareOperationalDocument,
+import { confirmOperationalDocument, createOperationalDocument, createOperationalProforma, listOperationalTemplates, operationalDocumentOptions, prepareOperationalDocument,
   readOperationalDocument, saveOperationalTemplate, searchOperationalDocumentClient } from '../../src/lib/operational-documents';
 import { renderOperationalPdf } from '../../src/lib/operational-document-pdf';
 import { revokeInternalSession } from '../../src/lib/internal-session-registry';
@@ -63,6 +63,17 @@ test('riassegnazione, tecnico, diniego esplicito e sessione revocata negano anch
   await assert.rejects(readOperationalDocument(db, f.other.session, draft.id));
   await assert.rejects(readOperationalDocument(db, f.technical.session, draft.id));
   await assert.rejects(saveOperationalTemplate(db, f.owner.session, { ...f.template, commandId: randomUUID(), templateId: randomUUID() }, clientProof(f.owner)));
+  const storedBefore = await db.operationalDocument.findUniqueOrThrow({ where: { id: draft.id } });
+  const clientDenied = await db.userPermissionOverride.create({ data: { userId: f.owner.user.id, permission: 'client.read', allowed: false } });
+  await assert.rejects(operationalDocumentOptions(db, f.owner.session, f.selection.context), /DENIED/);
+  await assert.rejects(f.prepare(), /DENIED/);
+  await assert.rejects(createOperationalDocument(db, f.owner.session, input), /DENIED/);
+  await assert.rejects(readOperationalDocument(db, f.owner.session, draft.id), /DENIED/);
+  await assert.rejects(searchOperationalDocumentClient(db, f.owner.session, f.company.vatNumber!), /DENIED/);
+  assert.equal(await db.operationalDocument.count({ where: { leadId: f.lead.id } }), 1);
+  assert.deepEqual(await db.operationalDocument.findUniqueOrThrow({ where: { id: draft.id } }), storedBefore);
+  await db.userPermissionOverride.update({ where: { id: clientDenied.id }, data: { allowed: true } });
+  assert.equal((await readOperationalDocument(db, f.owner.session, draft.id)).row.id, draft.id);
   await db.lead.update({ where: { id: f.lead.id }, data: { assignedToId: f.other.user.id } });
   await assert.rejects(readOperationalDocument(db, f.owner.session, draft.id));
   await assert.rejects(createOperationalDocument(db, f.owner.session, input));

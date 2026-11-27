@@ -33,7 +33,7 @@ async function CalendarsPage({ searchParams }: { searchParams: Promise<{ user?: 
   const availability = availabilitySchema.safeParse(ownCalendar?.availability);
   return <div className="crm-space-y-6"><PageHeader title="Calendari" description="Appuntamenti e richiami per persona. Date e fasce Europe/Rome." />
     <form className="flex flex-wrap items-center gap-3">
-      {actor.role === 'admin' && <label className="font-bold">Utente <select name="user" defaultValue={userId} className="rounded border p-2">{people.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>}
+      {actor.role === 'admin' && <div className="flex items-center gap-1"><label htmlFor="calendar-user-filter" className="font-bold">Utente</label><select id="calendar-user-filter" name="user" defaultValue={userId} className="rounded border p-2">{people.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></div>}
       <label className="font-bold">Settimana dal <input type="date" name="date" defaultValue={selectedDay} className="rounded border p-2" /></label>
       <button className="font-bold underline">Mostra calendario</button>
     </form>
