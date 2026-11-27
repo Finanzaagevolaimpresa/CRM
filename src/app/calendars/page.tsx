@@ -51,7 +51,7 @@ async function CalendarsPage({ searchParams }: { searchParams: Promise<{ user?: 
     <Card title="Le mie fasce"><PersonalCalendarAvailability initial={availability.success ? availability.data : defaultCalendarAvailability} /></Card>
     <Card title="Il mio Google Calendar"><p className="mb-3">{ownCalendar?.mode === 'GOOGLE' ? 'Collegamento personale registrato. ' : 'Calendario Google non collegato. '}
       {ownCalendar?.lastTestAt && <>Ultima prova: {formatDateTime(ownCalendar.lastTestAt, 'Europe/Rome')} · {ownCalendar.lastTestStatus}.</>}</p>
-      {query.connection && <p role="status">{query.connection === 'connected' ? 'Connessione personale verificata.' : 'Connessione non completata. Verifica la configurazione e riparti dal consenso.'}</p>}
+      {query.connection && query.connection !== 'connected' && <p role="status">Connessione non completata. Verifica la configurazione e riparti dal consenso.</p>}
       {calendarOAuthConfig() ? <form action={connectGoogleCalendarAction}><button className="rounded-xl bg-fai-blue px-4 py-2 font-bold text-white">Collega il mio Google Calendar</button></form>
         : <p>Il collegamento Google richiede la configurazione autorizzata dell’integrazione da parte dell’Admin. Gli appuntamenti salvati restano nel CRM.</p>}
     </Card>

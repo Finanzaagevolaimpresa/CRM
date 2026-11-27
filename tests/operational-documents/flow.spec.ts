@@ -1,10 +1,11 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
+import { storedDocumentSnapshot } from '../../src/lib/operational-document-contract';
 const db = new PrismaClient(), evidence = resolve(process.env.OPERATIONAL_DOCUMENT_EVIDENCE ?? 'test-results/operational-documents');
 const fixture = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8')) as { leadId: string; clientId: string; companyName: string;
   templateId: string; templateCommandId: string; proformaTemplateCommandId: string; serviceRevisionId: string; admin: { id: string; email: string };
@@ -18,6 +19,21 @@ async function login(page: Page, email: string) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill('synthetic-document-browser-only-2026');
   await page.getByRole('button', { name: 'Login interno', exact: true }).click(); await expect(page).toHaveURL(/\/dashboard$/);
+}
+async function captureFailure(contexts: BrowserContext[], name: string) {
+  // These contexts contain only the sentinel-guarded synthetic fixture. Capture
+  // before closing them; otherwise Playwright loses the failing page state.
+  for (const [index, page] of contexts.flatMap(context => context.pages()).entries()) {
+    try {
+      const fields = await page.locator('input:not([type="password"]), select, textarea').evaluateAll(elements => elements.map(element => {
+        const input = element as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+        return { name: input.name, value: input.value, checked: input instanceof HTMLInputElement ? input.checked : undefined,
+          disabled: input.matches(':disabled'), ariaLabel: input.getAttribute('aria-label'), labels: [...input.labels ?? []].map(label => label.textContent) };
+      }));
+      writeFileSync(join(evidence, name + '-' + index + '.json'), JSON.stringify({ url: page.url(), text: await page.locator('body').innerText(), fields }, null, 2));
+      await page.screenshot({ path: join(evidence, name + '-' + index + '.png'), fullPage: true });
+    } catch { /* Preserve the original failure if a page is already unavailable. */ }
+  }
 }
 test.afterAll(() => db.$disconnect());
 test('Admin duplica e pubblica un modello con conferma personale senza perdere il contenuto', async ({ page }) => {
@@ -85,9 +101,22 @@ test('commerciale genera bozza da modello, conferma e prepara PDF; gli altri ruo
     await expect(owner.locator('input[name="partita_iva"]')).toHaveValue('12345678903');
     await owner.locator('input[name="rate"]').fill('Saldo unico alla scadenza concordata');
     await owner.locator('input[name="termsConfirmed"]').check();
+    const submitted = owner.waitForRequest(request => request.method() === 'POST'
+      && new URL(request.url()).pathname === '/document-library/new' && Boolean(request.headers()['next-action']));
     await owner.getByRole('button', { name: 'Genera bozza indipendente', exact: true }).click();
+    const request = await submitted, payload = request.postDataBuffer(); expect(payload).not.toBeNull();
+    const form = await new Request('http://localhost/document-library/new', { method: 'POST',
+      headers: { 'content-type': request.headers()['content-type'] }, body: new Uint8Array(payload!) }).formData();
+    const fields = [...form].filter(([name, value]) => typeof value === 'string' && /(?:^|_)(?:termsConfirmed|rate|firmatario|indirizzo|partita_iva|imponibile|iva|totale)$/.test(name));
+    writeFileSync(join(evidence, 'commercial-draft-submission.json'), JSON.stringify({ fields }, null, 2));
     await expect(owner).toHaveURL(/\/document-library\/[a-f0-9-]{36}$/);
     const documentId = new URL(owner.url()).pathname.split('/').at(-1)!;
+    const snapshot = storedDocumentSnapshot.parse((await db.operationalDocument.findUniqueOrThrow({ where: { id: documentId }, select: { snapshot: true } })).snapshot);
+    writeFileSync(join(evidence, 'commercial-draft-snapshot.json'), JSON.stringify({ documentId, fields: snapshot.fields, missing: snapshot.missing,
+      conflicts: snapshot.conflicts, termsConfirmed: snapshot.termsConfirmed }, null, 2));
+    expect(snapshot.missing, 'The saved draft must retain every required field submitted by the commercial actor').toEqual([]);
+    expect(snapshot.conflicts).toEqual([]); expect(snapshot.termsConfirmed, 'The personal confirmation must survive form submission').toBe(true);
+    expect(snapshot.fields.rate).toBe('Saldo unico alla scadenza concordata');
     await expect(owner.getByText('Bozza da verificare', { exact: true })).toBeVisible();
     await owner.locator('input[name="confirmed"]').check();
     await owner.getByRole('button', { name: 'Conferma contenuto', exact: true }).click();
@@ -116,7 +145,8 @@ test('commerciale genera bozza da modello, conferma e prepara PDF; gli altri ruo
     expect(await db.operationalDocument.count({ where: { sourceDocumentId: documentId, dueDate: '2027-02-28' } })).toBe(1);
     expect(await db.operationalDocumentDecision.count({ where: { documentId } })).toBe(1);
     writeFileSync(join(evidence, 'browser-receipt.json'), JSON.stringify({ synthetic: true, documentId, proformaId, bytes: bytes.length, repeatedProforma: 'same', unauthorized: ['other', 'technical'] }));
-  } finally { await Promise.all(contexts.map(context => context.close())); }
+  } catch (error) { await captureFailure(contexts, 'commercial-draft-failure'); throw error; }
+  finally { await Promise.all(contexts.map(context => context.close())); }
 });
 
 test('Admin prepara email dalla proforma confermata e richiede approvazione con PDF esatto; il commerciale non può inviare il comando', async ({ browser }) => {
@@ -206,7 +236,8 @@ test('Admin prepara email dalla proforma confermata e richiede approvazione con 
     writeFileSync(join(evidence, 'proforma-email-receipt.json'), JSON.stringify({ synthetic: true, documentId: fixture.emailProforma.id,
       messageId: message.id, state: 'PENDING', pdfSha256: saved.email.pdfSha256, exactPdf: true, approvals: 0, manualAttempts: 0,
       channelAttempts: 0, unauthorizedReplay: 'DENIED', adminWithoutSenderAuthority: 'DENIED', actualSend: 'NOT_PERFORMED' }));
-  } finally {
+  } catch (error) { await captureFailure(contexts, 'proforma-email-failure'); throw error; }
+  finally {
     await Promise.all(contexts.map(context => context.close()));
     if (authorityPrepared) {
       const current = await db.ordinaryEmailAuthority.findUniqueOrThrow({ where: { id: 'ordinary-email' } });

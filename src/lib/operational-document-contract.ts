@@ -14,7 +14,7 @@ export const documentFields = ['denominazione', 'indirizzo', 'partita_iva', 'cod
 export type DocumentField = typeof documentFields[number];
 export const documentFieldLabels: Record<DocumentField, string> = { denominazione: 'Denominazione', indirizzo: 'Indirizzo',
   partita_iva: 'Partita IVA', codice_fiscale: 'Codice fiscale', email: 'Email', telefono: 'Telefono', firmatario: 'Firmatario',
-  servizio: 'Servizio', attivita: 'Attività', imponibile: 'Imponibile', iva: 'IVA / trattamento', totale: 'Totale', rate: 'Rate', scadenza: 'Scadenza' };
+  servizio: 'Servizio', attivita: 'Attività', imponibile: 'Imponibile', iva: 'Importo IVA', totale: 'Totale', rate: 'Rate', scadenza: 'Scadenza' };
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const documentKind = z.enum(['CONTRACT', 'QUOTE', 'PROPOSAL', 'PROFORMA']);
