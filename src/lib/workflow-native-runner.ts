@@ -6,6 +6,7 @@ import { currentRecordUpdateUser, recordUpdateContext, recordUpdatePermission } 
 import { enrollWorkflowReceiptInTransaction, prepareNativeWorkflowEnrollment, reconcileNativeWorkflowExecution } from './workflow-executions';
 import { leadVisibilityWhere } from './core-query-policy';
 import { lockCommunicationDirectory } from './communication-directory-lock';
+import { recoverWorkflowOperationalEvents } from './workflow-operational-capture';
 
 /** Native projection/duplicate resolution calls this after recording its result.
  * Default-off import has no effect. Rule author authority admits intent only;
@@ -86,6 +87,7 @@ export async function prepareWorkflowPendingOnce(db: PrismaClient, session: Auth
     await auth.finish(); return rows;
   });
   for (const source of recoverable) await db.$transaction(tx => captureWorkflowLeadReceipt(tx, source.inboxEventId), { timeout: 30_000 });
+  await recoverWorkflowOperationalEvents(db, session, { automationId: input.automationId, limit: input.limit });
   const ids = await db.$transaction(async tx => {
     const auth = await updateActor(tx, session);
     if (auth.actor.role !== 'admin' || !recordUpdatePermission(auth.actor, 'practice_communications.write') || !recordUpdatePermission(auth.actor, 'lead.read')) throw new Error('WORKFLOW_DENIED');

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
 import { currentRecordUpdateUser, recordUpdateContext, recordUpdatePermission } from './record-update-context';
 import { responsibilityDecision } from './responsibility-contract';
+import { RecordUpdateError } from './record-update-contract';
 
 type Tx = Prisma.TransactionClient;
 export const workflowSourceKind = z.enum(['APPOINTMENT_BOOKED', 'ASSIGNMENT_CONFIRMED', 'STATUS_CHANGED', 'DOCUMENT_REQUESTED']);
@@ -50,6 +51,9 @@ export async function resolveWorkflowSource(tx: Tx, raw: WorkflowSourceInput) {
       data = { id: activity.id, sequence: activity.sequence, actorId: activity.actorUserId, assigneeId: activity.assigneeAfterId,
         inboxVersionAfter: activity.inboxVersionAfter, createdAt: activity.createdAt.toISOString() };
     } else if (input.origin === 'RESPONSIBILITY') {
+      // N14 emits both a commercial activity and a responsibility decision.
+      // Only its activity is an enrollment source for that single assignment.
+      if (await tx.commercialLeadInboxItem.findUnique({ where: { leadId: lead.id }, select: { id: true } })) unavailable();
       const audit = await tx.auditLog.findUnique({ where: { id: input.referenceId } });
       const decision = responsibilityDecision.safeParse(audit?.after);
       const latest = await tx.auditLog.findFirst({ where: { entityType: 'Lead', entityId: lead.id, event: 'responsibility_assigned' },
@@ -83,8 +87,11 @@ export async function workflowSourceStillCurrent(tx: Tx, snapshot: Prisma.JsonVa
   const raw = z.object({ source: sourceSnapshot.optional() }).passthrough().parse(snapshot).source;
   if (!raw) return true; // Receipt-based lead acquisition has its own source binding.
   if (raw.hash !== expectedHash || canonicalSha256({ input: raw.input, data: raw.data }) !== raw.hash) throw new Error('WORKFLOW_SOURCE_BINDING_INVALID');
-  try { return (await resolveWorkflowSource(tx, raw.input)).source.hash === expectedHash; }
-  catch (error) { if (error instanceof WorkflowSourceError) return false; throw error; }
+  try {
+    const current = (await resolveWorkflowSource(tx, raw.input)).source;
+    return current.hash === expectedHash && current.ownerId === raw.ownerId && current.ownerEpoch === raw.ownerEpoch;
+  }
+  catch (error) { if (error instanceof WorkflowSourceError || error instanceof RecordUpdateError && error.code === 'DENIED') return false; throw error; }
 }
 
 export async function workflowSourceChoices(tx: Tx, leadId: string) {

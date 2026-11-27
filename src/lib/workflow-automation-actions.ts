@@ -14,6 +14,7 @@ import { resolveRomeDateTime } from './rome-date-time';
 import { createSyntheticNewsletterRuntime } from './workflow-newsletter-test-runtime';
 import { executeWorkflowNewsletter, planWorkflowNewsletter, reconcileWorkflowNewsletterRecipient } from './workflow-newsletters';
 import { prepareWorkflowPendingOnce } from './workflow-native-runner';
+import { planNativeWorkflowNewsletter, prepareNativeWorkflowNewsletter } from './workflow-newsletter-native';
 
 export async function mutateWorkflowAction(form: FormData) {
   await assertTechnicalServerAction('workflow-automation-actions:mutateWorkflowAction');
@@ -23,7 +24,14 @@ export async function mutateWorkflowAction(form: FormData) {
   try {
     assertOrdinaryEmailRequestOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site') }, process.env);
     const value = (name: string) => String(form.get(name) ?? '');
-    if (value('intent') === 'native-run') {
+    if (value('intent') === 'newsletter-native-plan') {
+      await planNativeWorkflowNewsletter(prisma, session, { id: value('runId'), automationId: value('id') });
+      result = 'RECORDED';
+    } else if (value('intent') === 'newsletter-native-prepare') {
+      const mailbox = await prisma.communicationMailbox.findUniqueOrThrow({ where: { id: value('mailboxId') }, select: { id: true, address: true } });
+      await prepareNativeWorkflowNewsletter(prisma, session, { runId: value('runId'), mailboxId: mailbox.id, replyTo: mailbox.address });
+      result = 'NATIVE_PREPARED';
+    } else if (value('intent') === 'native-run') {
       const mailbox = value('mailboxId') ? await prisma.communicationMailbox.findUniqueOrThrow({ where: { id: value('mailboxId') }, select: { id: true, address: true } }) : null;
       const prepared = await prepareWorkflowPendingOnce(prisma, session, { ...(mailbox ? { mailboxId: mailbox.id, replyTo: mailbox.address } : {}), limit: 20 });
       result = prepared.results.some(row => row.error) ? 'NATIVE_REVIEW' : 'NATIVE_PREPARED';

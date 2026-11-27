@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, test } from 'node:test';
+import { spawn } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 import { syntheticPerson } from '../selective-sharing/fixtures';
 import { collectionKey } from '../payment-collection/fixture';
@@ -12,6 +13,8 @@ import { planNativeWorkflowReceipt, prepareNativeWorkflowEnrollment, reconcileNa
 import { acquireManualReply, configureCommunicationMailbox, linkAmbiguousReply, qualifyCommunicationMailbox,
   readPracticeCommunications, saveApprovedMessageDraft, submitApprovedMessage } from '../../src/lib/approved-communications';
 import { captureWorkflowLeadReceiptAfterCommit, prepareWorkflowPendingOnce } from '../../src/lib/workflow-native-runner';
+import { runWorkflowPreparationCommand } from '../../src/lib/workflow-runner-command';
+import { revokeInternalSession } from '../../src/lib/internal-session-registry';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1';
 after(() => db.$disconnect());
@@ -32,6 +35,7 @@ test('disabled native planner shares receipt logic; explicit test prepares one n
   try {
     delete process.env.WORKFLOW_NATIVE_PREPARATION_MODE;
     await assert.rejects(planNativeWorkflowReceipt(db, admin.session, { automationId: rule.id, receiptId: source.receipt.id }), /DISABLED/);
+    await assert.rejects(runWorkflowPreparationCommand(db, { sessionToken: admin.token }), /DENIED/);
     // Process-local qualification only, after the native ephemeral DB guard.
     // It enables draft preparation, never a provider, sender or worker.
     process.env.WORKFLOW_NATIVE_PREPARATION_MODE = 'enabled';
@@ -92,7 +96,22 @@ test('disabled native planner shares receipt logic; explicit test prepares one n
     await captureWorkflowLeadReceiptAfterCommit(db, hookedSource.receipt.inboxEventId);
     assert.equal(await db.workflowEnrollment.count({ where: { automationId: rule.id, eventKey: hookedSource.event.eventId } }), 1);
     const batch = { automationId: rule.id, mailboxId: box.id, replyTo: box.address, limit: 20 };
-    assert.equal((await prepareWorkflowPendingOnce(db, admin.session, batch)).prepared, 1);
+    await assert.rejects(runWorkflowPreparationCommand(db, { ...batch, sessionToken: 'unregistered-synthetic-token-forgery' }));
+    await assert.rejects(runWorkflowPreparationCommand(db, { ...batch, userId: admin.user.id, sessionId: admin.session.sessionId }));
+    const revoked = await syntheticPerson(db, 'Sessione runner sintetica revocata', 'admin');
+    await db.$transaction(tx => revokeInternalSession(tx, revoked.session.sessionId!, 'INTERNAL_SINGLE', revoked.user.id));
+    await assert.rejects(runWorkflowPreparationCommand(db, { ...batch, sessionToken: revoked.token }), /DENIED/);
+    const childResult = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/workflow/prepare-once.ts', '--once'], { timeout: 45_000, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '', stderr = '';
+      child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
+      child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+      child.on('error', reject); child.on('close', status => resolve({ status, stdout, stderr }));
+      child.stdin.end(JSON.stringify({ ...batch, sessionToken: admin.token }));
+    });
+    assert.equal(childResult.status, 0, childResult.stderr);
+    assert.deepEqual(JSON.parse(childResult.stdout), { status: 'PREPARED', examined: 1, prepared: 1, held: 0, providerCalls: 0 });
+    assert(!childResult.stdout.includes(admin.token)); assert.equal(childResult.stderr, '');
     assert.equal((await prepareWorkflowPendingOnce(db, admin.session, batch)).prepared, 0);
     delete process.env.WORKFLOW_NATIVE_PREPARATION_MODE;
     const delayedSource = await intake.receive();

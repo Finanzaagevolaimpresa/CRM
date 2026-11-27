@@ -1,12 +1,16 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { readPrivateDocumentBounded } from '../../src/lib/storage';
 const db = new PrismaClient(), evidence = resolve(process.env.OPERATIONAL_DOCUMENT_EVIDENCE ?? 'test-results/operational-documents');
 const fixture = JSON.parse(readFileSync(join(evidence, 'fixture.json'), 'utf8')) as { leadId: string; clientId: string; companyName: string;
   templateId: string; templateCommandId: string; proformaTemplateCommandId: string; serviceRevisionId: string; admin: { id: string; email: string };
   owner: { id: string; email: string }; other: { id: string; email: string }; technical: { id: string; email: string };
+  emailProforma: { id: string; contentHash: string }; mailbox: { id: string; address: string };
+  nonAuthority: { id: string; email: string };
   technicalFolder: { id: string; title: string; url: string; projectId: string } };
 async function login(page: Page, email: string) {
   const origin = new URL(process.env.APP_ORIGIN!).origin;
@@ -113,4 +117,103 @@ test('commerciale genera bozza da modello, conferma e prepara PDF; gli altri ruo
     expect(await db.operationalDocumentDecision.count({ where: { documentId } })).toBe(1);
     writeFileSync(join(evidence, 'browser-receipt.json'), JSON.stringify({ synthetic: true, documentId, proformaId, bytes: bytes.length, repeatedProforma: 'same', unauthorized: ['other', 'technical'] }));
   } finally { await Promise.all(contexts.map(context => context.close())); }
+});
+
+test('Admin prepara email dalla proforma confermata e richiede approvazione con PDF esatto; il commerciale non può inviare il comando', async ({ browser }) => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const previousAuthority = await db.ordinaryEmailAuthority.findUnique({ where: { id: 'ordinary-email' } });
+  const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
+  let authorityPrepared = false;
+  try {
+    await db.ordinaryEmailAuthority.upsert({ where: { id: 'ordinary-email' },
+      create: { id: 'ordinary-email', userId: fixture.admin.id, mailboxId: fixture.mailbox.id, enabled: true },
+      update: { userId: fixture.admin.id, mailboxId: fixture.mailbox.id, enabled: true, revision: { increment: 1 } } });
+    authorityPrepared = true;
+    const [admin, owner, nonAuthority] = await Promise.all(contexts.map(context => context.newPage()));
+    await login(admin, fixture.admin.email); await login(owner, fixture.owner.email); await login(nonAuthority, fixture.nonAuthority.email);
+    const documentPath = '/document-library/' + fixture.emailProforma.id;
+    await admin.goto(documentPath); await owner.goto(documentPath);
+    await expect(admin.getByText('Contenuto confermato', { exact: true })).toBeVisible();
+    await expect(owner.getByRole('button', { name: 'Prepara bozza email con PDF', exact: true })).toHaveCount(0);
+    const subject = 'Proforma sintetica browser · ' + fixture.emailProforma.id;
+    async function prepareForm(page: Page) {
+      await page.getByLabel('Mittente aziendale', { exact: true }).selectOption(fixture.mailbox.id);
+      await page.getByLabel('Destinatario', { exact: true }).fill('proforma-browser@invalid.test');
+      await page.getByLabel('Oggetto', { exact: true }).fill(subject);
+      await page.getByLabel('Testo autorizzato per il caso', { exact: true }).fill('Prova sintetica del percorso di approvazione, senza alcun invio reale.');
+      await page.getByRole('checkbox', { name: /^Ho verificato destinatario, testo e anteprima PDF/ }).check();
+      const button = page.getByRole('button', { name: 'Prepara bozza email con PDF', exact: true });
+      await button.click();
+      const identity = page.getByRole('region', { name: 'Conferma identità senza lasciare il lavoro' });
+      await expect(identity).toBeVisible();
+      await identity.getByLabel('Password corrente', { exact: true }).fill('synthetic-document-browser-only-2026');
+      await identity.getByRole('button', { name: 'Conferma identità e conserva le scelte', exact: true }).click();
+      await expect(identity.getByRole('button', { name: 'Riconferma identità se la finestra è scaduta' })).toBeVisible();
+      await expect(page.getByLabel('Oggetto', { exact: true })).toHaveValue(subject);
+      return button;
+    }
+    // A different Admin has valid personal proof but lacks the sender authority.
+    await nonAuthority.goto(documentPath);
+    await (await prepareForm(nonAuthority)).click();
+    await expect(nonAuthority.getByRole('alert').filter({ hasText: /^Bozza non confermata\./ })).toBeVisible();
+    expect(await db.adminRecordRevision.count({ where: { model: 'OperationalDocumentDelivery', recordId: fixture.emailProforma.id } })).toBe(0);
+    expect(await db.approvedCommunication.count({ where: { clientId: fixture.clientId } })).toBe(0);
+    const prepare = await prepareForm(admin);
+    const pendingRequest = admin.waitForRequest(request => request.method() === 'POST'
+      && new URL(request.url()).pathname === documentPath && Boolean(request.headers()['next-action']));
+    await prepare.click(); const request = await pendingRequest;
+    await expect(admin.getByText(/^Stato verificato nella posta: Bozza\./)).toBeVisible();
+    const journal = await db.adminRecordRevision.findFirstOrThrow({ where: { model: 'OperationalDocumentDelivery', recordId: fixture.emailProforma.id }, orderBy: { createdAt: 'desc' } });
+    const saved = journal.after as { email: { messageId: string; attachmentId: string; attachmentVersionId: string; pdfSha256: string } };
+    const message = await db.approvedCommunication.findUniqueOrThrow({ where: { id: saved.email.messageId }, include: { versions: true } });
+    expect(message.state).toBe('DRAFT'); expect(message.currentRevision).toBe(1); expect(message.versions).toHaveLength(1);
+    const snapshot = message.versions[0].snapshot as { subject: string; to: string[]; classification: string; attachments: { documentId: string; versionId: string; sha256: string }[] };
+    expect(snapshot.subject).toBe(subject); expect(snapshot.to).toEqual(['proforma-browser@invalid.test']);
+    expect(snapshot.classification).toBe('SENSITIVE'); expect(snapshot.attachments).toHaveLength(1);
+    expect(snapshot.attachments[0].versionId).toBe(saved.email.attachmentVersionId);
+    const attachment = await db.document.findUniqueOrThrow({ where: { id: saved.email.attachmentId } });
+    expect(attachment.documentCategory).toBe('fattura');
+    const bytes = await readPrivateDocumentBounded(attachment.storagePath, 5_000_000);
+    const pdf = await admin.request.get(documentPath + '/pdf'); expect(pdf.status()).toBe(200);
+    expect(bytes.equals(await pdf.body())).toBe(true);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(saved.email.pdfSha256);
+    expect(snapshot.attachments[0].sha256).toBe(saved.email.pdfSha256);
+    // Replay the real Admin action with the commercial actor's browser cookies.
+    const payload = request.postData(); expect(payload).not.toBeNull();
+    const denied = await owner.evaluate(async input => {
+      const response = await fetch(input.path, { method: 'POST', credentials: 'same-origin', redirect: 'manual', headers: input.headers, body: input.body });
+      return { status: response.status, text: await response.text(), redirect: response.headers.get('x-action-redirect') };
+    }, { path: documentPath, headers: { 'next-action': request.headers()['next-action'], 'content-type': request.headers()['content-type'] }, body: payload! });
+    expect([200, 403, 404]).toContain(denied.status); expect(denied.redirect).toBeNull();
+    if (denied.status === 200) expect(denied.text).toContain('Conferma la tua identità');
+    expect(denied.text).not.toContain(saved.email.messageId);
+    expect(await db.approvedCommunication.findUniqueOrThrow({ where: { id: saved.email.messageId }, include: { versions: true } })).toEqual(message);
+    expect(await db.adminRecordRevision.count({ where: { model: 'OperationalDocumentDelivery', recordId: fixture.emailProforma.id } })).toBe(1);
+    await admin.getByRole('link', { name: 'Apri bozza, approvazioni e ricevute', exact: true }).click();
+    await expect(admin.getByRole('heading', { name: subject + ' · v1', exact: true })).toBeVisible();
+    await admin.getByRole('button', { name: 'Richiedi approvazione admin', exact: true }).click();
+    await expect(admin.getByRole('button', { name: 'Approva versione 1', exact: true })).toBeVisible();
+    expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('PENDING');
+    expect(await db.communicationApproval.count({ where: { versionId: message.versions[0].id } })).toBe(0);
+    expect(await db.communicationAttempt.count({ where: { messageId: message.id } })).toBe(0);
+    expect(await db.ordinaryEmailAttempt.count({ where: { messageId: message.id } })).toBe(0);
+    expect(await db.documentVersion.count({ where: { documentId: attachment.id } })).toBe(1);
+    await admin.goto(documentPath);
+    await expect(admin.getByText(/^Stato verificato nella posta: In approvazione\./)).toBeVisible();
+    const pendingPdf = await admin.request.get(documentPath + '/pdf'); expect(pendingPdf.status()).toBe(200);
+    expect(bytes.equals(await pendingPdf.body())).toBe(true);
+    await admin.screenshot({ path: join(evidence, 'proforma-email-pending.png'), fullPage: true });
+    writeFileSync(join(evidence, 'proforma-email-receipt.json'), JSON.stringify({ synthetic: true, documentId: fixture.emailProforma.id,
+      messageId: message.id, state: 'PENDING', pdfSha256: saved.email.pdfSha256, exactPdf: true, approvals: 0, manualAttempts: 0,
+      channelAttempts: 0, unauthorizedReplay: 'DENIED', adminWithoutSenderAuthority: 'DENIED', actualSend: 'NOT_PERFORMED' }));
+  } finally {
+    await Promise.all(contexts.map(context => context.close()));
+    if (authorityPrepared) {
+      const current = await db.ordinaryEmailAuthority.findUniqueOrThrow({ where: { id: 'ordinary-email' } });
+      expect(current.userId, 'Synthetic authority must not overlap another suite').toBe(fixture.admin.id);
+      await db.ordinaryEmailAuthority.update({ where: { id: 'ordinary-email' }, data: previousAuthority
+        ? { userId: previousAuthority.userId, mailboxId: previousAuthority.mailboxId, enabled: previousAuthority.enabled, revision: { increment: 1 } }
+        : { enabled: false, revision: { increment: 1 } } });
+    }
+  }
 });

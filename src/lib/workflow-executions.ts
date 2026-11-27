@@ -266,6 +266,19 @@ async function workflowTablesPresent(tx: Tx) {
   return tables.count === 2;
 }
 
+/** A native command already holds the lead lock. Invalidated operational
+ * sources stop their pending work in that same transaction, even if capture
+ * has subsequently been disabled. This never prepares or sends a message. */
+export async function stopStaleWorkflowEnrollments(tx: Tx, leadId: string) {
+  if (!await workflowTablesPresent(tx)) return;
+  await leadLock(tx, leadId);
+  const rows = await tx.workflowEnrollment.findMany({ where: { leadId, state: 'PENDING', sourceReceiptId: null }, orderBy: { id: 'asc' } });
+  for (const row of rows) {
+    await tx.$queryRaw`SELECT id FROM "WorkflowEnrollment" WHERE id=${row.id}::uuid FOR UPDATE`;
+    await ensureWorkflowSourceCurrent(tx, row);
+  }
+}
+
 /** Native mail calls this before a new write/approval/send admission. Historical
  * messages remain readable and an already-started attempt may still record its
  * evidence. A prepared workflow draft is bound to its exact immutable version. */

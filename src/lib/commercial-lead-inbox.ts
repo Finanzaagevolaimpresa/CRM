@@ -1,6 +1,7 @@
 import { leadAssignees } from './lead-assignee';
 import { calendarFromSetterOutcome } from './personal-calendar';
-import { stopPendingWorkflowExecutions } from './workflow-executions';
+import { stopPendingWorkflowExecutions, stopStaleWorkflowEnrollments } from './workflow-executions';
+import { captureWorkflowOperationalEventAfterCommit } from './workflow-operational-capture';
 import { createHash } from 'node:crypto';
 import { effectiveSetterContact, prepareSetterCommand, SetterInputError, type SetterCommand } from './lead-setter-contract';
 import { isTechnicalAccount } from './technical-confidentiality';
@@ -493,7 +494,7 @@ async function mutateOwner(
   const n15SelfClaim = input.activityType === 'CLAIMED' && isN15SyntheticSelfClaimAdmitted();
   const n15Assignment = input.activityType === 'ASSIGNED' && isN15SyntheticAssignmentAdmitted();
   const n15Synthetic = n15SelfClaim || n15Assignment;
-  return transaction(db, async (tx, commandNow, n15Scope) => {
+  const result = await transaction(db, async (tx, commandNow, n15Scope) => {
     if (n15Synthetic) {
       const rows = await tx.$queryRaw<Array<{
         databaseName: string;
@@ -573,8 +574,12 @@ async function mutateOwner(
         throw new Error('N14_SYNTHETIC_FAULT_N15_AFTER_AGGREGATE');
       }
     }
-    return updated;
+    await stopStaleWorkflowEnrollments(tx, lead.id);
+    return { updated, activityId: activity.id };
   }, n15Synthetic);
+  if (input.activityType === 'ASSIGNED') await captureWorkflowOperationalEventAfterCommit(db, { kind: 'ASSIGNMENT_CONFIRMED',
+    leadId: input.leadId, referenceId: result.activityId, origin: 'COMMERCIAL_ACTIVITY' });
+  return result.updated;
 }
 
 export function claimCommercialLeadInboxItem(db: PrismaClient, input: Readonly<{

@@ -3362,6 +3362,7 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  workflowNewsletterRecipient WorkflowNewsletterRecipient?
   operationalState AdminOperationalState? @relation("AdminMessageState")
   adminRequestDraft AdminRequestDraft?
   updateDeliveryId String? @unique @db.Uuid
@@ -4516,6 +4517,10 @@ model WorkflowNewsletterRun {
 }
 
 model WorkflowNewsletterRecipient {
+  nativeMessage ApprovedCommunication? @relation(fields: [nativeMessageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  nativeMessageId String? @unique @db.Uuid
+  nativeRevision Int?
+  nativeSnapshotHash String? @db.Char(64)
   run WorkflowNewsletterRun @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   id String @id @db.Uuid

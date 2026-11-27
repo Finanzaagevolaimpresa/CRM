@@ -8,7 +8,8 @@ import { updateActor } from './record-updates';
 import { nextConcurrencyTimestamp, withSerializableTransaction } from './serializable';
 import { appointmentCommandSchema, appointmentInterval, availabilitySchema, CalendarError, intervalsOverlap, withinAvailability } from './personal-calendar-contract';
 import type { GoogleCalendarAdapter } from './google-calendar-adapter';
-import { stopPendingWorkflowExecutions } from './workflow-executions';
+import { stopPendingWorkflowExecutions, stopStaleWorkflowEnrollments } from './workflow-executions';
+import { captureWorkflowOperationalEventAfterCommit } from './workflow-operational-capture';
 
 export async function saveCalendarAvailability(db: PrismaClient, claimed: AuthSession, raw: unknown) {
   const availability = availabilitySchema.parse(raw);
@@ -37,7 +38,7 @@ export async function listBookableCalendars(db: PrismaClient, claimed: AuthSessi
 
 export async function saveLeadAppointment(db: PrismaClient, claimed: AuthSession, raw: unknown, provider?: GoogleCalendarAdapter) {
   const input = appointmentCommandSchema.parse(raw);
-  return withSerializableTransaction(db, async tx => {
+  const saved = await withSerializableTransaction(db, async tx => {
     const auth = await updateActor(tx, claimed);
     if (isTechnicalAccount(auth.actor) || !recordUpdatePermission(auth.actor, 'lead.write')) throw new CalendarError('DENIED');
     // A shared calendar lock serializes reservations for different leads as well
@@ -95,8 +96,12 @@ export async function saveLeadAppointment(db: PrismaClient, claimed: AuthSession
       event: input.operation === 'CANCEL' ? 'lead_appointment_cancelled' : current ? 'lead_appointment_rescheduled' : 'lead_appointment_booked',
       after: { appointmentId: row.id, calendarId: calendar.id, version: row.version, startsAt: row.startsAt.toISOString(), endsAt: row.endsAt.toISOString() } } });
     if (input.operation === 'BOOK') await stopPendingWorkflowExecutions(tx, { leadId: lead.id, reason: 'APPOINTMENT_BOOKED', evidenceId: row.id });
+    await stopStaleWorkflowEnrollments(tx, lead.id);
     await auth.finish(); return row;
   }, { timeout: 30_000 });
+  if (saved.status === 'BOOKED') await captureWorkflowOperationalEventAfterCommit(db, { kind: 'APPOINTMENT_BOOKED',
+    leadId: saved.leadId, referenceId: saved.id, referenceVersion: saved.version });
+  return saved;
 }
 
 export async function synchronizeLeadAppointment(db: PrismaClient, claimed: AuthSession, id: string, provider: GoogleCalendarAdapter) {
@@ -143,5 +148,6 @@ export async function calendarFromSetterOutcome(tx: Prisma.TransactionClient, le
   if (['VIDEO_HELD', 'VIDEO_ABSENT'].includes(outcome)) {
     await tx.leadAppointment.update({ where: { id: current.id }, data: { status: outcome === 'VIDEO_HELD' ? 'COMPLETED' : 'CANCELLED',
       syncState: current.syncState === 'LOCAL' ? 'LOCAL' : 'PENDING', version: { increment: 1 }, updatedById: actorId } });
+    await stopStaleWorkflowEnrollments(tx, leadId);
   }
 }

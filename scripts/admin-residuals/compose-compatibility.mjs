@@ -138,6 +138,10 @@ for (let index = 0; index < queue.length; index++) {
 }
 const helper = 'src/lib/compatibility-writer-suspension.ts';
 const suspension = "export async function assertCompatibilityWriterSuspended(): Promise<void> {\n  throw new Error('ADMIN_RESIDUAL_WRITER_SUSPENDED_DURING_COMPATIBLE_RECOVERY');\n}\n";
+const workflowGateOff = "process.env.WORKFLOW_NATIVE_PREPARATION_MODE !== 'enabled'";
+const workflowGateOn = "process.env.WORKFLOW_NATIVE_PREPARATION_MODE === 'enabled'";
+const workflowSuspension = 'const workflowPreparationSuspended = () => true;\n';
+const workflowSuspendedModules = [];
 const temporary = mkdtempSync(join(tmpdir(), 'fai-admin-compat-index-'));
 try {
   const index = join(temporary, 'index'), env = { ...process.env, GIT_INDEX_FILE: index };
@@ -151,11 +155,6 @@ try {
   for (const path of [...overlay].sort()) {
     const original = read(path); let content = original;
     if (path === 'src/lib/shared-operational-mode.ts') content = 'export const sharedOperationalWritesEnabled = false;\n';
-    else if (path === 'src/lib/workflow-native-runner.ts') {
-      const gate = "process.env.WORKFLOW_NATIVE_PREPARATION_MODE !== 'enabled'";
-      assert(original.includes(gate), 'Native workflow gate must remain explicit');
-      content = 'const workflowPreparationSuspended = () => true;\n' + original.replaceAll(gate, 'workflowPreparationSuspended()');
-    }
     else if (path === 'src/app/settings/integrations/google-calendar/callback/route.ts') content = "export async function GET() { return new Response('Calendar connection suspended during compatible recovery', { status: 503 }); }\n";
     else if (omittedPages.includes(path)) content = "import { notFound } from 'next/navigation';\nexport default async function Page() { notFound(); }\n";
     else if (stoppedActions.includes(path)) {
@@ -176,6 +175,23 @@ try {
       content = "export function DriveVideoEditor(props: { id: string; current: unknown; people: unknown }) { void props; return <p>Gestione dei riferimenti Drive sospesa durante il recupero applicativo compatibile. Riferimenti e storico sono conservati; la lettura resta soggetta ai permessi correnti.</p>; }\n";
     } else if (path === 'src/components/drive-folder-editor.tsx') {
       content = "export function DriveFolderEditor(props: { id: string; current: unknown; people: unknown; clients: unknown; initialClientId?: string }) { void props; return <p>Gestione dei fascicoli Drive sospesa durante il recupero applicativo compatibile. Riferimenti e storico sono conservati; la lettura resta soggetta ai permessi correnti.</p>; }\n";
+    }
+    // Suspend every retained native preparation entry, including event capture
+    // and newsletter admission. Recovery must remain closed when the previous
+    // release environment still contains an enabled gate.
+    if (content.includes(workflowGateOff) || content.includes(workflowGateOn)) {
+      content = content.replaceAll(workflowGateOff, 'workflowPreparationSuspended()')
+        .replaceAll(workflowGateOn, '!workflowPreparationSuspended()');
+      const ast = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
+      let directiveEnd = 0;
+      for (const node of ast.statements) {
+        if (!ts.isExpressionStatement(node) || !ts.isStringLiteral(node.expression)) break;
+        directiveEnd = node.end;
+      }
+      content = directiveEnd ? content.slice(0, directiveEnd) + '\n' + workflowSuspension + content.slice(directiveEnd)
+        : workflowSuspension + content;
+      assert(!content.includes('process.env.WORKFLOW_NATIVE_PREPARATION_MODE'), 'Unqualified recovery gate in ' + path);
+      workflowSuspendedModules.push(path);
     }
     const omittedLink = path === 'src/app/clients/[id]/acquired-documents/page.tsx' ? 'Carica o ripristina una versione privata'
       : path === 'src/app/practice-readiness/page.tsx' ? 'Rettifica contratto, versione firmata e servizio collegato' : null;
@@ -208,9 +224,30 @@ try {
     'src/lib/shared-operational-context.ts', 'src/lib/shared-operational-notices.ts',
     'src/components/shared-operational-panel.tsx']) assert.equal(source(commit, path), source(candidate, path));
   assert.equal(source(commit, 'src/lib/shared-operational-mode.ts'), 'export const sharedOperationalWritesEnabled = false;\n');
-  const workflowRecovery = source(commit, 'src/lib/workflow-native-runner.ts');
-  assert(workflowRecovery.startsWith('const workflowPreparationSuspended = () => true;'));
-  assert(!workflowRecovery.includes("process.env.WORKFLOW_NATIVE_PREPARATION_MODE !== 'enabled'"));
+  assert(workflowSuspendedModules.includes('src/lib/workflow-native-runner.ts'));
+  for (const path of workflowSuspendedModules) {
+    const workflowRecovery = source(commit, path);
+    assert(workflowRecovery.includes(workflowSuspension));
+    assert(!workflowRecovery.includes('process.env.WORKFLOW_NATIVE_PREPARATION_MODE'));
+  }
+  for (const path of ['src/lib/workflow-operational-capture.ts', 'src/lib/workflow-newsletter-policy.ts', 'src/lib/workflow-newsletter-admission.ts']) {
+    if (candidateFiles.has(path)) assert(workflowSuspendedModules.includes(path), 'Missing recovery suspension for ' + path);
+  }
+  // Existing recipients must still be able to stop promotion while all sender
+  // preparation is suspended. Its separate gate and private credentials remain
+  // mandatory, and this route can persist suppression only.
+  const withdrawalRetained = candidateFiles.has('src/app/preferenze-email/route.ts');
+  if (withdrawalRetained) {
+    for (const path of ['src/app/preferenze-email/route.ts', 'src/lib/workflow-marketing-withdrawal.ts', 'src/middleware.ts']) {
+      assert.equal(source(commit, path), source(candidate, path));
+    }
+    const credentialBody = revision => {
+      const ast = ts.createSourceFile('policy.ts', source(revision, 'src/lib/workflow-newsletter-policy.ts'), ts.ScriptTarget.Latest, true);
+      const entry = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'readNewsletterWithdrawalCredential');
+      assert(entry?.body); return entry.body.getText(ast);
+    };
+    assert.equal(credentialBody(commit), credentialBody(candidate));
+  }
   const sharedActions = ts.createSourceFile('shared-actions.ts', source(commit, 'src/lib/shared-operational-actions.ts'), ts.ScriptTarget.Latest, true);
   const sharedEntries = sharedActions.statements.filter(node => ts.isFunctionDeclaration(node) && node.body
     && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword));
@@ -240,6 +277,8 @@ try {
     driveFolderReadersRetained: true, driveFolderWritersSuspendedServerSide: true,
     sharedOperationalReadersRetained: true, sharedOperationalWritersSuspendedServerSide: true,
     operationalFlowWritersSuspendedServerSide: true, calendarOAuthCallbackSuspended: true, nativeWorkflowCaptureSuspended: true,
+    workflowSuspendedModules,
+    marketingWithdrawalRetained: withdrawalRetained,
     authoritativeObservationWriterRetained: true, effectiveReconciledReceiptReadersRetained: true,
     originalSourceRowsRewritten: false, productionContact: false }));
 } finally {

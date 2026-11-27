@@ -215,6 +215,9 @@ CREATE TABLE "WorkflowNewsletterRun" (
 -- CreateTable
 CREATE TABLE "WorkflowNewsletterRecipient" (
     "id" UUID NOT NULL,
+    "nativeMessageId" UUID,
+    "nativeRevision" INTEGER,
+    "nativeSnapshotHash" CHAR(64),
     "runId" UUID NOT NULL,
     "leadId" TEXT NOT NULL,
     "state" VARCHAR(20) NOT NULL DEFAULT 'PENDING',
@@ -447,6 +450,11 @@ ALTER TABLE "WorkflowEmailTemplate" ADD CONSTRAINT workflow_template_valid CHECK
 ALTER TABLE "WorkflowAutomation" ADD CONSTRAINT workflow_automation_valid CHECK (version > 0 AND "delayMinutes" BETWEEN 1 AND 43200 AND state IN ('DRAFT','TEST_READY','ACTIVE'));
 ALTER TABLE "WorkflowExecution" ADD CONSTRAINT workflow_execution_valid CHECK ("attemptCount" >= 0 AND jsonb_typeof(history) = 'array');
 ALTER TABLE "WorkflowNewsletterRecipient" ADD CONSTRAINT workflow_newsletter_recipient_valid CHECK ("attemptCount" >= 0 AND jsonb_typeof(history) = 'array');
+CREATE UNIQUE INDEX "WorkflowNewsletterRecipient_nativeMessageId_key" ON "WorkflowNewsletterRecipient"("nativeMessageId");
+ALTER TABLE "WorkflowNewsletterRecipient" ADD CONSTRAINT "WorkflowNewsletterRecipient_nativeMessageId_fkey" FOREIGN KEY ("nativeMessageId") REFERENCES "ApprovedCommunication"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "WorkflowNewsletterRecipient" ADD CONSTRAINT workflow_newsletter_native_binding CHECK (
+  ("nativeMessageId" IS NULL AND "nativeRevision" IS NULL AND "nativeSnapshotHash" IS NULL AND state <> 'PREPARED') OR
+  (num_nulls("nativeMessageId","nativeRevision","nativeSnapshotHash")=0 AND "nativeMessageId" = id AND "nativeRevision" > 0 AND "nativeSnapshotHash" ~ '^[a-f0-9]{64}$'));
 CREATE FUNCTION fai_workflow_history_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE immutable text[];
 BEGIN
@@ -470,6 +478,13 @@ BEGIN
       RAISE EXCEPTION 'WORKFLOW_HISTORY_IMMUTABLE';
     END IF;
   END IF;
+  IF TG_TABLE_NAME='WorkflowNewsletterRecipient' THEN
+    IF OLD."nativeMessageId" IS NOT NULL AND
+      (NEW."nativeMessageId",NEW."nativeRevision",NEW."nativeSnapshotHash") IS DISTINCT FROM
+      (OLD."nativeMessageId",OLD."nativeRevision",OLD."nativeSnapshotHash") THEN
+      RAISE EXCEPTION 'WORKFLOW_NEWSLETTER_MESSAGE_IMMUTABLE';
+    END IF;
+  END IF;
   RETURN NEW;
 END;
 $$;
@@ -477,6 +492,18 @@ CREATE TRIGGER workflow_enrollment_guard BEFORE UPDATE OR DELETE ON "WorkflowEnr
 CREATE TRIGGER workflow_execution_guard BEFORE UPDATE OR DELETE ON "WorkflowExecution" FOR EACH ROW EXECUTE FUNCTION fai_workflow_history_guard();
 CREATE TRIGGER workflow_newsletter_run_guard BEFORE UPDATE OR DELETE ON "WorkflowNewsletterRun" FOR EACH ROW EXECUTE FUNCTION fai_workflow_history_guard();
 CREATE TRIGGER workflow_newsletter_recipient_guard BEFORE UPDATE OR DELETE ON "WorkflowNewsletterRecipient" FOR EACH ROW EXECUTE FUNCTION fai_workflow_history_guard();
+CREATE FUNCTION fai_workflow_newsletter_message_binding() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."nativeMessageId" IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM "WorkflowNewsletterRun" r JOIN "ApprovedCommunication" m ON m.id=NEW."nativeMessageId"
+      JOIN "CommunicationVersion" v ON v."messageId"=m.id AND v.revision=NEW."nativeRevision"
+    WHERE r.id=NEW."runId" AND NOT r.synthetic AND m."leadId"=NEW."leadId" AND v."snapshotHash"=NEW."nativeSnapshotHash"
+  ) THEN RAISE EXCEPTION 'WORKFLOW_NEWSLETTER_MESSAGE_BINDING_INVALID'; END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER workflow_newsletter_message_binding BEFORE INSERT OR UPDATE ON "WorkflowNewsletterRecipient"
+  FOR EACH ROW EXECUTE FUNCTION fai_workflow_newsletter_message_binding();
 CREATE TRIGGER workflow_enrollment_no_truncate BEFORE TRUNCATE ON "WorkflowEnrollment" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
 CREATE TRIGGER workflow_execution_no_truncate BEFORE TRUNCATE ON "WorkflowExecution" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
 CREATE TRIGGER workflow_newsletter_run_no_truncate BEFORE TRUNCATE ON "WorkflowNewsletterRun" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();

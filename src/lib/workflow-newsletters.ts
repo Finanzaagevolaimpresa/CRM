@@ -18,7 +18,7 @@ const history = (before: Prisma.JsonValue, event: object) => {
   return json([...before, event]);
 };
 const runState = (rows: ReadonlyArray<{ state: string }>) => rows.some(row => ['SENDING', 'UNCERTAIN'].includes(row.state)) ? 'UNCERTAIN'
-  : rows.some(row => row.state === 'PENDING') ? 'PENDING' : 'COMPLETED';
+  : rows.some(row => ['PENDING','PREPARED'].includes(row.state)) ? 'PENDING' : 'COMPLETED';
 async function transaction<T>(db: PrismaClient, operation: (tx: Tx) => Promise<T>) {
   // This wrapper contains DB work only. Transport invocation is outside it and
   // is never retried when a transaction or provider result is uncertain.
@@ -193,7 +193,8 @@ export async function reconcileWorkflowNewsletterRecipient(db: PrismaClient, ses
   return transaction(db, async tx => {
     const auth = await admin(tx, session);
     await tx.$queryRaw`SELECT id FROM "WorkflowNewsletterRecipient" WHERE id=${input.id}::uuid FOR UPDATE`;
-    const row = await tx.workflowNewsletterRecipient.findUniqueOrThrow({ where: { id: input.id } });
+    const row = await tx.workflowNewsletterRecipient.findUniqueOrThrow({ where: { id: input.id }, include: { run: true } });
+    if (!row.run.synthetic) throw new Error('NEWSLETTER_NATIVE_RECONCILIATION_REQUIRED');
     if (!(await recordUpdateContext(tx, 'LEAD', row.leadId)).canRead(auth.actor)) throw new Error('NEWSLETTER_DENIED');
     const previous = Array.isArray(row.history) && row.history.some(item => typeof item === 'object' && item !== null && !Array.isArray(item)
       && item.event === 'RECONCILED_' + input.outcome && item.evidence === input.evidence);

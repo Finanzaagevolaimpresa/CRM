@@ -61,7 +61,7 @@ jobs:
       - name: Role boundaries, unique receipts, preference races, calendar conflicts and PDF
         run: |
           set -euo pipefail
-          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/operational-documents/persistence.ts tests/operational-documents/delivery.ts tests/personal-calendar-db.test.ts tests/workflow/persistence.ts tests/workflow/native-preparation-persistence.ts tests/workflow/newsletter-persistence.ts tests/workflow/operational-events-persistence.ts tests/operational-flow/persistence.ts | tee "$FLOW_EVIDENCE/database.tap"
+          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/operational-documents/persistence.ts tests/operational-documents/delivery.ts tests/personal-calendar-db.test.ts tests/workflow/persistence.ts tests/workflow/native-preparation-persistence.ts tests/workflow/newsletter-persistence.ts tests/workflow/newsletter-native-persistence.ts tests/workflow/withdrawal-persistence.ts tests/workflow/operational-events-persistence.ts tests/workflow/operational-hooks-persistence.ts tests/operational-flow/persistence.ts | tee "$FLOW_EVIDENCE/database.tap"
           grep -qx '# fail 0' "$FLOW_EVIDENCE/database.tap"
           grep -qx '# cancelled 0' "$FLOW_EVIDENCE/database.tap"
           grep -qx '# skipped 0' "$FLOW_EVIDENCE/database.tap"

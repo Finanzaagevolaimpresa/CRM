@@ -2,6 +2,8 @@
 import { leadAssignees } from './lead-assignee';
 import { assertPipelineAppointmentUnchanged } from './personal-calendar';
 import { pipelineNextActionDate } from './personal-calendar-contract';
+import { captureWorkflowOperationalEventAfterCommit, recordWorkflowLeadStatusEvent } from './workflow-operational-capture';
+import { stopStaleWorkflowEnrollments } from './workflow-executions';
 import { assertTechnicalServerAction } from '@/lib/technical-server-guards';
 import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertCommercialOfferTermsPreserved } from './commercial-offer-history';
@@ -687,7 +689,7 @@ export async function updateLeadCommercial(form: FormData) {
   await requireActiveUser(nextAssignedToId);
   if (assignment !== undefined && s.role !== 'admin') denyManualAssignment();
   if (assignment !== undefined) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
-  return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
+  const result = await withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
     const { current, lead: before } = await lockLeadForMutation(tx, s, data.id, data.expectedVersion);
     const nextActionDate = pipelineNextActionDate(form.get('nextActionDate'), before.nextActionDate, form.get('nextActionTimezone'));
     await assertPipelineAppointmentUnchanged(tx, before, nextActionDate);
@@ -699,13 +701,20 @@ export async function updateLeadCommercial(form: FormData) {
     }
     const lead = await tx.lead.update({ where: { id: data.id, updatedAt: before.updatedAt, deletedAt: null }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate, nextAction: nextActionDate, notes: data.notes, commercialProposal: data.commercialProposal, updatedAt: nextConcurrencyTimestamp(before.updatedAt) } });
     const events = ['lead_update'];
-    if (before.status !== lead.status) events.push('lead_status_change');
     if (assignment !== undefined) events.push('lead_assign');
     await Promise.all(events.map((event) => audit(s.userId, event, 'Lead', lead.id, { before, after: lead }, tx)));
-    if (assignment !== undefined) await appendResponsibilityDecision(tx, { kind: 'Lead', id: lead.id, actorId: s.userId, allowed: true, reason: 'Assegnazione manuale amministrativa', state: { clientId: lead.clientId, projectId: null, clientServiceId: null, commercialOwnerId: lead.assignedToId, technicalOwnerId: null } });
+    const statusAudit = before.status !== lead.status ? await tx.auditLog.create({ data: { actorId: s.userId, event: 'lead_status_change',
+      entityType: 'Lead', entityId: lead.id, after: redactAuditPayload({ before, after: lead }) as Prisma.InputJsonValue } }) : null;
+    const statusSource = statusAudit ? await recordWorkflowLeadStatusEvent(tx, lead.id, statusAudit.id) : null;
+    const decision = assignment !== undefined ? await appendResponsibilityDecision(tx, { kind: 'Lead', id: lead.id, actorId: s.userId, allowed: true, reason: 'Assegnazione manuale amministrativa', state: { clientId: lead.clientId, projectId: null, clientServiceId: null, commercialOwnerId: lead.assignedToId, technicalOwnerId: null } }) : null;
+    if (decision || statusAudit) await stopStaleWorkflowEnrollments(tx, lead.id);
     await assertLeadActorLive(tx, current);
-    return lead;
+    return { lead, statusSource, decisionId: decision?.id };
   });
+  await captureWorkflowOperationalEventAfterCommit(prisma, result.statusSource);
+  if (result.decisionId && result.lead.assignedToId) await captureWorkflowOperationalEventAfterCommit(prisma,
+    { kind: 'ASSIGNMENT_CONFIRMED', leadId: result.lead.id, referenceId: result.decisionId, origin: 'RESPONSIBILITY' });
+  return result.lead;
 }
 
 export async function convertLeadToClient(form: FormData) {

@@ -1,5 +1,7 @@
 import { canAccessFinancialDocument } from './financial-document-access';
 import { assertWorkflowMessageAction, stopPendingWorkflowExecutions } from './workflow-executions';
+import { assertNewsletterMessageAction, denyManualNewsletterTransport } from './workflow-newsletter-admission';
+import type { NativeNewsletterPolicySource } from './workflow-newsletter-policy';
 import { captureInternalDisclosure, assertInternalDisclosureCurrent } from './internal-content-disclosure-db';
 import { selectedInternalDisclosure } from './internal-content-disclosure';
 import { assertOperationalAccess, readOperationalState, AdminOperationalStateError, type AdminOperationalModel, type OperationalStateRow } from './admin-operational-state';
@@ -39,7 +41,7 @@ type Tx = Prisma.TransactionClient;
 import { adminRequestDraftSource, admitAdminRequestDraft, linkAdminRequestDraft } from './admin-request-draft-source';
 import { requestDraftOrigin } from './admin-request-storage';
 import { isRequestUnavailable } from './admin-request-service';
-type Runtime = { readDocument?: typeof readPrivateDocumentBounded; failAudit?: boolean };
+type Runtime = { readDocument?: typeof readPrivateDocumentBounded; failAudit?: boolean; newsletterPolicySource?: NativeNewsletterPolicySource };
 const uuid = z.string().uuid(), identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const revision = z.number().int().positive();
 const digest = (value: Buffer) => createHash('sha256').update(value).digest('hex');
@@ -431,6 +433,7 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
   if (!hasPermission(current, 'practice_communications.read')) denied();
   const loaded = await messageScope(tx, current, messageId, true);
   await assertWorkflowMessageAction(tx, { messageId, revision: loaded.version.revision, snapshotHash: loaded.version.snapshotHash });
+  await assertNewsletterMessageAction(tx, { messageId, revision: loaded.version.revision, snapshotHash: loaded.version.snapshotHash }, runtime.newsletterPolicySource);
   await revalidateSnapshotRecipients(tx, loaded.scope, loaded.snapshot);
   if (selectedInternalDisclosure(loaded.snapshot) && (!loaded.version.approval
     || loaded.version.approval.snapshotHash !== loaded.version.snapshotHash)) throw new ApprovedCommunicationError('CONTENT_APPROVAL_REQUIRED');
@@ -522,6 +525,8 @@ export async function saveApprovedMessageDraftInTransaction(tx: Tx, claimed: Aut
       const prior = await messageScope(tx, current, input.messageId, true, false);
       await assertWorkflowMessageAction(tx, { messageId: input.messageId, revision: prior.version.revision,
         snapshotHash: prior.version.snapshotHash, edit: true });
+      await assertNewsletterMessageAction(tx, { messageId: input.messageId, revision: prior.version.revision,
+        snapshotHash: prior.version.snapshotHash, edit: true }, runtime.newsletterPolicySource);
       if (prior.row.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(prior.row.state)
         || canonicalSha256(rowContext(prior.row)) !== canonicalSha256(input.context)) conflict();
       if ((prior.box.restricted && !box.restricted)
@@ -594,12 +599,13 @@ export async function admitAdminDraftTarget(tx: Tx, claimed: AuthSession, contex
 }
 
 const transitionSchema = z.object({ messageId: uuid, expectedRevision: revision, snapshotHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-export async function submitApprovedMessage(db: Db, claimed: AuthSession, raw: unknown) {
+export async function submitApprovedMessage(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parse(transitionSchema, raw);
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'practice_communications.write');
     const { row, version, updateUntil } = await messageScope(tx, current, input.messageId, true);
     await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
+    await assertNewsletterMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash }, runtime.newsletterPolicySource);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['DRAFT', 'PENDING'].includes(row.state)) conflict();
     if (row.state === 'PENDING') { await assertCurrentClock(tx, current, expiryDate(updateUntil)); return; }
     await tx.approvedCommunication.update({ where: { id: row.id }, data: { state: 'PENDING' } });
@@ -614,6 +620,7 @@ export async function approveExactMessage(db: Db, claimed: AuthSession, raw: unk
     const current = await actor(tx, claimed, 'practice_communications.read', true);
     const { row, version, snapshot, scope, box, updateUntil } = await messageScope(tx, current, input.messageId, true);
     await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
+    await assertNewsletterMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash }, runtime.newsletterPolicySource);
     await revalidateSnapshotRecipients(tx, scope, snapshot);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['PENDING', 'APPROVED'].includes(row.state)) conflict();
     if (scope.leadLifecycle && scope.leadLifecycle.createdAt >= version.createdAt) conflict();
@@ -638,6 +645,7 @@ export async function prepareManualMessage(db: Db, claimed: AuthSession, raw: un
     const current = await actor(tx, claimed, 'practice_communications.mark_used');
     const { row, version, snapshot, scope, box, updateUntil } = await messageScope(tx, current, input.messageId, true);
     await assertWorkflowMessageAction(tx, { messageId: row.id, revision: version.revision, snapshotHash: version.snapshotHash });
+    await denyManualNewsletterTransport(tx, row.id);
     await revalidateSnapshotRecipients(tx, scope, snapshot);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !version.approval) conflict();
     const approval = version.approval;

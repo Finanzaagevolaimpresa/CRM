@@ -6,6 +6,7 @@ import { canonicalSha256 } from './canonical-json';
 import { updateActor, type UpdateCredentials } from './record-updates';
 import { recordUpdatePermission } from './record-update-context';
 import { leadVisibilityWhere } from './core-query-policy';
+import { readNativeNewsletterPolicy } from './workflow-newsletter-policy';
 import {
   SyntheticWorkflowRun, workflowConfiguration, workflowRuleInput, workflowTemplateInput,
   type WorkflowRule, type WorkflowTemplate, type SyntheticWorkflowEvent,
@@ -33,13 +34,19 @@ export async function readWorkflowAdministration(db: Db, session: AuthSession) {
       tx.workflowNewsletterRun.findMany({ orderBy: { createdAt: 'desc' }, take: 100,
         select: { id: true, automationId: true, automationVersion: true, synthetic: true, state: true, scheduledAt: true, createdAt: true,
           recipients: { where: { lead: { deletedAt: null, AND: [leadVisibilityWhere(auth.actor)] } },
-            select: { id: true, state: true, attemptCount: true, policySnapshot: true,
+            select: { id: true, state: true, attemptCount: true, policySnapshot: true, nativeMessageId: true,
               lead: { select: { companyName: true, firstName: true, lastName: true } } } } } }),
       tx.communicationMailbox.findMany({ where: { canSend: true, restricted: false }, select: { id: true, address: true }, orderBy: { address: 'asc' } }),
       tx.auditLog.findMany({ where: { event: { in: ['workflow_capture_held', 'workflow_preparation_held'] } }, select: { id: true, event: true, entityType: true, after: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 100 }),
     ]);
+    let nativeNewsletterReady = false;
+    try {
+      const policy = await readNativeNewsletterPolicy(await auth.finish());
+      const epochs = await tx.$queryRaw<Array<{ epoch: string }>>`SELECT epoch FROM "MarketingPreferenceEpoch" WHERE singleton=true AND reconciled=true`;
+      nativeNewsletterReady = epochs[0]?.epoch === policy.readiness.epoch;
+    } catch { /* Optional capability stays unavailable; no credentials leave the server. */ }
     await auth.finish();
-    return { templates, rules: rules.map(rule => ({ ...rule, configuration: workflowConfiguration.parse(rule.configuration) })), tests, people, newsletterRuns, mailboxes, holds };
+    return { templates, rules: rules.map(rule => ({ ...rule, configuration: workflowConfiguration.parse(rule.configuration) })), tests, people, newsletterRuns, mailboxes, holds, nativeNewsletterReady };
   }, { timeout: 30_000 });
 }
 
