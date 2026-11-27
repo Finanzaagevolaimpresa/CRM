@@ -14,6 +14,9 @@ import { previewDriveFolder, confirmDriveFolder } from '../../src/lib/drive-fold
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
 import { canAccessFinancialDocument } from '../../src/lib/financial-document-access';
 import { proformaGenerationDeliveryNotice, renderOperationalProformaPdf } from '../../src/lib/operational-document-pdf';
+import { convertUnlinkedLeadToClient } from '../../src/lib/lead-client-access';
+import { romeDateTimeInput } from '../../src/lib/rome-date-time';
+import { actualArchiveAction, DocumentActionRedirect } from './action-harness';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled };
 let f: Awaited<ReturnType<typeof documentFixture>>, previousAuthority: OrdinaryEmailAuthority | null, mailboxId: string;
@@ -36,11 +39,11 @@ after(async () => {
   }
   await db.$disconnect();
 });
-async function proforma(confirm = true) {
-  const contract = await f.create(), source = await readOperationalDocument(db, f.owner.session, contract.id);
-  await confirmOperationalDocument(db, f.owner.session, { commandId: randomUUID(), documentId: contract.id, contentHash: source.row.contentHash, confirmed: true });
-  const made = await createOperationalProforma(db, f.owner.session, { commandId: randomUUID(), documentId: contract.id, contentHash: source.row.contentHash,
-    templateCommandId: f.proformaPublication.commandId, dueDate: '2027-04-30', confirmed: true });
+async function proforma(confirm = true, fixture = f) {
+  const contract = await fixture.create(), source = await readOperationalDocument(db, fixture.owner.session, contract.id);
+  await confirmOperationalDocument(db, fixture.owner.session, { commandId: randomUUID(), documentId: contract.id, contentHash: source.row.contentHash, confirmed: true });
+  const made = await createOperationalProforma(db, fixture.owner.session, { commandId: randomUUID(), documentId: contract.id, contentHash: source.row.contentHash,
+    templateCommandId: fixture.proformaPublication.commandId, dueDate: '2027-04-30', confirmed: true });
   const data = await readOperationalDocument(db, f.admin.session, made.id);
   if (confirm) await confirmOperationalDocument(db, f.admin.session, { commandId: randomUUID(), documentId: made.id, contentHash: data.row.contentHash, confirmed: true });
   return data;
@@ -118,4 +121,66 @@ test('archivio Drive richiede hash, cartella del cliente ed evidenza; il link re
   const preview = await previewDriveFolder(db, f.admin.session, disable);
   await confirmDriveFolder(db, f.admin.session, disable, preview.digest, clientProof(f.admin));
   assert.equal((await readOperationalDocumentDelivery(db, f.admin.session, data.row.id)).archives.length, 0);
+});
+
+test('proforma precedente alla conversione nativa prepara bozza e archivio per il medesimo cliente senza cambiare PDF', options, async () => {
+  const leadCase = await documentFixture(db, undefined, { unlinked: true }), data = await proforma(true, leadCase);
+  const bytes = renderOperationalProformaPdf(data.row);
+  assert.equal(data.row.clientId, null);
+  await assert.rejects(prepareOperationalProformaEmail(db, f.admin.session, emailInput(data.row), clientProof(f.admin)), /DENIED/);
+  const converted = await convertUnlinkedLeadToClient(db, leadCase.owner.session, { id: leadCase.lead.id, type: 'societa', expectedVersion: leadCase.lead.updatedAt.toISOString() });
+  assert(converted);
+  const first = await prepareOperationalProformaEmail(db, f.admin.session, emailInput(data.row), clientProof(f.admin));
+  const message = await db.approvedCommunication.findUniqueOrThrow({ where: { id: first.messageId }, include: { versions: true } });
+  assert.equal(message.clientId, converted.id); assert.equal(message.state, 'DRAFT');
+  const attachment = (message.versions[0].snapshot as { attachments: { documentId: string }[] }).attachments[0];
+  const document = await db.document.findUniqueOrThrow({ where: { id: attachment.documentId } });
+  assert.equal(document.clientId, converted.id);
+  assert(bytes.equals(await readPrivateDocumentBounded(document.storagePath, 5_000_000)));
+  const view = await readOperationalDocumentDelivery(db, f.admin.session, data.row.id);
+  assert.equal(view.email?.native?.state, 'DRAFT');
+  await recordOperationalProformaArchive(db, f.admin.session, { commandId: randomUUID(), documentId: data.row.id,
+    contentHash: data.row.contentHash, confirmed: true, folderId: await folder(converted.id),
+    fileUrl: 'https://drive.google.com/file/d/synthetic_converted_' + randomUUID().replaceAll('-', '') + '/view', pdfSha256: view.pdfSha256,
+    evidence: 'Evidenza sintetica sul cliente nato dal medesimo lead; nessun upload.', occurredAt: new Date(Date.now() - 1000).toISOString(), folderMembershipConfirmed: true, accessConfirmed: true }, clientProof(f.admin));
+  assert.equal((await readOperationalDocumentDelivery(db, f.admin.session, data.row.id)).archives.length, 1);
+  assert.deepEqual((await readOperationalDocument(db, f.admin.session, data.row.id)).row, data.row);
+  assert.equal(await db.communicationAttempt.count({ where: { messageId: first.messageId } }), 0);
+  assert.equal(await db.ordinaryEmailAttempt.count({ where: { messageId: first.messageId } }), 0);
+});
+
+test('azione archivio con server UTC persiste ora Roma invernale/estiva/DST e appena trascorsa, rifiuta futuro e gap senza scritture', options, async () => {
+  const data = await proforma(), folderId = await folder(f.client.id), view = await readOperationalDocumentDelivery(db, f.admin.session, data.row.id);
+  const action = actualArchiveAction(db, f.admin.session, clientProof(f.admin)), previousZone = process.env.TZ;
+  const justOccurred = new Date(Math.floor((Date.now() - 60_000) / 1000) * 1000).toISOString();
+  const base = { documentId: data.row.id, contentHash: data.row.contentHash, confirmed: 'on', folderId, pdfSha256: view.pdfSha256,
+    evidence: 'Evidenza sintetica di data e hash del PDF, senza accesso al provider.', folderMembershipConfirmed: 'on', accessConfirmed: 'on', occurredAtTimeZone: 'Europe/Rome' };
+  function command(local: string, choice = '') {
+    const form = new FormData();
+    for (const [key, value] of Object.entries({ ...base, commandId: randomUUID(), occurredAt: local, occurredAtInstant: choice,
+      fileUrl: 'https://drive.google.com/file/d/synthetic_time_' + randomUUID().replaceAll('-', '') + '/view' })) form.set(key, value);
+    return form;
+  }
+  try {
+    process.env.TZ = 'UTC';
+    for (const [local, choice, expected] of [
+      ['2025-01-07T10:00', '', '2025-01-07T09:00:00.000Z'], ['2025-07-07T10:00', '', '2025-07-07T08:00:00.000Z'],
+      ['2025-10-26T02:30', '2025-10-26T00:30:00.000Z', '2025-10-26T00:30:00.000Z'],
+      ['2025-10-26T02:30', '2025-10-26T01:30:00.000Z', '2025-10-26T01:30:00.000Z'],
+      [romeDateTimeInput(justOccurred), justOccurred, justOccurred],
+    ]) {
+      const form = command(local, choice);
+      await assert.rejects(action({ error: null }, form), DocumentActionRedirect);
+      const saved = (await readOperationalDocumentDelivery(db, f.admin.session, data.row.id)).archives.find(row => row.commandId === form.get('commandId'));
+      assert(saved); assert.equal(saved.occurredAt, expected);
+    }
+    const history = await db.adminRecordRevision.findMany({ where: { model: 'OperationalDocumentDelivery', recordId: data.row.id }, orderBy: { commandId: 'asc' } });
+    assert.equal(history.length, 5);
+    for (const form of [command('2025-03-30T02:30'), command('2025-10-26T02:30'),
+      command(romeDateTimeInput(new Date(Date.now() + 300_000)))]) {
+      assert((await action({ error: null }, form)).error);
+      assert.deepEqual(await db.adminRecordRevision.findMany({ where: { model: 'OperationalDocumentDelivery', recordId: data.row.id }, orderBy: { commandId: 'asc' } }), history);
+    }
+    assert.equal((await readOperationalDocumentDelivery(db, f.admin.session, data.row.id)).archives.length, 5);
+  } finally { if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone; }
 });

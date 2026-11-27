@@ -138,8 +138,11 @@ for (let index = 0; index < queue.length; index++) {
 }
 const helper = 'src/lib/compatibility-writer-suspension.ts';
 const suspension = "export async function assertCompatibilityWriterSuspended(): Promise<void> {\n  throw new Error('ADMIN_RESIDUAL_WRITER_SUSPENDED_DURING_COMPATIBLE_RECOVERY');\n}\n";
-const workflowGateOff = "process.env.WORKFLOW_NATIVE_PREPARATION_MODE !== 'enabled'";
-const workflowGateOn = "process.env.WORKFLOW_NATIVE_PREPARATION_MODE === 'enabled'";
+const workflowGates = ['WORKFLOW_NATIVE_PREPARATION_MODE', 'WORKFLOW_SERVICE_EXECUTION_MODE'].map(name => ({
+  reference: 'process.env.' + name,
+  off: "process.env." + name + " !== 'enabled'",
+  on: "process.env." + name + " === 'enabled'",
+}));
 const workflowSuspension = 'const workflowPreparationSuspended = () => true;\n';
 const workflowSuspendedModules = [];
 const temporary = mkdtempSync(join(tmpdir(), 'fai-admin-compat-index-'));
@@ -176,12 +179,17 @@ try {
     } else if (path === 'src/components/drive-folder-editor.tsx') {
       content = "export function DriveFolderEditor(props: { id: string; current: unknown; people: unknown; clients: unknown; initialClientId?: string }) { void props; return <p>Gestione dei fascicoli Drive sospesa durante il recupero applicativo compatibile. Riferimenti e storico sono conservati; la lettura resta soggetta ai permessi correnti.</p>; }\n";
     }
-    // Suspend every retained native preparation entry, including event capture
-    // and newsletter admission. Recovery must remain closed when the previous
-    // release environment still contains an enabled gate.
-    if (path.startsWith('src/') && (content.includes(workflowGateOff) || content.includes(workflowGateOn))) {
-      content = content.replaceAll(workflowGateOff, 'workflowPreparationSuspended()')
-        .replaceAll(workflowGateOn, '!workflowPreparationSuspended()');
+    // Suspend preparation and delegated execution, including event capture and
+    // newsletter admission. Recovery remains closed even if the previous release
+    // environment and its execution grant still contain enabled authority.
+    if (path.startsWith('src/') && workflowGates.some(gate => content.includes(gate.reference))) {
+      for (const gate of workflowGates) {
+        if (!content.includes(gate.reference)) continue;
+        assert(content.includes(gate.off) || content.includes(gate.on), 'Unqualified recovery gate in ' + path);
+        content = content.replaceAll(gate.off, 'workflowPreparationSuspended()')
+          .replaceAll(gate.on, '!workflowPreparationSuspended()');
+        assert(!content.includes(gate.reference), 'Unqualified recovery gate in ' + path);
+      }
       const ast = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
       let directiveEnd = 0;
       for (const node of ast.statements) {
@@ -190,7 +198,6 @@ try {
       }
       content = directiveEnd ? content.slice(0, directiveEnd) + '\n' + workflowSuspension + content.slice(directiveEnd)
         : workflowSuspension + content;
-      assert(!content.includes('process.env.WORKFLOW_NATIVE_PREPARATION_MODE'), 'Unqualified recovery gate in ' + path);
       workflowSuspendedModules.push(path);
     }
     const omittedLink = path === 'src/app/clients/[id]/acquired-documents/page.tsx' ? 'Carica o ripristina una versione privata'
@@ -228,7 +235,7 @@ try {
   for (const path of workflowSuspendedModules) {
     const workflowRecovery = source(commit, path);
     assert(workflowRecovery.includes(workflowSuspension));
-    assert(!workflowRecovery.includes('process.env.WORKFLOW_NATIVE_PREPARATION_MODE'));
+    for (const gate of workflowGates) assert(!workflowRecovery.includes(gate.reference));
   }
   for (const path of ['src/lib/workflow-operational-capture.ts', 'src/lib/workflow-newsletter-policy.ts', 'src/lib/workflow-newsletter-admission.ts']) {
     if (candidateFiles.has(path)) assert(workflowSuspendedModules.includes(path), 'Missing recovery suspension for ' + path);

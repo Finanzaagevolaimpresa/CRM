@@ -189,6 +189,7 @@ export async function createOperationalDocument(db: PrismaClient, claimed: AuthS
     const existing = await tx.operationalDocument.findUnique({ where: { id: input.commandId } });
     if (existing) {
       await context(tx, auth, input.context);
+      await readableDocument(tx, auth, existing.id);
       if (existing.actorId !== auth.actor.id || existing.sessionId !== auth.registry.id || existing.requestHash !== hash(input)) deny();
       await auth.finish(); return { id: existing.id, replay: true };
     }
@@ -217,7 +218,12 @@ async function readableDocument(tx: Tx, auth: Authority, id: string) {
   const row = await tx.operationalDocument.findUnique({ where: { id } });
   if (!row || !row.leadId && !row.clientId) deny();
   const current = await context(tx, auth, row.leadId ? { leadId: row.leadId } : { clientId: row.clientId! });
-  if ((current.client?.id ?? null) !== row.clientId) deny();
+  // Native conversion records both directions in one transaction. A document
+  // made before conversion keeps its original, immutable context; only the
+  // client whose unique origin is this same lead may continue that history.
+  // Arbitrary links and moves from an already bound client remain denied.
+  if ((current.client?.id ?? null) !== row.clientId
+    && !(row.clientId === null && row.leadId && current.client?.leadId === row.leadId)) deny();
   if (row.contractId) {
     if (!recordUpdatePermission(auth.actor, 'contract.read')) deny();
     await guardProjectResources(tx, auth.actor.id, [{ clientId: row.clientId, contractId: row.contractId }]);
@@ -228,7 +234,7 @@ async function readableDocument(tx: Tx, auth: Authority, id: string) {
     || snapshot.companySourceIds?.some(id => auth.actor.selectiveClientCompanyIds.includes(id))
     || snapshot.signerSourceIds?.some(id => auth.actor.selectiveClientPersonIds.includes(id))
     || snapshot.usesPaymentSchedule && !recordUpdatePermission(auth.actor, 'payment.read')) deny();
-  return { row, snapshot };
+  return { row, snapshot, clientId: current.client?.id ?? null };
 }
 /** Compose ancillary document work under the same live role, source and session checks. */
 export async function admitOperationalDocumentInTransaction(tx: Tx, claimed: AuthSession, id: string, manage = false, proof?: UpdateCredentials) {
@@ -237,11 +243,11 @@ export async function admitOperationalDocumentInTransaction(tx: Tx, claimed: Aut
 }
 export async function readOperationalDocument(db: PrismaClient, claimed: AuthSession, id: string) {
   return withSerializableTransaction(db, async tx => {
-    const auth = await authority(tx, claimed), { row, snapshot } = await readableDocument(tx, auth, id);
+    const auth = await authority(tx, claimed), { row, snapshot, clientId } = await readableDocument(tx, auth, id);
     const decision = await tx.operationalDocumentDecision.findUnique({ where: { documentId: row.id } });
     const proformas = await tx.operationalDocument.findMany({ where: { sourceDocumentId: row.id }, select: { id: true, dueDate: true, createdAt: true }, orderBy: { createdAt: 'asc' } });
     const authors = await tx.user.findMany({ where: { id: { in: [row.actorId, ...(decision ? [decision.actorId] : [])] } }, select: { id: true, name: true } });
-    await auth.finish(); return { row, snapshot, decision, proformas, authors };
+    await auth.finish(); return { row, snapshot, clientId, decision, proformas, authors };
   });
 }
 export async function confirmOperationalDocument(db: PrismaClient, claimed: AuthSession, raw: unknown) {
@@ -309,8 +315,19 @@ export async function operationalDocumentOptions(db: PrismaClient, claimed: Auth
       if (contract.projectId && (!project || project.deletedAt || !c.client || !canViewProject(auth.actor, { ...project, client: c.client }))) continue;
       admittedContracts.push({ id: contract.id, label: contract.contractNumber + ' · ' + contract.serviceName });
     }
-    const documents = await tx.operationalDocument.findMany({ where: c.lead ? { leadId: c.lead.id, clientId: c.client?.id ?? null } : { clientId: c.client!.id, leadId: null },
+    const candidates = await tx.operationalDocument.findMany({ where: c.lead ? { leadId: c.lead.id } : { OR: [
+      { clientId: c.client!.id }, ...(c.client!.leadId ? [{ leadId: c.client!.leadId, clientId: null }] : []),
+    ] },
       select: { id: true, kind: true, createdAt: true }, orderBy: { createdAt: 'desc' } });
+    const documents = [];
+    for (const item of candidates) {
+      try {
+        const admitted = await readableDocument(tx, auth, item.id);
+        if (admitted.clientId === (c.client?.id ?? null)) documents.push(item);
+      } catch (error) {
+        if (!(error instanceof OperationalDocumentError && error.code === 'DENIED')) throw error;
+      }
+    }
     await auth.finish(); return { title: c.lead?.companyName || (c.lead ? `${c.lead.firstName} ${c.lead.lastName}` : c.client!.displayName),
       clientId: c.client?.id ?? null, candidates: c.candidates, services: services.map(row => ({ id: row.id, label: row.publicName + ' · EUR ' + row.netPrice!.toFixed(2) })), contracts: admittedContracts, documents };
   });

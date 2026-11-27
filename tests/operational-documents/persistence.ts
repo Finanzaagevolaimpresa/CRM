@@ -10,6 +10,8 @@ import { confirmOperationalDocument, createOperationalDocument, createOperationa
 import { renderOperationalPdf } from '../../src/lib/operational-document-pdf';
 import { revokeInternalSession } from '../../src/lib/internal-session-registry';
 import { emptyDocumentCandidates, resolveDocumentFields } from '../../src/lib/operational-document-contract';
+import { convertUnlinkedLeadToClient } from '../../src/lib/lead-client-access';
+import { actualDocumentPdfRoute } from './action-harness';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled };
 before(async () => { if (enabled) await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
@@ -88,6 +90,71 @@ test('cambio di cliente del lead non espone lo snapshot del precedente cliente',
   const nextClient = await db.client.create({ data: { type: 'societa', displayName: 'Altro cliente sintetico', salesOwnerId: f.owner.user.id } });
   await db.lead.update({ where: { id: f.lead.id }, data: { clientId: nextClient.id } });
   await assert.rejects(readOperationalDocument(db, f.owner.session, draft.id));
+});
+
+test('conversione nativa mantiene elenco cliente, storia e PDF esatti del lead e prosegue la proforma senza riscrivere snapshot', options, async () => {
+  const f = await documentFixture(db, undefined, { unlinked: true }), draft = await f.create();
+  const created = await readOperationalDocument(db, f.owner.session, draft.id);
+  await confirmOperationalDocument(db, f.owner.session, { commandId: randomUUID(), documentId: draft.id, contentHash: created.row.contentHash, confirmed: true });
+  const input = { commandId: randomUUID(), documentId: draft.id, contentHash: created.row.contentHash,
+    templateCommandId: f.proformaPublication.commandId, dueDate: '2027-05-31', confirmed: true };
+  const prepared = await createOperationalProforma(db, f.owner.session, input);
+  const before = await readOperationalDocument(db, f.owner.session, draft.id), oldProforma = await readOperationalDocument(db, f.owner.session, prepared.id);
+  const route = actualDocumentPdfRoute(db, f.owner.session), pdfBefore = await route(draft.id), proformaBefore = await route(prepared.id);
+  assert.equal(pdfBefore.status, 200); assert.equal(proformaBefore.status, 200);
+  const pdfBytes = Buffer.from(await pdfBefore.arrayBuffer()), proformaBytes = Buffer.from(await proformaBefore.arrayBuffer());
+  const converted = await convertUnlinkedLeadToClient(db, f.owner.session, { id: f.lead.id, expectedVersion: f.lead.updatedAt.toISOString(), type: 'societa' });
+  assert(converted);
+  const client = await db.client.findUniqueOrThrow({ where: { id: converted.id } });
+  assert.equal(client.leadId, f.lead.id); assert.equal((await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } })).clientId, client.id);
+  const after = await readOperationalDocument(db, f.owner.session, draft.id), afterProforma = await readOperationalDocument(db, f.owner.session, prepared.id);
+  assert.equal(after.clientId, client.id); assert.equal(after.row.clientId, null);
+  assert.deepEqual(after.row, before.row); assert.deepEqual(after.snapshot, before.snapshot);
+  assert.deepEqual(after.decision, before.decision); assert.deepEqual(after.authors, before.authors); assert.deepEqual(after.proformas, before.proformas);
+  assert.deepEqual(afterProforma.row, oldProforma.row); assert.deepEqual(afterProforma.snapshot, oldProforma.snapshot);
+  for (const context of [{ leadId: f.lead.id }, { clientId: client.id }]) {
+    const ids = (await operationalDocumentOptions(db, f.owner.session, context)).documents.map(row => row.id);
+    assert(ids.includes(draft.id)); assert(ids.includes(prepared.id));
+  }
+  assert(pdfBytes.equals(Buffer.from(await (await route(draft.id)).arrayBuffer())));
+  assert(proformaBytes.equals(Buffer.from(await (await route(prepared.id)).arrayBuffer())));
+  assert.deepEqual(await createOperationalProforma(db, f.owner.session, { ...input, commandId: randomUUID() }), { id: prepared.id, replay: true });
+  const next = await createOperationalProforma(db, f.owner.session, { ...input, commandId: randomUUID(), dueDate: '2027-06-30' });
+  assert.equal((await readOperationalDocument(db, f.owner.session, next.id)).clientId, client.id);
+  assert((await operationalDocumentOptions(db, f.owner.session, { clientId: client.id })).documents.some(row => row.id === next.id));
+
+  await assert.rejects(readOperationalDocument(db, f.other.session, draft.id), /DENIED/);
+  await assert.rejects(readOperationalDocument(db, f.technical.session, draft.id), /DENIED/);
+  assert.equal((await actualDocumentPdfRoute(db, f.other.session)(prepared.id)).status, 404);
+  const denied = await db.userPermissionOverride.create({ data: { userId: f.owner.user.id, permission: 'client.read', allowed: false } });
+  await assert.rejects(readOperationalDocument(db, f.owner.session, draft.id), /DENIED/);
+  await assert.rejects(operationalDocumentOptions(db, f.owner.session, { clientId: client.id }), /DENIED/);
+  assert.equal((await route(prepared.id)).status, 404);
+  await db.userPermissionOverride.update({ where: { id: denied.id }, data: { allowed: true } });
+  await db.lead.update({ where: { id: f.lead.id }, data: { assignedToId: f.other.user.id } });
+  assert.equal((await route(draft.id)).status, 404);
+  assert.equal((await operationalDocumentOptions(db, f.owner.session, { clientId: client.id })).documents.length, 0);
+  await db.lead.update({ where: { id: f.lead.id }, data: { assignedToId: f.owner.user.id, clientId: f.client.id } });
+  await assert.rejects(readOperationalDocument(db, f.owner.session, draft.id), /DENIED/);
+  assert.equal((await operationalDocumentOptions(db, f.owner.session, { clientId: client.id })).documents.length, 0);
+  assert.equal((await operationalDocumentOptions(db, f.owner.session, { clientId: f.client.id })).documents.length, 0);
+  await db.lead.update({ where: { id: f.lead.id }, data: { clientId: client.id } });
+  await db.$transaction(tx => revokeInternalSession(tx, f.owner.session.sessionId!, 'INTERNAL_SINGLE', f.admin.user.id));
+  assert.equal((await route(draft.id)).status, 404);
+  assert.deepEqual(await db.operationalDocument.findUniqueOrThrow({ where: { id: draft.id } }), before.row);
+});
+
+test('collegare arbitrariamente il lead a un cliente autorizzato con origine nulla o diversa non trasferisce i documenti', options, async () => {
+  const f = await documentFixture(db, undefined, { unlinked: true }), draft = await f.create();
+  const anotherLead = await db.lead.create({ data: { firstName: 'Origine', lastName: 'Diversa sintetica', assignedToId: f.owner.user.id } });
+  for (const leadId of [null, anotherLead.id]) {
+    await db.client.update({ where: { id: f.client.id }, data: { leadId } });
+    await db.lead.update({ where: { id: f.lead.id }, data: { clientId: f.client.id } });
+    await assert.rejects(readOperationalDocument(db, f.owner.session, draft.id), /DENIED/);
+    assert.equal((await actualDocumentPdfRoute(db, f.owner.session)(draft.id)).status, 404);
+    assert.equal((await operationalDocumentOptions(db, f.owner.session, { leadId: f.lead.id })).documents.length, 0);
+    assert.equal((await operationalDocumentOptions(db, f.owner.session, { clientId: f.client.id })).documents.length, 0);
+  }
 });
 test('modello ripubblicato invalida anteprima ma preserva la bozza precedente', options, async () => {
   const f = await documentFixture(db), draft = await f.create(), input = await f.input();

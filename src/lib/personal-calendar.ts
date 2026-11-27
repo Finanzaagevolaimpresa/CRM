@@ -6,7 +6,7 @@ import { isTechnicalAccount } from './technical-confidentiality';
 import { currentRecordUpdateUser, recordUpdatePermission } from './record-update-context';
 import { updateActor } from './record-updates';
 import { nextConcurrencyTimestamp, withSerializableTransaction } from './serializable';
-import { appointmentCommandSchema, appointmentInterval, availabilitySchema, CalendarError, intervalsOverlap, withinAvailability } from './personal-calendar-contract';
+import { appointmentCommandSchema, appointmentInterval, availabilitySchema, CalendarError, intervalsOverlap, withinAvailability, assertVideoNextActionUnchanged } from './personal-calendar-contract';
 import type { GoogleCalendarAdapter } from './google-calendar-adapter';
 import { stopPendingWorkflowExecutions, stopStaleWorkflowEnrollments } from './workflow-executions';
 import { captureWorkflowOperationalEventAfterCommit } from './workflow-operational-capture';
@@ -37,9 +37,34 @@ export async function listBookableCalendars(db: PrismaClient, claimed: AuthSessi
 }
 
 export async function saveLeadAppointment(db: PrismaClient, claimed: AuthSession, raw: unknown, provider?: GoogleCalendarAdapter) {
-  const input = appointmentCommandSchema.parse(raw);
   const saved = await withSerializableTransaction(db, async tx => {
     const auth = await updateActor(tx, claimed);
+    return saveLeadAppointmentInTransaction(tx, auth, raw, provider);
+  }, { timeout: 30_000 });
+  await captureSavedAppointment(db, saved);
+  return saved;
+}
+
+/** Every entry point takes this lock before the Lead lock. A callback that
+ * completes/cancels an existing appointment follows the same ordering. */
+export async function lockAppointmentCalendar(tx: Prisma.TransactionClient, leadId: string, requestedCalendarId?: string) {
+  const current = await tx.leadAppointment.findUnique({ where: { leadId }, select: { calendarId: true } });
+  const calendarId = requestedCalendarId ?? current?.calendarId ?? null;
+  if (calendarId) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'fai-calendar:' + calendarId}, 0))`;
+  return calendarId;
+}
+
+export async function captureSavedAppointment(db: PrismaClient, saved: { id: string; leadId: string; version: number; status: string } | null) {
+  if (saved?.status === 'BOOKED') await captureWorkflowOperationalEventAfterCommit(db, { kind: 'APPOINTMENT_BOOKED',
+    leadId: saved.leadId, referenceId: saved.id, referenceVersion: saved.version });
+}
+
+/** The caller supplies authority revalidated from the actual registered session.
+ * This is the single reservation command; callers may include their interaction
+ * receipt in the same transaction. It never writes to Google. */
+export async function saveLeadAppointmentInTransaction(tx: Prisma.TransactionClient,
+  auth: Pick<Awaited<ReturnType<typeof updateActor>>, 'actor' | 'finish'>, raw: unknown, provider?: GoogleCalendarAdapter) {
+    const input = appointmentCommandSchema.parse(raw);
     if (isTechnicalAccount(auth.actor) || !recordUpdatePermission(auth.actor, 'lead.write')) throw new CalendarError('DENIED');
     // A shared calendar lock serializes reservations for different leads as well
     // as two edits of the same lead. The transaction also protects local queues.
@@ -98,10 +123,6 @@ export async function saveLeadAppointment(db: PrismaClient, claimed: AuthSession
     if (input.operation === 'BOOK') await stopPendingWorkflowExecutions(tx, { leadId: lead.id, reason: 'APPOINTMENT_BOOKED', evidenceId: row.id });
     await stopStaleWorkflowEnrollments(tx, lead.id);
     await auth.finish(); return row;
-  }, { timeout: 30_000 });
-  if (saved.status === 'BOOKED') await captureWorkflowOperationalEventAfterCommit(db, { kind: 'APPOINTMENT_BOOKED',
-    leadId: saved.leadId, referenceId: saved.id, referenceVersion: saved.version });
-  return saved;
 }
 
 export async function synchronizeLeadAppointment(db: PrismaClient, claimed: AuthSession, id: string, provider: GoogleCalendarAdapter) {
@@ -134,20 +155,23 @@ export async function synchronizeLeadAppointment(db: PrismaClient, claimed: Auth
  * date; moving or clearing a booked video belongs to the appointment command. */
 export async function assertPipelineAppointmentUnchanged(tx: Prisma.TransactionClient,
   lead: { id: string; setterNextKind: string | null; nextActionDate: Date | null }, nextActionDate: Date | null) {
-  if (lead.setterNextKind !== 'VIDEO' || lead.nextActionDate?.getTime() === nextActionDate?.getTime()) return;
-  const appointment = await tx.leadAppointment.findUnique({ where: { leadId: lead.id }, select: { status: true } });
-  if (appointment?.status === 'BOOKED') throw new CalendarError('BUSY');
+  void tx;
+  assertVideoNextActionUnchanged(lead, nextActionDate);
 }
 
 /** Setter calls may close a registered appointment, but may not move it around
  * the availability and concurrency checks of saveLeadAppointment. */
-export async function calendarFromSetterOutcome(tx: Prisma.TransactionClient, leadId: string, outcome: string, nextKind: string | null, nextAt: Date | null, actorId: string) {
+export async function calendarFromSetterOutcome(tx: Prisma.TransactionClient, leadId: string, outcome: string, nextKind: string | null, actorId: string, lockedCalendarId: string | null) {
+  // A VIDEO next step may only be written by saveLeadAppointmentInTransaction.
+  if (nextKind === 'VIDEO') throw new CalendarError('INVALID');
   const current = await tx.leadAppointment.findUnique({ where: { leadId } });
-  if (!current || current.status !== 'BOOKED') return;
-  if (nextKind === 'VIDEO' && nextAt?.getTime() !== current.startsAt.getTime()) throw new CalendarError('BUSY');
+  if (!current || current.status !== 'BOOKED') return null;
+  if (current.calendarId !== lockedCalendarId) throw new CalendarError('STALE');
   if (['VIDEO_HELD', 'VIDEO_ABSENT'].includes(outcome)) {
-    await tx.leadAppointment.update({ where: { id: current.id }, data: { status: outcome === 'VIDEO_HELD' ? 'COMPLETED' : 'CANCELLED',
+    const saved = await tx.leadAppointment.update({ where: { id: current.id }, data: { status: outcome === 'VIDEO_HELD' ? 'COMPLETED' : 'CANCELLED',
       syncState: current.syncState === 'LOCAL' ? 'LOCAL' : 'PENDING', version: { increment: 1 }, updatedById: actorId } });
     await stopStaleWorkflowEnrollments(tx, leadId);
+    return saved;
   }
+  return null;
 }

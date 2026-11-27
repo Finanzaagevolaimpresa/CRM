@@ -371,6 +371,9 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  workflowServiceCredentials WorkflowServiceCredential[]
+  workflowServiceGrants WorkflowServiceGrant[]
+  workflowServiceNotices WorkflowServiceNotice[]
   workflowExecutionNotices WorkflowExecution[]
   leadAppointmentsUpdater LeadAppointment[] @relation("LeadAppointmentUpdater")
   leadAppointmentsCreator LeadAppointment[] @relation("LeadAppointmentCreator")
@@ -484,6 +487,7 @@ model User {
 }
 
 model InternalSession {
+  workflowServiceGrants WorkflowServiceGrant[]
   googleCalendarOAuthStates GoogleCalendarOAuthState[]
   operationalDocuments OperationalDocument[] @relation("OperationalDocumentSession")
   operationalDocumentDecisions OperationalDocumentDecision[] @relation("OperationalDocumentDecisionSession")
@@ -3362,6 +3366,7 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  workflowServiceMessage WorkflowServiceMessage?
   workflowNewsletterRecipient WorkflowNewsletterRecipient?
   operationalState AdminOperationalState? @relation("AdminMessageState")
   adminRequestDraft AdminRequestDraft?
@@ -3456,6 +3461,7 @@ model CommunicationContextFile {
   @@index([internalThreadId, createdAt])
 }
 model CommunicationVersion {
+  workflowServiceMessage WorkflowServiceMessage?
   updateSource Json?
   updateSourceHash String? @db.Char(64)
   ordinaryEmailDecisions OrdinaryEmailDecision[]
@@ -3560,11 +3566,13 @@ model OrdinaryEmailChannel {
   mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 }
 model OrdinaryEmailDecision {
+  serviceMessageId String? @unique @db.Uuid
+  serviceMessage WorkflowServiceMessage? @relation(fields: [serviceMessageId], references: [messageId], onDelete: Restrict, onUpdate: NoAction)
   id String @id @db.Uuid
   messageId String @db.Uuid
   versionId String @db.Uuid
   actorId String
-  sessionId String @db.Uuid
+  sessionId String? @db.Uuid
   decision Json
   decisionHash String @db.Char(64)
   proof String @db.Char(64)
@@ -3573,7 +3581,7 @@ model OrdinaryEmailDecision {
   message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session InternalSession? @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   attempt OrdinaryEmailAttempt?
 }
 model OrdinaryEmailAttempt {
@@ -4430,6 +4438,7 @@ model WorkflowEmailTemplate {
   @@unique([familyId, version])
 }
 model WorkflowAutomation {
+  serviceGrants WorkflowServiceGrant[]
   createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
   newsletterRuns WorkflowNewsletterRun[]
   enrollments WorkflowEnrollment[]
@@ -4479,6 +4488,8 @@ model WorkflowEnrollment {
   @@index([leadId, createdAt])
 }
 model WorkflowExecution {
+  serviceMessage WorkflowServiceMessage?
+  serviceNotice WorkflowServiceNotice?
   recipientUserId String?
   recipient User? @relation(fields: [recipientUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   enrollment WorkflowEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -4517,6 +4528,7 @@ model WorkflowNewsletterRun {
 }
 
 model WorkflowNewsletterRecipient {
+  serviceMessage WorkflowServiceMessage?
   nativeMessage ApprovedCommunication? @relation(fields: [nativeMessageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   nativeMessageId String? @unique @db.Uuid
   nativeRevision Int?
@@ -4537,6 +4549,98 @@ model WorkflowNewsletterRecipient {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   @@unique([runId, leadId])
   @@index([state, runId])
+}
+
+model WorkflowServiceCredential {
+  id String @id @db.Uuid
+  keyFingerprint String @db.Char(64)
+  state String @default("REVOKED") @db.VarChar(20)
+  revision Int @default(1)
+  validUntil DateTime @db.Timestamptz(3)
+  qualificationReference String @db.VarChar(200)
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grants WorkflowServiceGrant[]
+}
+
+model WorkflowServiceGrant {
+  id String @id @db.Uuid
+  automationId String @db.Uuid
+  automationVersion Int
+  credentialId String @db.Uuid
+  credentialRevision Int
+  issuedById String
+  issuedSessionId String @db.Uuid
+  state String @default("REVOKED") @db.VarChar(20)
+  revision Int @default(1)
+  validFrom DateTime @db.Timestamptz(3)
+  validUntil DateTime @db.Timestamptz(3)
+  maxMessages Int
+  maxPerDay Int
+  policy Json
+  policyHash String @db.Char(64)
+  approvedAt DateTime @default(now()) @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  automation WorkflowAutomation @relation(fields: [automationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credential WorkflowServiceCredential @relation(fields: [credentialId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  issuedBy User @relation(fields: [issuedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  issuedSession InternalSession @relation(fields: [issuedSessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invocations WorkflowServiceInvocation[]
+  messages WorkflowServiceMessage[]
+  notices WorkflowServiceNotice[]
+  @@index([state, validUntil])
+}
+
+model WorkflowServiceInvocation {
+  id String @id @db.Uuid
+  grantId String @db.Uuid
+  requestHash String @db.Char(64)
+  expiresAt DateTime @db.Timestamptz(3)
+  startedAt DateTime @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  result Json?
+  grant WorkflowServiceGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  messages WorkflowServiceMessage[]
+  notices WorkflowServiceNotice[]
+}
+
+model WorkflowServiceNotice {
+  executionId String @id @db.Uuid
+  grantId String @db.Uuid
+  invocationId String @db.Uuid
+  recipientUserId String
+  policyHash String @db.Char(64)
+  sourceHash String @db.Char(64)
+  textHash String @db.Char(64)
+  decision Json
+  decisionHash String @db.Char(64)
+  proof String @db.Char(64)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grant WorkflowServiceGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invocation WorkflowServiceInvocation @relation(fields: [invocationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation(fields: [recipientUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+model WorkflowServiceMessage {
+  messageId String @id @db.Uuid
+  versionId String @unique @db.Uuid
+  grantId String @db.Uuid
+  invocationId String @db.Uuid
+  executionId String? @unique @db.Uuid
+  recipientId String? @unique @db.Uuid
+  policyHash String @db.Char(64)
+  sourceHash String @db.Char(64)
+  snapshotHash String @db.Char(64)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grant WorkflowServiceGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invocation WorkflowServiceInvocation @relation(fields: [invocationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  execution WorkflowExecution? @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient WorkflowNewsletterRecipient? @relation(fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decision OrdinaryEmailDecision?
 }
 
 model LeadAssignmentProposal {

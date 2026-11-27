@@ -10,6 +10,8 @@ import { workflowEvents, workflowEventLabels, workflowPurposes, workflowPurposeL
 import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import { romeDateTimeInput } from '@/lib/rome-date-time';
 import { withTechnicalPage } from '@/lib/technical-surface-guards';
+import { readWorkflowServiceAdministration } from '@/lib/workflow-service-authority';
+import { WorkflowServiceAuthorityPanel } from '@/components/workflow-service-authority-panel';
 
 export const dynamic = 'force-dynamic';
 type Administration = Awaited<ReturnType<typeof readWorkflowAdministration>>;
@@ -69,7 +71,7 @@ function RuleForm({ rule, data, newsletter }: { rule?: Rule; data: Administratio
       </fieldset>
     </>}
     <label>Stato<select name="state" defaultValue={rule?.state ?? 'DRAFT'} className={field}><option value="DRAFT">Bozza</option><option value="TEST_READY">Pronta per prova</option><option value="ACTIVE" disabled={process.env.WORKFLOW_NATIVE_PREPARATION_MODE !== 'enabled'}>Attiva · richiede rilascio autorizzato</option></select></label>
-    <p className="text-sm text-slate-600">Salvare conserva la configurazione. {newsletter ? 'Gli invii reali richiedono mittente, preferenze marketing e disiscrizione qualificati; sono disponibili le prove su destinatari sintetici.' : 'La preparazione email reale rimane disabilitata fino al rilascio autorizzato; ogni bozza seguirà le approvazioni del mittente.'}</p>
+    <p className="text-sm text-slate-600">Salvare conserva la configurazione. {newsletter ? 'Gli invii reali richiedono mittente, preferenze marketing e disiscrizione qualificati; sono disponibili le prove su destinatari sintetici.' : 'L’esecuzione reale rimane disabilitata fino al rilascio autorizzato. Una delega valida consente l’esecuzione automatica; il percorso personale richiede l’approvazione delle bozze.'}</p>
     <PrimaryButton type="submit">Salva regola</PrimaryButton>
   </form>;
 }
@@ -77,6 +79,7 @@ function RuleForm({ rule, data, newsletter }: { rule?: Rule; data: Administratio
 async function AutomationsPage({ searchParams }: { searchParams: Promise<{ result?: string; kind?: string }> }) {
   const session = await requireAuth(['admin']), query = await searchParams;
   const data = await readWorkflowAdministration(prisma, session), newsletter = query.kind === 'NEWSLETTER';
+  const service = await readWorkflowServiceAdministration(prisma,session);
   const rules = data.rules.filter(rule => (rule.event === 'NEWSLETTER') === newsletter);
   const latest = [...new Map(data.templates.map(template => [template.familyId,
     data.templates.find(row => row.familyId === template.familyId)!])).values()];
@@ -102,12 +105,13 @@ async function AutomationsPage({ searchParams }: { searchParams: Promise<{ resul
       const reason = (hold.after as { reason?: string } | null)?.reason;
       return <p key={hold.id}>{formatRecordNoticeTime(hold.createdAt)} · {reason === 'MULTIPLE_ACTIVE_ACQUISITION_RULES' ? 'Scegli una sola sequenza attiva per la conferma di acquisizione.'
         : reason === 'RULE_AUTHORITY_UNAVAILABLE' ? 'Verifica il responsabile della regola e i suoi permessi.' : 'Verifica fonte, destinatario e autorizzazione del mittente prima di ripetere.'}
-        <Link className="ml-2 underline" href={hold.entityType === 'WorkflowAutomation' ? '/automations' : '/leads/acquisition'}>Apri controllo</Link></p>;
+        <Link className="ml-2 underline" href={['WorkflowAutomation','WorkflowServiceGrant'].includes(hold.entityType ?? '') ? '/automations' : '/leads/acquisition'}>Apri controllo</Link></p>;
     })}</Card>}
     <Card title={newsletter ? 'Nuova newsletter' : 'Nuova automazione'}><RuleForm data={data} newsletter={newsletter} /></Card>
+    <WorkflowServiceAuthorityPanel data={service} rules={rules} enabled={process.env.WORKFLOW_SERVICE_EXECUTION_MODE === 'enabled' && process.env.WORKFLOW_NATIVE_PREPARATION_MODE === 'enabled'} />
     {rules.map(rule => <Card key={rule.id} title={rule.name} action={<Badge tone="blue">{rule.state === 'DRAFT' ? 'Bozza' : rule.state === 'ACTIVE' ? 'Attiva' : 'Pronta per prova'} · v{rule.version}</Badge>}>
       <p>{workflowEventLabels[rule.event as keyof typeof workflowEventLabels]} · {rule.configuration.action === 'EMAIL' ? 'Email' : 'Avviso interno'} · attesa {rule.delayMinutes} minuti</p>
-      {!newsletter && <p className="mt-2 text-sm">La prova persistente dell’evento è disponibile dalla scheda con la sua fonte corrente. Gli avvisi interni registrano un destinatario; le email preparate richiedono approvazione.</p>}
+      {!newsletter && <p className="mt-2 text-sm">La prova persistente dell’evento è disponibile dalla scheda con la sua fonte corrente. Gli avvisi interni registrano un destinatario. La delega preventiva autorizza i messaggi della regola; le bozze del percorso personale richiedono approvazione.</p>}
       <p className="my-2">Alla risposta o alla prenotazione termina il sollecito. Il promemoria di appuntamento segue spostamenti e annullamenti.</p>
       <form action={mutateWorkflowAction}><input type="hidden" name="intent" value="test" /><input type="hidden" name="kind" value={newsletter ? 'NEWSLETTER' : 'INDIVIDUAL'} /><input type="hidden" name="id" value={rule.id} /><input type="hidden" name="expectedVersion" value={rule.version} /><PrimaryButton type="submit">Prova la regola con dati sintetici</PrimaryButton></form>
       {newsletter && process.env.APP_ENV === 'test' && <form action={mutateWorkflowAction} className="mt-3"><input type="hidden" name="intent" value="newsletter-test" /><input type="hidden" name="kind" value="NEWSLETTER" /><input type="hidden" name="id" value={rule.id} /><input type="hidden" name="runId" value={randomUUID()} /><PrimaryButton type="submit">Prova i destinatari selezionati</PrimaryButton><p className="mt-2 text-sm">Solo indirizzi sintetici. Il consenso e la disiscrizione sono ricontrollati alla prova; un esito incerto richiede riconciliazione.</p></form>}
@@ -115,12 +119,12 @@ async function AutomationsPage({ searchParams }: { searchParams: Promise<{ resul
         <input type="hidden" name="intent" value="newsletter-native-plan" /><input type="hidden" name="kind" value="NEWSLETTER" />
         <input type="hidden" name="id" value={rule.id} /><input type="hidden" name="runId" value={randomUUID()} />
         <PrimaryButton type="submit">Registra destinatari e scadenza</PrimaryButton>
-        <p className="mt-2 text-sm">Alla scadenza prepara le bozze. Ogni invio richiede l’approvazione nativa e ricontrolla le preferenze prima di trasmettere.</p>
+        <p className="mt-2 text-sm">Questo comando registra il percorso personale: alla scadenza prepara e approva le bozze. La delega preventiva usa invece il runner automatico. Entrambi ricontrollano le preferenze prima di trasmettere.</p>
       </form>}
       {newsletter && data.newsletterRuns.filter(run => run.automationId === rule.id).map(run => <details key={run.id} className="mt-3 rounded-xl border p-3"><summary>Destinatari · {formatRecordNoticeTime(run.createdAt)} · {stateLabels[run.state] ?? 'Da verificare'} · v{run.automationVersion}</summary>
         {run.recipients.map(recipient => { const policy = recipient.policySnapshot as { decision?: { reason?: string } } | null;
           return <div key={recipient.id} className="my-3 border-t pt-2"><p>{recipient.lead.companyName || `${recipient.lead.firstName} ${recipient.lead.lastName}`} · {stateLabels[recipient.state] ?? 'Da verificare'} · tentativi {recipient.attemptCount}</p>{policy?.decision?.reason && <p className="text-sm">Preferenze: {preferenceLabels[policy.decision.reason] ?? 'Esclusione da verificare nel registro'}</p>}
-            {recipient.nativeMessageId && <Link className="block underline" href={'/communications/' + recipient.nativeMessageId}>Apri bozza, approvazione ed esito</Link>}
+            {recipient.nativeMessageId && <Link className="block underline" href={'/communications?' + new URLSearchParams({ kind: 'LEAD',practice: recipient.leadId,focus: recipient.nativeMessageId })}>Apri messaggio, autorità ed esito</Link>}
             {run.synthetic && process.env.APP_ENV === 'test' && ['SENDING','UNCERTAIN'].includes(recipient.state) && <form action={mutateWorkflowAction} className="mt-2 grid gap-2"><input type="hidden" name="intent" value="newsletter-reconcile" /><input type="hidden" name="kind" value="NEWSLETTER" /><input type="hidden" name="recipientId" value={recipient.id} /><label>Esito verificato<select name="outcome" className={field}><option value="SENT">Accettato nel canale di prova</option><option value="NOT_SENT">Non accettato, verificato</option></select></label><label>Evidenza<input name="evidence" required minLength={5} maxLength={500} className={field} /></label><PrimaryButton type="submit">Registra riconciliazione</PrimaryButton></form>}</div>; })}
         {run.synthetic && process.env.APP_ENV === 'test' && <form action={mutateWorkflowAction}><input type="hidden" name="intent" value="newsletter-run" /><input type="hidden" name="kind" value="NEWSLETTER" /><input type="hidden" name="runId" value={run.id} /><PrimaryButton type="submit">Ripeti verifica dei passi in attesa</PrimaryButton></form>}
         {!run.synthetic && data.nativeNewsletterReady && <form action={mutateWorkflowAction} className="mt-3 grid gap-2">

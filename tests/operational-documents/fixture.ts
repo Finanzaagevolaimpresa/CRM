@@ -7,7 +7,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 import { createOperationalDocument, prepareOperationalDocument, saveOperationalTemplate } from '../../src/lib/operational-documents';
 import { documentFields, type DraftDocumentCommand, type DocumentField } from '../../src/lib/operational-document-contract';
 
-export async function documentFixture(db: PrismaClient, passwordHash?: string) {
+export async function documentFixture(db: PrismaClient, passwordHash?: string, options: { unlinked?: boolean } = {}) {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); await collectionKey(db);
   const admin = await syntheticPerson(db, 'Admin documenti sintetici', 'admin', passwordHash);
   const owner = await syntheticPerson(db, 'Consulente commerciale sintetico', 'commerciale', passwordHash);
@@ -18,7 +18,7 @@ export async function documentFixture(db: PrismaClient, passwordHash?: string) {
   const company = await db.company.create({ data: { clientId: client.id, name: companyName, vatNumber: '12345678903', taxCode: '12345678903', legalAddress: 'Via Sintetica 1, 00100 Roma' } });
   const signer = await db.person.create({ data: { firstName: 'Firmatario', lastName: 'Sintetico' } });
   await db.companyPerson.create({ data: { companyId: company.id, personId: signer.id, role: 'Amministratore', isAdministrator: true } });
-  const lead = await db.lead.create({ data: { firstName: 'Persona', lastName: 'Sintetica', companyName, email: 'synthetic@invalid.test', phone: '+390612345678', assignedToId: owner.user.id, clientId: client.id } });
+  const lead = await db.lead.create({ data: { firstName: 'Persona', lastName: 'Sintetica', companyName, email: 'synthetic@invalid.test', phone: '+390612345678', assignedToId: owner.user.id, clientId: options.unlinked ? null : client.id } });
   const service = await db.serviceCatalogRevision.findFirstOrThrow({ where: { status: 'PUBLISHED', priceMode: 'FIXED', serviceCatalog: { active: true } } });
   const template = { commandId: randomUUID(), templateId: randomUUID(), expectedVersion: 0, operation: 'SAVE' as const,
     title: 'Contratto sintetico da modello', kind: 'CONTRACT' as const, body: 'Cliente: {{denominazione}}\nSede: {{indirizzo}}\nP.IVA: {{partita_iva}}\nFirmatario: {{firmatario}}\nServizio: {{servizio}}\nImponibile: {{imponibile}}\nIVA: {{iva}}\nTotale: {{totale}}\nRate: {{rate}}',
@@ -35,8 +35,10 @@ export async function documentFixture(db: PrismaClient, passwordHash?: string) {
   const prepare = () => prepareOperationalDocument(db, owner.session, selection);
   const input = async (extra: Partial<DraftDocumentCommand> = {}): Promise<DraftDocumentCommand> => {
     const prepared = await prepare();
+    const manual: Partial<Record<DocumentField, string>> = options.unlinked
+      ? { indirizzo: 'Via Nuovo Lead 1, Roma', partita_iva: '12345678903', firmatario: 'Firmatario nuovo lead' } : {};
     return { commandId: randomUUID(), ...selection, sourceHash: prepared.sourceHash, termsConfirmed: true,
-      choices: Object.fromEntries(documentFields.map(field => [field, field === 'rate' ? 'Saldo unico alla scadenza concordata' : prepared.candidates[field][0]?.value ?? ''])) as Record<DocumentField, string>, ...extra };
+      choices: Object.fromEntries(documentFields.map(field => [field, field === 'rate' ? 'Saldo unico alla scadenza concordata' : prepared.candidates[field][0]?.value ?? manual[field] ?? ''])) as Record<DocumentField, string>, ...extra };
   };
   const create = async (extra: Partial<DraftDocumentCommand> = {}) => createOperationalDocument(db, owner.session, await input(extra));
   return { admin, owner, other, technical, client, company, lead, service, template, publication, proformaPublication, selection, prepare, input, create };

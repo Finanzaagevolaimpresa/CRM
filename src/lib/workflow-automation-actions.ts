@@ -15,6 +15,7 @@ import { createSyntheticNewsletterRuntime } from './workflow-newsletter-test-run
 import { executeWorkflowNewsletter, planWorkflowNewsletter, reconcileWorkflowNewsletterRecipient } from './workflow-newsletters';
 import { prepareWorkflowPendingOnce } from './workflow-native-runner';
 import { planNativeWorkflowNewsletter, prepareNativeWorkflowNewsletter } from './workflow-newsletter-native';
+import { issueWorkflowServiceGrant, registerWorkflowServiceCredential, revokeWorkflowServiceAuthority } from './workflow-service-authority';
 
 export async function mutateWorkflowAction(form: FormData) {
   await assertTechnicalServerAction('workflow-automation-actions:mutateWorkflowAction');
@@ -60,7 +61,20 @@ export async function mutateWorkflowAction(form: FormData) {
       const stepUpToken = jar.get(privilegedStepUpCookieName)?.value;
       if (!key || !sessionToken || !stepUpToken) throw new Error('WORKFLOW_DENIED');
       const proof = { key, sessionToken, stepUpToken };
-      if (value('intent') === 'template') {
+      if (value('intent') === 'service-credential') {
+        const validUntil = resolveRomeDateTime(value('validUntil'));
+        if (validUntil.kind !== 'unique') throw new Error('WORKFLOW_TIME_INVALID');
+        await registerWorkflowServiceCredential(prisma,session,{ id: randomUUID(),keyFingerprint: value('keyFingerprint'),
+          validUntil: validUntil.instants[0],qualificationReference: value('qualificationReference'),approved: value('approved') === 'on' },proof);
+      } else if (value('intent') === 'service-grant') {
+        const validFrom = resolveRomeDateTime(value('validFrom')), validUntil = resolveRomeDateTime(value('validUntil'));
+        if (validFrom.kind !== 'unique' || validUntil.kind !== 'unique') throw new Error('WORKFLOW_TIME_INVALID');
+        await issueWorkflowServiceGrant(prisma,session,{ id: randomUUID(),automationId: value('id'),expectedVersion: Number(value('expectedVersion')),
+          credentialId: value('credentialId'),validFrom: validFrom.instants[0],validUntil: validUntil.instants[0],
+          maxMessages: Number(value('maxMessages')),maxPerDay: Number(value('maxPerDay')),approvalReference: value('approvalReference'),approved: value('approved') === 'on' },proof);
+      } else if (value('intent') === 'service-revoke') {
+        await revokeWorkflowServiceAuthority(prisma,session,{ id: value('id'),kind: value('authorityKind'),expectedRevision: Number(value('expectedRevision')) },proof);
+      } else if (value('intent') === 'template') {
         await saveWorkflowTemplate(prisma, session, { id: randomUUID(), familyId: value('familyId') || randomUUID(),
           expectedVersion: Number(value('expectedVersion')), name: value('name'), purpose: value('purpose'),
           subject: value('subject'), body: value('body'), state: value('state'), authorizationReference: value('authorizationReference') || null }, proof);

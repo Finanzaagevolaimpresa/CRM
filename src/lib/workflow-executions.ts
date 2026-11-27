@@ -235,7 +235,7 @@ function history(value: Prisma.JsonValue, entry: object) {
 }
 
 type SourceEnrollment = { id: string; leadId: string; sourceReceiptId: string | null; sourceHash: string; snapshot: Prisma.JsonValue };
-async function workflowEnrollmentSourceCurrent(tx: Tx, enrollment: SourceEnrollment) {
+export async function workflowEnrollmentSourceCurrent(tx: Tx, enrollment: SourceEnrollment) {
   if (!enrollment.sourceReceiptId) return workflowSourceStillCurrent(tx, enrollment.snapshot, enrollment.sourceHash);
   const receipt = await tx.secureLeadGatewayReceipt.findUnique({ where: { id: enrollment.sourceReceiptId }, include: { inboxEvent: { include: { leadProjectionLedger: true } } } });
   const inbox = receipt?.inboxEvent, projection = inbox?.leadProjectionLedger;
@@ -430,11 +430,31 @@ export async function readLeadWorkflowExecutions(db: PrismaClient, session: Auth
         const canReadReceipt = !execution.recipientUserId || auth.actor.role === 'admin' || execution.recipientUserId === auth.actor.id;
         const notice = canReadReceipt
           ? z.object({ channel: z.literal('CRM_INTERNAL_NOTICE'), title: z.string(), body: z.string() }).passthrough().safeParse(execution.receipt) : null;
-        const { id, step, state, dueAt, stopReason, attemptCount } = execution;
+        const { id, step, state, stopReason, attemptCount } = execution;
+        const wait = Array.isArray(execution.history) ? execution.history.slice().reverse().find(item => item && typeof item === 'object' && !Array.isArray(item) && item.event === 'SERVICE_WAIT_STARTED') : null;
+        const effectiveDue = wait && typeof wait === 'object' && !Array.isArray(wait) && typeof wait.dueAt === 'string' ? new Date(wait.dueAt) : execution.dueAt;
+        const dueAt = Number.isFinite(effectiveDue.getTime()) && effectiveDue > execution.dueAt ? effectiveDue : execution.dueAt;
+        const delegated = Array.isArray(execution.history) && execution.history.some(item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.event === 'string' && item.event.startsWith('SERVICE_'));
         return { id, step, state, dueAt, stopReason, attemptCount, events: canReadReceipt ? execution.history : [],
-          internal: Boolean(execution.recipientUserId), notice: notice?.success ? notice.data : null };
+          delegated,internal: Boolean(execution.recipientUserId), notice: notice?.success ? notice.data : null };
       }) }));
   }, { timeout: 30_000 });
+}
+
+export async function readLeadNewsletterExecutions(db: PrismaClient,session: AuthSession,leadId: string) {
+  return db.$transaction(async tx => {
+    const auth = await actor(tx,session),context = await recordUpdateContext(tx,'LEAD',leadId);
+    if (!context.canRead(auth.actor)) throw new Error('WORKFLOW_DENIED');
+    const rows = await tx.workflowNewsletterRecipient.findMany({ where: { leadId },orderBy: { createdAt: 'desc' },take: 100,
+      select: { id: true,state: true,history: true,run: { select: { synthetic: true,scheduledAt: true } } } });
+    await auth.finish();
+    return rows.map(row => {
+      const last = Array.isArray(row.history) ? row.history.slice().reverse().find(item => item && typeof item === 'object' && !Array.isArray(item) && item.event === 'SERVICE_HELD') : null;
+      const reason = !['SENT','STOPPED'].includes(row.state) && last && typeof last === 'object' && !Array.isArray(last) && typeof last.reason === 'string' ? last.reason : null;
+      const delegated = Array.isArray(row.history) && row.history.some(item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.event === 'string' && item.event.startsWith('SERVICE_'));
+      return { id: row.id,state: row.state,synthetic: row.run.synthetic,scheduledAt: row.run.scheduledAt,reason,delegated };
+    });
+  },{ timeout: 30000 });
 }
 
 export async function readSyntheticWorkflowLeadSetup(db: PrismaClient, session: AuthSession, leadId: string) {

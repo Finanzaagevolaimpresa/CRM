@@ -50,3 +50,18 @@ test('Conferma estesa solo su attivazione esplicita e solo per tre comandi nomin
   for (const action of ['R05_RESPONSIBILITY','USER_PERMISSION_OVERRIDE','USER_ROLE_UPDATE','DRIVE_FOLDER_MANAGE',
     'PAYMENT_COLLECTION_DECLARE','LEAD_LIFECYCLE','ORDINARY_EMAIL_CONFIRM_SEND','unknown']) assert.equal(ordinaryActionAllowed(action),false);
 });
+
+test('La prenotazione setter conserva il payload e valida calendario, versione e durata senza convertire un richiamo in video', () => {
+  const booking = { ...attempt, outcome: 'VIDEO_BOOKED', nextKind: 'VIDEO', nextLocal: '2030-01-07T10:00', details,
+    appointment: { id: '83964a83-1343-43db-a96c-25078d4662d6', calendarId: 'calendar-synthetic', expectedVersion: 0, durationMinutes: 30 } };
+  const before = structuredClone(booking);
+  assert.equal(prepareSetterCommand(booking).nextAt?.toISOString(), '2030-01-07T09:00:00.000Z');
+  assert.deepEqual(booking, before);
+  for (const appointment of [{ ...booking.appointment, calendarId: '' }, { ...booking.appointment, expectedVersion: -1 },
+    { ...booking.appointment, durationMinutes: 0 }, { ...booking.appointment, durationMinutes: 181 }])
+    assert.throws(() => prepareSetterCommand({ ...booking, appointment }));
+  assert.throws(() => prepareSetterCommand({ ...attempt, appointment: booking.appointment }));
+  // Historical payloads remain parseable for receipt lookup. The persistent
+  // command rejects a new VIDEO without a reservation before any write.
+  assert.equal(prepareSetterCommand({ ...booking, appointment: undefined }).value.appointment, undefined);
+});

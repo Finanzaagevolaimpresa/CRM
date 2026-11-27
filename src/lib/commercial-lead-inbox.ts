@@ -1,12 +1,14 @@
 import { leadAssignees } from './lead-assignee';
-import { calendarFromSetterOutcome } from './personal-calendar';
+import { calendarFromSetterOutcome, captureSavedAppointment, lockAppointmentCalendar, saveLeadAppointmentInTransaction } from './personal-calendar';
+import type { GoogleCalendarAdapter } from './google-calendar-adapter';
+import { lockCommunicationDirectory } from './communication-directory-lock';
 import { stopPendingWorkflowExecutions, stopStaleWorkflowEnrollments } from './workflow-executions';
 import { captureWorkflowOperationalEventAfterCommit } from './workflow-operational-capture';
 import { createHash } from 'node:crypto';
 import { effectiveSetterContact, prepareSetterCommand, SetterInputError, type SetterCommand } from './lead-setter-contract';
 import { isTechnicalAccount } from './technical-confidentiality';
 import { assertNoSelectiveClientMutation } from './selective-client-scope';
-import { recordUpdatePermission } from './record-update-context';
+import { currentRecordUpdateUser, recordUpdatePermission } from './record-update-context';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { historicalConversionInput } from './commercial-lead-historical-contact-contract';
 import { appendHistoricalLeadConversion, prepareHistoricalLeadConversion,
@@ -123,6 +125,7 @@ async function transaction<T>(
     n15Scope?: CommunicationPersistenceTransactionV1,
   ) => Promise<T>,
   n15Synthetic = false,
+  timeoutMs: number = COMMERCIAL_LEAD_INBOX_TRANSACTION.timeoutMs,
 ) {
   for (let attempt = 1; attempt <= COMMERCIAL_LEAD_INBOX_TRANSACTION.attempts; attempt += 1) {
     try {
@@ -138,7 +141,7 @@ async function transaction<T>(
       const options = {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         maxWait: COMMERCIAL_LEAD_INBOX_TRANSACTION.maxWaitMs,
-        timeout: COMMERCIAL_LEAD_INBOX_TRANSACTION.timeoutMs,
+        timeout: timeoutMs,
       } as const;
       if (!n15Synthetic) return await db.$transaction(action, options);
       const { runCommunicationPersistenceTransactionV1 } = await import('./communication-intent-persistence');
@@ -683,13 +686,22 @@ export async function recordCommercialLeadFirstResponse(
 }
 
 /** One immutable interaction, its next step and any first response share the Lead lock and commit. */
-export async function saveSetterCall(db: PrismaClient, actor: CommercialLeadActor, raw: SetterCommand) {
+export async function saveSetterCall(db: PrismaClient, actor: CommercialLeadActor, raw: SetterCommand, provider?: GoogleCalendarAdapter) {
   requireEnforcedMode();
   const { value, nextAt } = prepareSetterCommand(raw);
   const requestHash = createHash('sha256').update(JSON.stringify(value)).digest('hex');
-  return transaction(db, async (tx, now) => {
+  const receipt = await transaction(db, async (tx, now) => {
+    await lockCommunicationDirectory(tx);
     const session = await authorizeActor(tx, actor, 'WORK');
     if (isTechnicalAccount(session) || !hasPermission(session, 'lead.read')) fail('N14_PERMISSION_DENIED');
+    const currentActor = await currentRecordUpdateUser(tx, actor.userId);
+    if (!currentActor || !recordUpdatePermission(currentActor, 'lead.write')) fail('N14_PERMISSION_DENIED');
+    const finish = async () => {
+      const at = await databaseClock(tx);
+      if (session.expiresAt <= at) fail('N14_SESSION_REVALIDATION_FAILED');
+      return at;
+    };
+    const lockedCalendarId = await lockAppointmentCalendar(tx, value.leadId, value.appointment?.calendarId);
     const lead = await lockLead(tx, value.leadId);
     await assertNoSelectiveLeadMutation(tx, actor.userId, lead.id);
     await assertNoSelectiveClientMutation(tx, actor.userId, lead.clientId);
@@ -699,7 +711,9 @@ export async function saveSetterCall(db: PrismaClient, actor: CommercialLeadActo
     if (prior) {
       if (prior.leadId !== lead.id || prior.actorId !== actor.userId || prior.requestHash !== requestHash)
         fail('N14_VERSION_CONFLICT');
-      return { id: prior.id, replay: true };
+      const appointment = value.appointment ? await tx.leadAppointment.findFirst({ where: { id: value.appointment.id, leadId: lead.id } }) : null;
+      await finish();
+      return { id: prior.id, replay: true, appointment };
     }
     const item = await lockItem(tx, lead.id);
     if (lead.clientId || ['archiviato','perso','vinto','cliente_acquisito','non_qualificato'].includes(lead.status)
@@ -712,25 +726,34 @@ export async function saveSetterCall(db: PrismaClient, actor: CommercialLeadActo
       throw new SetterInputError('Apri la videochiamata fissata prima di registrarne l’esito.');
     if (value.outcome === 'VIDEO_BOOKED' && latest.setterNextKind === 'VIDEO')
       throw new SetterInputError('La videochiamata è già fissata. Scegli il suo esito o rinviala.');
+    const nextKind = value.nextKind === 'NONE' ? null : value.nextKind;
+    if (nextKind === 'VIDEO' && !value.appointment)
+      throw new SetterInputError('Scegli il calendario del referente e la durata della videochiamata.');
+    const appointment = nextKind === 'VIDEO'
+      ? await saveLeadAppointmentInTransaction(tx, { actor: currentActor, finish }, { ...value.appointment,
+        leadId: lead.id, leadVersion: value.leadVersion, operation: 'BOOK', startLocal: value.nextLocal }, provider)
+      : await calendarFromSetterOutcome(tx, lead.id, value.outcome, nextKind, actor.userId, lockedCalendarId);
     if (item && effectiveSetterContact(value.outcome)) {
       const cycle = await lockOpenCycle(tx, item.id);
       if (!cycle) fail('N14_VERSION_CONFLICT');
       const historical = await tx.commercialLeadHistoricalContact.findFirst({ where: { inboxItemId: item.id }, select: { id: true } });
       if (!cycle.firstResponseAt && !historical) await commitFirstResponse(tx, actor, lead, item, cycle, now);
     }
-    const nextKind = value.nextKind === 'NONE' ? null : value.nextKind;
-    await calendarFromSetterOutcome(tx, lead.id, value.outcome, nextKind, nextAt, actor.userId);
     const row = await tx.leadSetterCall.create({ data: {
       id: value.id, leadId: lead.id, actorId: actor.userId, recordedAt: now, outcome: value.outcome, nextAt, nextKind,
       details: value.details ?? {}, requestHash,
     }, select: { id: true } });
-    await tx.lead.update({ where: { id: lead.id }, data: { updatedAt: new Date(Math.max(now.getTime(), lead.updatedAt.getTime() + 1)),
+    if (nextKind !== 'VIDEO') await tx.lead.update({ where: { id: lead.id }, data: { updatedAt: new Date(Math.max(now.getTime(), lead.updatedAt.getTime() + 1)),
       setterNextKind: nextKind, nextActionDate: nextAt, nextAction: nextAt,
-      nextActionNote: nextKind === 'VIDEO' ? 'Videochiamata fissata' : nextKind === 'CALLBACK' ? 'Richiamo' : null } });
+      nextActionNote: nextKind === 'CALLBACK' ? 'Richiamo' : null } });
     await tx.auditLog.create({ data: { actorId: actor.userId, entityType: 'Lead', entityId: lead.id,
-      event: 'lead_setter_call_recorded', after: { callId: row.id, outcome: value.outcome, nextKind } } });
-    return { id: row.id, replay: false };
-  });
+      event: 'lead_setter_call_recorded', after: { callId: row.id, outcome: value.outcome, nextKind,
+        ...(appointment ? { appointmentId: appointment.id, appointmentVersion: appointment.version } : {}) } } });
+    await finish();
+    return { id: row.id, replay: false, appointment };
+  }, false, value.nextKind === 'VIDEO' ? 30_000 : COMMERCIAL_LEAD_INBOX_TRANSACTION.timeoutMs);
+  await captureSavedAppointment(db, receipt.appointment);
+  return { id: receipt.id, replay: receipt.replay, appointmentId: receipt.appointment?.id ?? null };
 }
 
 const closeStatusByReason = Object.freeze({

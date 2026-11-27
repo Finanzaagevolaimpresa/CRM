@@ -11,6 +11,7 @@ import { withTechnicalPage } from '@/lib/technical-surface-guards';
 import { readOperationalDocumentDelivery } from '@/lib/operational-document-delivery';
 import { listDriveFolders } from '@/lib/drive-folder-library';
 import { ProformaEmailForm, ProformaArchiveForm } from '@/components/operational-document-delivery-forms';
+import { formatProformaArchiveTime } from '@/lib/operational-document-time';
 export const dynamic = 'force-dynamic';
 async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession(); if (!canUseOperationalDocuments(session)) notFound();
@@ -18,9 +19,9 @@ async function Page({ params }: { params: Promise<{ id: string }> }) {
   let data;
   try { data = await readOperationalDocument(prisma, session, id); }
   catch (error) { if (error instanceof OperationalDocumentError && error.code === 'DENIED') notFound(); throw error; }
-  const { row, snapshot, decision, authors, proformas } = data;
+  const { row, snapshot, clientId, decision, authors, proformas } = data;
   const delivery = row.kind === 'PROFORMA' ? await readOperationalDocumentDelivery(prisma, session, row.id) : null;
-  const folders = delivery?.isAdmin && row.clientId ? (await listDriveFolders(prisma, session, { manage: true, clientId: row.clientId })).filter(folder => folder.state === 'ACTIVE' && folder.clientCurrent && !folder.expired) : [];
+  const folders = delivery?.isAdmin && clientId ? (await listDriveFolders(prisma, session, { manage: true, clientId })).filter(folder => folder.state === 'ACTIVE' && folder.clientCurrent && !folder.expired) : [];
   const proformaTemplates = decision && row.kind === 'CONTRACT' ? (await listOperationalTemplates(prisma, session)).filter(template => template.kind === 'PROFORMA') : [];
   const kind = documentKindLabels[row.kind as keyof typeof documentKindLabels] ?? 'Documento';
   return <div className="crm-space-y-6"><PageHeader title={kind + ' · ' + snapshot.fields.denominazione} description={decision ? 'Contenuto confermato. Invio, firma ed emissione fiscale conservano i propri stati.' : 'Bozza indipendente dal modello: controlla dati e contenuto prima della conferma.'}/>
@@ -38,11 +39,11 @@ async function Page({ params }: { params: Promise<{ id: string }> }) {
       : <p>L’Admin deve pubblicare un modello Proforma con i dati aziendali autorizzati dell’emittente.</p>}</Card>}
     {delivery && <Card title="Invio e ricevute">{delivery.email ? <>
       <p>Bozza email con PDF preparata il {formatDateTime(delivery.email.createdAt)}. Approvazione e invio seguono il percorso della posta aziendale.</p>
-      {delivery.isAdmin && <Link className="font-bold underline" href={'/communications?' + new URLSearchParams({ kind: 'CLIENT', practice: row.clientId!, focus: delivery.email.messageId })}>Apri bozza, approvazioni e ricevute</Link>}
+      {delivery.isAdmin && clientId && <Link className="font-bold underline" href={'/communications?' + new URLSearchParams({ kind: 'CLIENT', practice: clientId, focus: delivery.email.messageId })}>Apri bozza, approvazioni e ricevute</Link>}
       {delivery.email.native && <p>Stato verificato nella posta: {delivery.email.native.label}. Tentativi manuali: {delivery.email.native.attempts.length}; ricevute del canale attestate per questa versione: {delivery.email.native.receipts.length}.</p>}
-    </> : delivery.isAdmin && decision && row.clientId ? <ProformaEmailForm documentId={row.id} contentHash={row.contentHash} commandId={randomUUID()} email={snapshot.fields.email} mailboxes={delivery.mailboxes}/>
+    </> : delivery.isAdmin && decision && clientId ? <ProformaEmailForm documentId={row.id} contentHash={row.contentHash} commandId={randomUUID()} email={snapshot.fields.email} mailboxes={delivery.mailboxes}/>
       : <p>Conferma l’anteprima della proforma. L’Admin autorizzato alla posta può preparare la bozza email con il PDF e sottoporla all’approvazione prevista.</p>}</Card>}
-    {delivery && <Card title="Archivio Drive">{delivery.archives.map(item => <div className="mb-3" key={item.commandId}><a className="font-bold underline" href={item.url} target="_blank" rel="noopener noreferrer">Apri PDF archiviato</a><p>Archiviazione attestata dall’operatore il {formatDateTime(item.occurredAt)}. Evidenza: {item.evidence}</p></div>)}
+    {delivery && <Card title="Archivio Drive">{delivery.archives.map(item => <div className="mb-3" key={item.commandId}><a className="font-bold underline" href={item.url} target="_blank" rel="noopener noreferrer">Apri PDF archiviato</a><p>Archiviazione attestata dall’operatore il {formatProformaArchiveTime(item.occurredAt)}. Evidenza: {item.evidence}</p></div>)}
       <p>Il CRM registra l’evidenza dell’operatore e il collegamento. I file e i permessi Google si verificano in Drive.</p>
       {delivery.isAdmin && decision && folders.length > 0 && <ProformaArchiveForm documentId={row.id} contentHash={row.contentHash} commandId={randomUUID()} pdfSha256={delivery.pdfSha256} folders={folders}/>}
       {delivery.isAdmin && decision && folders.length === 0 && <p>Collega prima una cartella attiva e autorizzata al cliente nella libreria Fascicoli Drive.</p>}
@@ -54,7 +55,7 @@ async function Page({ params }: { params: Promise<{ id: string }> }) {
       {row.sourceDocumentId && <Link className="font-bold underline" href={'/document-library/' + row.sourceDocumentId}>Apri contratto di origine</Link>}
     </Card>
     <Card title="Documenti e firma"><p>Carica i file nella cartella Drive autorizzata del cliente. Il collegamento mantiene i permessi già assegnati.</p>
-      {row.clientId ? <Link className="font-bold underline" href={'/clients/' + row.clientId + '#file-condivisi'}>Apri cartelle Drive</Link> : <p>Nessuna anagrafica cliente collegata: completa il percorso di acquisizione prima dell’archiviazione.</p>}
+      {clientId ? <Link className="font-bold underline" href={'/clients/' + clientId + '#file-condivisi'}>Apri cartelle Drive</Link> : <p>Nessuna anagrafica cliente collegata: completa il percorso di acquisizione prima dell’archiviazione.</p>}
       {row.contractId && session.role === 'admin' && <Link className="mt-3 block font-bold underline" href={'/contracts/' + row.contractId}>Apri incarico e procedura di registrazione della firma</Link>}
     </Card>
   </div>;

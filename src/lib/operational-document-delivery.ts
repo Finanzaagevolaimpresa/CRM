@@ -54,34 +54,34 @@ function pdf(row: { id: string; content: string }) {
 }
 async function confirmedProforma(tx: Tx, claimed: AuthSession, input: z.infer<typeof command>, proof: UpdateCredentials) {
   const data = await admitOperationalDocumentInTransaction(tx, claimed, input.documentId, true, proof);
-  if (data.row.kind !== 'PROFORMA' || !data.row.clientId || data.row.contentHash !== input.contentHash) deny();
+  if (data.row.kind !== 'PROFORMA' || !data.clientId || data.row.contentHash !== input.contentHash) deny();
   const confirmation = await tx.operationalDocumentDecision.findUnique({ where: { documentId: data.row.id } });
   if (!confirmation || confirmation.contentHash !== data.row.contentHash) throw new OperationalDocumentError('UNCONFIRMED');
-  return data;
+  return { ...data, clientId: data.clientId };
 }
 /** Prepare exactly one native draft and immutable generated PDF. No approval, provider call or send. */
 export async function prepareOperationalProformaEmail(db: PrismaClient, claimed: AuthSession, raw: unknown, proof: UpdateCredentials) {
   const input = proformaEmailCommand.parse(raw), fingerprint = hash({ ...input, commandId: null });
   return withSerializableTransaction(db, async tx => {
-    const { auth, row } = await confirmedProforma(tx, claimed, input, proof), previous = await load(tx, row.id);
+    const { auth, row, clientId } = await confirmedProforma(tx, claimed, input, proof), previous = await load(tx, row.id);
     if (previous?.email) {
       if (previous.email.fingerprint !== fingerprint) throw new OperationalDocumentError('STALE');
       await auth.finish(); return { id: row.id, messageId: previous.email.messageId, replay: true };
     }
-    await admitAdminDraftTarget(tx, claimed, { kind: 'CLIENT', id: row.clientId! });
+    await admitAdminDraftTarget(tx, claimed, { kind: 'CLIENT', id: clientId });
     const artifact = pdf(row), attachmentId = derivedId('proforma-pdf-document', row.id + row.contentHash);
     const attachmentVersionId = derivedId('proforma-pdf-version', row.id + row.contentHash), messageId = derivedId('proforma-email', row.id + row.contentHash);
     const saved = await savePrivateDocumentFile({ file: new File([new Uint8Array(artifact.bytes)], 'proforma.pdf', { type: 'application/pdf' }),
-      fileName: 'proforma-' + row.id + '.pdf', clientId: row.clientId!, storageToken: hash({ documentId: row.id, contentHash: row.contentHash }) });
+      fileName: 'proforma-' + row.id + '.pdf', clientId, storageToken: hash({ documentId: row.id, contentHash: row.contentHash }) });
     if (saved.checksum !== artifact.sha256) deny();
-    await tx.document.create({ data: { id: attachmentId, clientId: row.clientId, type: 'application/pdf', title: 'Proforma per approvazione invio',
+    await tx.document.create({ data: { id: attachmentId, clientId, type: 'application/pdf', title: 'Proforma per approvazione invio',
       fileName: 'proforma-' + row.id + '.pdf', mimeType: 'application/pdf', documentCategory: 'fattura', containsSensitiveData: true,
       uploadedById: auth.actor.id, ...saved } });
     await tx.documentVersion.create({ data: { id: attachmentVersionId, documentId: attachmentId, version: 1, storagePath: saved.storagePath, checksum: saved.checksum } });
     const mailbox = await tx.communicationMailbox.findUnique({ where: { id: input.mailboxId } });
     if (!mailbox) deny();
     const draft = await saveApprovedMessageDraftInTransaction(tx, claimed, { messageId, expectedRevision: 0,
-      context: { kind: 'CLIENT', id: row.clientId }, mailboxId: mailbox.id, replyTo: mailbox.address, to: [input.to], cc: [], bcc: [],
+      context: { kind: 'CLIENT', id: clientId }, mailboxId: mailbox.id, replyTo: mailbox.address, to: [input.to], cc: [], bcc: [],
       subject: input.subject, body: input.body, attachmentVersionIds: [attachmentVersionId], classification: 'SENSITIVE' });
     const state = stateSchema.parse({ id: row.id, documentId: row.id, contentHash: row.contentHash, revision: (previous?.revision ?? 0) + 1,
       email: { messageId, attachmentId, attachmentVersionId, snapshotHash: draft.snapshotHash, fingerprint, pdfSha256: artifact.sha256, createdAt: (await auth.finish()).toISOString() }, archives: previous?.archives ?? [] });
@@ -93,10 +93,10 @@ export async function prepareOperationalProformaEmail(db: PrismaClient, claimed:
 export async function recordOperationalProformaArchive(db: PrismaClient, claimed: AuthSession, raw: unknown, proof: UpdateCredentials) {
   const input = proformaArchiveCommand.parse(raw), file = parseDriveFileLink(input.fileUrl);
   return withSerializableTransaction(db, async tx => {
-    const { auth, row } = await confirmedProforma(tx, claimed, input, proof), previous = await load(tx, row.id), artifact = pdf(row);
+    const { auth, row, clientId } = await confirmedProforma(tx, claimed, input, proof), previous = await load(tx, row.id), artifact = pdf(row);
     if (artifact.sha256 !== input.pdfSha256 || new Date(input.occurredAt) > await auth.finish()) throw new OperationalDocumentError('STALE');
     const folder = await readDriveFolderInTransaction(tx, claimed, input.folderId, true);
-    if (folder.state !== 'ACTIVE' || folder.clientId !== row.clientId) deny();
+    if (folder.state !== 'ACTIVE' || folder.clientId !== clientId) deny();
     await assertFinancialDriveFolderInTransaction(tx, folder.id);
     const replay = previous?.archives.find(item => item.fileId === file.fileId && item.pdfSha256 === artifact.sha256);
     if (replay) { await auth.finish(); return { id: row.id, replay: true }; }
@@ -109,15 +109,15 @@ export async function recordOperationalProformaArchive(db: PrismaClient, claimed
 }
 export async function readOperationalDocumentDelivery(db: PrismaClient, claimed: AuthSession, documentId: string) {
   const data = await withSerializableTransaction(db, async tx => {
-    const { auth, row } = await admitOperationalDocumentInTransaction(tx, claimed, documentId), state = await load(tx, row.id);
+    const { auth, row, clientId } = await admitOperationalDocumentInTransaction(tx, claimed, documentId), state = await load(tx, row.id);
     const archives = [];
     for (const item of state?.archives ?? []) {
       try { const folder = await readDriveFolderInTransaction(tx, claimed, item.folderId, auth.actor.role === 'admin');
-        if (folder.state === 'ACTIVE' && folder.clientId === row.clientId) archives.push(item);
+        if (folder.state === 'ACTIVE' && folder.clientId === clientId) archives.push(item);
       } catch { /* A withdrawn folder reference never leaks its file URL. */ }
     }
     const mailboxes = auth.actor.role === 'admin' ? await tx.communicationMailbox.findMany({ select: { id: true, address: true }, orderBy: { address: 'asc' } }) : [];
-    await auth.finish(); return { state, archives, mailboxes, clientId: row.clientId, isAdmin: auth.actor.role === 'admin', pdfSha256: pdf(row).sha256 };
+    await auth.finish(); return { state, archives, mailboxes, clientId, isAdmin: auth.actor.role === 'admin', pdfSha256: pdf(row).sha256 };
   });
   let native: null | { state: string; label: string; attempts: { state: string; createdAt: string }[]; receipts: { outcome: string | null; recordedAt: string | null }[] } = null;
   if (data.isAdmin && data.state?.email && data.clientId) {

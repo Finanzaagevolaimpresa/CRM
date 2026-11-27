@@ -34,10 +34,10 @@ export async function readWorkflowAdministration(db: Db, session: AuthSession) {
       tx.workflowNewsletterRun.findMany({ orderBy: { createdAt: 'desc' }, take: 100,
         select: { id: true, automationId: true, automationVersion: true, synthetic: true, state: true, scheduledAt: true, createdAt: true,
           recipients: { where: { lead: { deletedAt: null, AND: [leadVisibilityWhere(auth.actor)] } },
-            select: { id: true, state: true, attemptCount: true, policySnapshot: true, nativeMessageId: true,
+            select: { id: true,leadId: true, state: true, attemptCount: true, policySnapshot: true, nativeMessageId: true,
               lead: { select: { companyName: true, firstName: true, lastName: true } } } } } }),
       tx.communicationMailbox.findMany({ where: { canSend: true, restricted: false }, select: { id: true, address: true }, orderBy: { address: 'asc' } }),
-      tx.auditLog.findMany({ where: { event: { in: ['workflow_capture_held', 'workflow_preparation_held'] } }, select: { id: true, event: true, entityType: true, after: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      tx.auditLog.findMany({ where: { event: { in: ['workflow_capture_held', 'workflow_preparation_held','workflow_service_held'] } }, select: { id: true, event: true, entityType: true, after: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 100 }),
     ]);
     let nativeNewsletterReady = false;
     try {

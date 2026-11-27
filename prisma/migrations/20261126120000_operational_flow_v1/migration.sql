@@ -635,4 +635,179 @@ CREATE TRIGGER "MarketingPreferenceSubject_no_truncate_r13" BEFORE TRUNCATE ON "
 
 
 ALTER TABLE "WorkflowExecution" ADD CONSTRAINT "WorkflowExecution_recipientUserId_fkey" FOREIGN KEY ("recipientUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- R1: explicit service authority. Empty ledgers do not activate any runtime.
+CREATE TABLE "WorkflowServiceCredential" (
+ "id" UUID PRIMARY KEY, "keyFingerprint" CHAR(64) NOT NULL CHECK ("keyFingerprint" ~ '^[a-f0-9]{64}$'),
+ "state" VARCHAR(20) NOT NULL DEFAULT 'REVOKED' CHECK ("state" IN ('ACTIVE','REVOKED')),
+ "revision" INTEGER NOT NULL DEFAULT 1 CHECK ("revision">0), "validUntil" TIMESTAMPTZ(3) NOT NULL,
+ "qualificationReference" VARCHAR(200) NOT NULL CHECK (length("qualificationReference")>=8),
+ "createdById" TEXT NOT NULL REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE "WorkflowServiceGrant" (
+ "id" UUID PRIMARY KEY, "automationId" UUID NOT NULL REFERENCES "WorkflowAutomation"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "automationVersion" INTEGER NOT NULL CHECK ("automationVersion">0),
+ "credentialId" UUID NOT NULL REFERENCES "WorkflowServiceCredential"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "credentialRevision" INTEGER NOT NULL CHECK ("credentialRevision">0),
+ "issuedById" TEXT NOT NULL REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "issuedSessionId" UUID NOT NULL REFERENCES "InternalSession"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "state" VARCHAR(20) NOT NULL DEFAULT 'REVOKED' CHECK ("state" IN ('ACTIVE','REVOKED')),
+ "revision" INTEGER NOT NULL DEFAULT 1 CHECK ("revision">0),
+ "validFrom" TIMESTAMPTZ(3) NOT NULL, "validUntil" TIMESTAMPTZ(3) NOT NULL,
+ "maxMessages" INTEGER NOT NULL CHECK ("maxMessages" BETWEEN 1 AND 100000),
+ "maxPerDay" INTEGER NOT NULL CHECK ("maxPerDay" BETWEEN 1 AND "maxMessages"),
+ "policy" JSONB NOT NULL CHECK (jsonb_typeof("policy")='object'),
+ "policyHash" CHAR(64) NOT NULL CHECK ("policyHash" ~ '^[a-f0-9]{64}$'),
+ "approvedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "revokedAt" TIMESTAMPTZ(3),
+ CHECK ("validUntil">"validFrom" AND "validUntil"<="validFrom"+interval '31 days'),
+ CHECK (("state"='ACTIVE' AND "revokedAt" IS NULL) OR ("state"='REVOKED' AND "revokedAt" IS NOT NULL))
+);
+CREATE INDEX "WorkflowServiceGrant_state_validUntil_idx" ON "WorkflowServiceGrant"("state","validUntil");
+CREATE UNIQUE INDEX "WorkflowServiceGrant_one_active" ON "WorkflowServiceGrant"("automationId") WHERE "state"='ACTIVE';
+CREATE TABLE "WorkflowServiceInvocation" (
+ "id" UUID PRIMARY KEY, "grantId" UUID NOT NULL REFERENCES "WorkflowServiceGrant"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "requestHash" CHAR(64) NOT NULL CHECK ("requestHash" ~ '^[a-f0-9]{64}$'),
+ "expiresAt" TIMESTAMPTZ(3) NOT NULL, "startedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ "finishedAt" TIMESTAMPTZ(3), "result" JSONB,
+ CHECK ("expiresAt">"startedAt" AND "expiresAt"<="startedAt"+interval '5 minutes'),
+ CHECK (("finishedAt" IS NULL AND "result" IS NULL) OR ("finishedAt">="startedAt" AND jsonb_typeof("result")='object'))
+);
+CREATE TABLE "WorkflowServiceMessage" (
+ "messageId" UUID PRIMARY KEY REFERENCES "ApprovedCommunication"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "versionId" UUID NOT NULL UNIQUE REFERENCES "CommunicationVersion"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "grantId" UUID NOT NULL REFERENCES "WorkflowServiceGrant"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "invocationId" UUID NOT NULL REFERENCES "WorkflowServiceInvocation"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "executionId" UUID UNIQUE REFERENCES "WorkflowExecution"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "recipientId" UUID UNIQUE REFERENCES "WorkflowNewsletterRecipient"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "policyHash" CHAR(64) NOT NULL CHECK ("policyHash" ~ '^[a-f0-9]{64}$'),
+ "sourceHash" CHAR(64) NOT NULL CHECK ("sourceHash" ~ '^[a-f0-9]{64}$'),
+ "snapshotHash" CHAR(64) NOT NULL CHECK ("snapshotHash" ~ '^[a-f0-9]{64}$'),
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK (num_nonnulls("executionId","recipientId")=1 AND "messageId"=COALESCE("executionId","recipientId"))
+);
+ALTER TABLE "OrdinaryEmailDecision" ALTER COLUMN "sessionId" DROP NOT NULL;
+CREATE TABLE "WorkflowServiceNotice" (
+ "executionId" UUID PRIMARY KEY REFERENCES "WorkflowExecution"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "grantId" UUID NOT NULL REFERENCES "WorkflowServiceGrant"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "invocationId" UUID NOT NULL REFERENCES "WorkflowServiceInvocation"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "recipientUserId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "policyHash" CHAR(64) NOT NULL CHECK ("policyHash" ~ '^[a-f0-9]{64}$'),
+ "sourceHash" CHAR(64) NOT NULL CHECK ("sourceHash" ~ '^[a-f0-9]{64}$'),
+ "textHash" CHAR(64) NOT NULL CHECK ("textHash" ~ '^[a-f0-9]{64}$'),
+ decision JSONB NOT NULL CHECK (jsonb_typeof(decision)='object'),
+ "decisionHash" CHAR(64) NOT NULL CHECK ("decisionHash" ~ '^[a-f0-9]{64}$'),
+ proof CHAR(64) NOT NULL CHECK (proof ~ '^[a-f0-9]{64}$'),
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TRIGGER workflow_service_notice_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON "WorkflowServiceNotice" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
+CREATE FUNCTION fai_workflow_service_check_quota(grant_id UUID) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE g "WorkflowServiceGrant"%ROWTYPE; used_total integer; used_day integer;
+BEGIN
+ SELECT * INTO g FROM "WorkflowServiceGrant" WHERE id=grant_id FOR UPDATE;
+ IF NOT FOUND OR g.state<>'ACTIVE' OR clock_timestamp()<g."validFrom" OR clock_timestamp()>=g."validUntil" THEN RAISE EXCEPTION 'WORKFLOW_SERVICE_DENIED'; END IF;
+ SELECT count(*)::integer,count(*) FILTER (WHERE q.at>=date_trunc('day',clock_timestamp(),'UTC'))::integer INTO used_total,used_day FROM (
+  SELECT d."createdAt" AS at FROM "OrdinaryEmailDecision" d JOIN "WorkflowServiceMessage" s ON s."messageId"=d."serviceMessageId" WHERE s."grantId"=grant_id
+  UNION ALL SELECT n."createdAt" FROM "WorkflowServiceNotice" n WHERE n."grantId"=grant_id
+ ) q;
+ IF used_total>=g."maxMessages" OR used_day>=g."maxPerDay" THEN RAISE EXCEPTION 'WORKFLOW_SERVICE_QUOTA'; END IF;
+END;
+$$;
+CREATE FUNCTION fai_workflow_service_notice_binding() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ PERFORM fai_workflow_service_check_quota(NEW."grantId");
+ IF NOT EXISTS (SELECT 1 FROM "WorkflowServiceGrant" g JOIN "WorkflowServiceInvocation" i ON i."grantId"=g.id
+   JOIN "WorkflowExecution" e ON e.id=NEW."executionId" JOIN "WorkflowEnrollment" n ON n.id=e."enrollmentId"
+   JOIN "Lead" l ON l.id=n."leadId" JOIN "User" u ON u.id=e."recipientUserId"
+   WHERE g.id=NEW."grantId" AND i.id=NEW."invocationId" AND g."policyHash"=NEW."policyHash"
+    AND g.policy->>'action'='INTERNAL_NOTICE' AND n."automationId"=g."automationId" AND n."automationVersion"=g."automationVersion"
+    AND n."sourceHash"=NEW."sourceHash" AND NOT n.synthetic AND e.state='PENDING' AND n.state='PENDING'
+    AND e."recipientUserId"=NEW."recipientUserId" AND l."assignedToId"=NEW."recipientUserId" AND u.active AND u."deletedAt" IS NULL
+    AND NEW.decision->>'protocol'='FAI_WORKFLOW_SERVICE_INTERNAL_DECISION_V1'
+    AND NEW.decision->>'executionId'=NEW."executionId"::text AND NEW.decision->>'grantId'=g.id::text
+    AND NEW.decision->>'grantRevision'=g.revision::text AND NEW.decision->>'recipientUserId'=NEW."recipientUserId"
+    AND NEW.decision->>'policyHash'=NEW."policyHash" AND NEW.decision->>'sourceHash'=NEW."sourceHash"
+    AND NEW.decision->>'textHash'=NEW."textHash") THEN RAISE EXCEPTION 'WORKFLOW_SERVICE_NOTICE_BINDING'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER workflow_service_notice_binding BEFORE INSERT ON "WorkflowServiceNotice" FOR EACH ROW EXECUTE FUNCTION fai_workflow_service_notice_binding();
+ALTER TABLE "OrdinaryEmailDecision" ADD COLUMN "serviceMessageId" UUID UNIQUE REFERENCES "WorkflowServiceMessage"("messageId") ON DELETE RESTRICT;
+ALTER TABLE "OrdinaryEmailDecision" ADD CONSTRAINT ordinary_email_actor_kind CHECK (
+ (("sessionId" IS NOT NULL AND "serviceMessageId" IS NULL AND "decision"->>'protocol'='FAI_ORDINARY_EMAIL_PERSONAL_DECISION_V1') OR
+ ("sessionId" IS NULL AND "serviceMessageId" IS NOT NULL AND "serviceMessageId"="messageId" AND "decision"->>'protocol'='FAI_ORDINARY_EMAIL_WORKFLOW_DECISION_V1')) IS TRUE
+);
+CREATE FUNCTION fai_workflow_service_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP<>'UPDATE' THEN RAISE EXCEPTION 'WORKFLOW_SERVICE_REMOVAL_DENIED'; END IF;
+ IF TG_TABLE_NAME='WorkflowServiceInvocation' THEN
+  IF (to_jsonb(NEW)-ARRAY['finishedAt','result']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['finishedAt','result'])
+    OR OLD."finishedAt" IS NOT NULL OR NEW."finishedAt" IS NULL OR NEW."result" IS NULL THEN
+   RAISE EXCEPTION 'WORKFLOW_SERVICE_INVOCATION_IMMUTABLE';
+  END IF;
+ ELSE
+  IF (to_jsonb(NEW)-ARRAY['state','revision','revokedAt']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['state','revision','revokedAt'])
+    OR OLD."state"<>'ACTIVE' OR NEW."state"<>'REVOKED' OR NEW."revision"<>OLD."revision"+1 THEN
+   RAISE EXCEPTION 'WORKFLOW_SERVICE_AUTHORITY_IMMUTABLE';
+  END IF;
+ END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER workflow_service_credential_guard BEFORE UPDATE OR DELETE ON "WorkflowServiceCredential" FOR EACH ROW EXECUTE FUNCTION fai_workflow_service_guard();
+CREATE TRIGGER workflow_service_grant_guard BEFORE UPDATE OR DELETE ON "WorkflowServiceGrant" FOR EACH ROW EXECUTE FUNCTION fai_workflow_service_guard();
+CREATE TRIGGER workflow_service_invocation_guard BEFORE UPDATE OR DELETE ON "WorkflowServiceInvocation" FOR EACH ROW EXECUTE FUNCTION fai_workflow_service_guard();
+CREATE TRIGGER workflow_service_message_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON "WorkflowServiceMessage" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
+CREATE TRIGGER workflow_service_credential_no_truncate BEFORE TRUNCATE ON "WorkflowServiceCredential" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
+CREATE TRIGGER workflow_service_grant_no_truncate BEFORE TRUNCATE ON "WorkflowServiceGrant" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
+CREATE TRIGGER workflow_service_invocation_no_truncate BEFORE TRUNCATE ON "WorkflowServiceInvocation" FOR EACH STATEMENT EXECUTE FUNCTION fai_operational_evidence_immutable();
+CREATE FUNCTION fai_workflow_service_binding() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM "WorkflowServiceGrant" g JOIN "WorkflowServiceInvocation" i ON i."grantId"=g."id"
+   JOIN "CommunicationVersion" v ON v."id"=NEW."versionId" JOIN "ApprovedCommunication" m ON m."id"=v."messageId"
+   WHERE g."id"=NEW."grantId" AND i."id"=NEW."invocationId" AND g."policyHash"=NEW."policyHash"
+   AND m."id"=NEW."messageId" AND m."contextKind"='LEAD' AND m."createdById"=g."issuedById"
+   AND v."snapshotHash"=NEW."snapshotHash" AND v."revision"=m."currentRevision"
+   AND ((NEW."executionId" IS NOT NULL AND EXISTS (SELECT 1 FROM "WorkflowExecution" e JOIN "WorkflowEnrollment" n ON n."id"=e."enrollmentId"
+      WHERE e."id"=NEW."executionId" AND n."automationId"=g."automationId" AND n."automationVersion"=g."automationVersion"
+      AND n."leadId"=m."leadId" AND NOT n.synthetic AND n."sourceHash"=NEW."sourceHash"))
+     OR (NEW."recipientId" IS NOT NULL AND EXISTS (SELECT 1 FROM "WorkflowNewsletterRecipient" r JOIN "WorkflowNewsletterRun" n ON n."id"=r."runId"
+      WHERE r."id"=NEW."recipientId" AND n."automationId"=g."automationId" AND n."automationVersion"=g."automationVersion"
+      AND r."leadId"=m."leadId" AND NOT n.synthetic)))) THEN RAISE EXCEPTION 'WORKFLOW_SERVICE_MESSAGE_BINDING'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE TRIGGER workflow_service_message_binding BEFORE INSERT ON "WorkflowServiceMessage" FOR EACH ROW EXECUTE FUNCTION fai_workflow_service_binding();
+-- Extend the native binding with a separate protocol; the personal branch is unchanged.
+CREATE OR REPLACE FUNCTION "ordinary_email_decision_binding"() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE grant_row "WorkflowServiceGrant"%ROWTYPE;
+BEGIN
+ IF NEW."decision"->>'decisionId' IS DISTINCT FROM NEW."id"::text
+    OR NEW."decision"->>'messageId' IS DISTINCT FROM NEW."messageId"::text
+    OR NEW."decision"->>'actorId' IS DISTINCT FROM NEW."actorId"
+    OR NOT EXISTS (SELECT 1 FROM "CommunicationVersion" v JOIN "ApprovedCommunication" m ON m."id"=v."messageId"
+       WHERE v."id"=NEW."versionId" AND m."id"=NEW."messageId" AND v."revision"=m."currentRevision"
+       AND v."snapshotHash"=NEW."decision"->>'draftHash' AND v."revision"::text=NEW."decision"->>'draftRevision') THEN
+  RAISE EXCEPTION 'ORDINARY_EMAIL_DECISION_BINDING';
+ END IF;
+ IF NEW."decision"->>'protocol'='FAI_ORDINARY_EMAIL_PERSONAL_DECISION_V1' THEN
+  IF NEW."serviceMessageId" IS NOT NULL OR NEW."decision"->>'sessionId' IS DISTINCT FROM NEW."sessionId"::text
+     OR NOT EXISTS (SELECT 1 FROM "InternalSession" WHERE "id"=NEW."sessionId" AND "userId"=NEW."actorId") THEN
+   RAISE EXCEPTION 'ORDINARY_EMAIL_DECISION_BINDING';
+  END IF;
+ ELSIF NEW."decision"->>'protocol'='FAI_ORDINARY_EMAIL_WORKFLOW_DECISION_V1' THEN
+  SELECT g.* INTO grant_row FROM "WorkflowServiceGrant" g JOIN "WorkflowServiceMessage" s ON s."grantId"=g."id"
+    WHERE s."messageId"=NEW."messageId" AND s."messageId"=NEW."serviceMessageId" AND s."versionId"=NEW."versionId"
+      AND s."policyHash"=NEW."decision"->>'policyHash' AND s."sourceHash"=NEW."decision"->>'sourceHash' FOR UPDATE OF g;
+  IF NOT FOUND OR NEW."sessionId" IS NOT NULL OR grant_row."issuedById"<>NEW."actorId" OR grant_row."state"<>'ACTIVE'
+    OR grant_row."id"::text IS DISTINCT FROM NEW."decision"->>'grantId'
+    OR grant_row."revision"::text IS DISTINCT FROM NEW."decision"->>'grantRevision'
+    OR clock_timestamp()<grant_row."validFrom" OR clock_timestamp()>=grant_row."validUntil" THEN
+   RAISE EXCEPTION 'WORKFLOW_SERVICE_DECISION_BINDING';
+  END IF;
+  PERFORM fai_workflow_service_check_quota(grant_row.id);
+ ELSE RAISE EXCEPTION 'ORDINARY_EMAIL_DECISION_BINDING'; END IF;
+ RETURN NEW;
+END;
+$$;
 COMMIT;

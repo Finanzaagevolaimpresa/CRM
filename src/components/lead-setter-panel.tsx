@@ -8,12 +8,16 @@ import { setterDetails, setterFields, riskFields, riskOrigins, setterOutcomes, a
 import { isTechnicalAccount } from '@/lib/technical-confidentiality';
 import { hasPermission, type AuthSession } from '@/lib/auth';
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
+import { listBookableCalendars } from '@/lib/personal-calendar';
 
 export async function LeadSetterPanel({ session, lead, item }: { session: AuthSession; lead: Lead; item: { state: string; version: number } | null }) {
   if (isTechnicalAccount(session) || !hasPermission(session,'lead.read')) return null;
   const calls = await prisma.leadSetterCall.findMany({ where: { leadId: lead.id, lead: { deletedAt: null, AND: [leadVisibilityWhere(session)] } },
     orderBy: [{ recordedAt: 'desc' }, { id: 'asc' }], include: { actor: { select: { name: true } } } });
   const open = !lead.clientId && (!item || item.state === 'OPEN') && !['archiviato','perso','vinto','cliente_acquisito','non_qualificato'].includes(lead.status);
+  const editable = open && lead.assignedToId === session.userId && hasPermission(session, 'lead.write');
+  const [calendars, appointment] = editable ? await Promise.all([listBookableCalendars(prisma, session),
+    prisma.leadAppointment.findUnique({ where: { leadId: lead.id } })]) : [[], null];
   const previous = calls.find(call => call.outcome !== 'UNREACHABLE' && call.details !== null);
   const last = setterDetails.safeParse(previous?.details);
   const defaults: Partial<Record<keyof typeof setterFields, string>> = {};
@@ -30,9 +34,12 @@ export async function LeadSetterPanel({ session, lead, item }: { session: AuthSe
   return <><Card title="Registra chiamata">
     {last.success && previous && <p>I dati del progetto provengono dalla scheda lead e dall’ultima telefonata del {formatDateTime(previous.recordedAt, 'Europe/Rome')}. Puoi aggiornarli per questa chiamata.</p>}
     {lead.availableBudget != null && <p>Budget disponibile indicato nel lead: {lead.availableBudget.toString()} €.</p>}
-    {open && lead.assignedToId === session.userId && hasPermission(session,'lead.write')
+    {editable
       ? <LeadSetterForm leadId={lead.id} actorId={session.userId} confirmedIds={calls.filter(c => c.actorId === session.userId).map(c => c.id)} initialId={randomUUID()} version={item?.version ?? null} leadVersion={lead.updatedAt.toISOString()}
-          defaults={defaults} scheduledVideo={lead.setterNextKind === 'VIDEO'}/>
+          defaults={defaults} scheduledVideo={lead.setterNextKind === 'VIDEO'} calendars={calendars}
+          legacyDate={lead.setterNextKind === 'VIDEO' ? lead.nextActionDate?.toISOString() ?? null : null}
+          appointment={appointment ? { id: appointment.id, calendarId: appointment.calendarId, version: appointment.version,
+            startsAt: appointment.startsAt.toISOString(), endsAt: appointment.endsAt.toISOString(), status: appointment.status } : null}/>
       : <p>Il referente nominativo può registrare le telefonate mentre il lead è aperto.</p>}
     <nav className="mt-4 flex flex-wrap gap-4"><Link href="/leads/work?queue=callbacks" className="underline">Richiami di oggi</Link>
       <Link href="/leads/work?queue=overdue" className="underline">Scaduti</Link><Link href="/leads/work?queue=videos" className="underline">Videochiamate fissate</Link></nav>

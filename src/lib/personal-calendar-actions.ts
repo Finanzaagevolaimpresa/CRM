@@ -6,16 +6,9 @@ import { prisma } from './prisma';
 import { leadVisibilityWhere } from './core-query-policy';
 import { assertTechnicalServerAction } from './technical-server-guards';
 import { beginGoogleCalendarConnection, connectedCalendarAdapter } from './google-calendar-oauth';
-import { appointmentCommandSchema, CalendarError } from './personal-calendar-contract';
+import { appointmentCommandSchema, CalendarError, calendarErrorMessage as message } from './personal-calendar-contract';
 import { saveCalendarAvailability, saveLeadAppointment, synchronizeLeadAppointment } from './personal-calendar';
 
-function message(error: unknown) {
-  if (!(error instanceof CalendarError)) return 'Salvataggio non confermato. Ricarica la scheda e verifica l’esito prima di riprovare.';
-  return { DENIED: 'Calendario o scheda non autorizzati.', STALE: 'La scheda è cambiata. Ricarica e verifica l’appuntamento.',
-    BUSY: 'La fascia è occupata. Scegli un altro orario.', OUTSIDE_HOURS: 'Scegli una data futura nelle fasce del referente.',
-    INVALID: 'Verifica data, ora di Roma e durata.', UNCONNECTED: 'Google Calendar non è collegato o la connessione richiede verifica.',
-    UNCERTAIN: 'Esito Google da riconciliare. Verifica la sincronizzazione prima di riprovare.' }[error.code];
-}
 export async function saveAvailabilityAction(raw: unknown) {
   await assertTechnicalServerAction('personal-calendar-actions:saveAvailabilityAction');
   const actor = await requireSession();

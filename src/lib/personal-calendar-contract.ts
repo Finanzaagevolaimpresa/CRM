@@ -21,6 +21,19 @@ export type AppointmentCommand = z.infer<typeof appointmentCommandSchema>;
 export class CalendarError extends Error {
   constructor(readonly code: 'DENIED' | 'STALE' | 'BUSY' | 'OUTSIDE_HOURS' | 'INVALID' | 'UNCONNECTED' | 'UNCERTAIN') { super(code); }
 }
+export function calendarErrorMessage(error: unknown) {
+  if (!(error instanceof CalendarError)) return 'Salvataggio non confermato. Ricarica la scheda e verifica l’esito prima di riprovare.';
+  return { DENIED: 'Calendario o scheda non autorizzati.', STALE: 'La scheda è cambiata. Ricarica e verifica l’appuntamento.',
+    BUSY: 'La fascia è occupata. Scegli un altro orario.', OUTSIDE_HOURS: 'Scegli una data futura nelle fasce del referente.',
+    INVALID: 'Verifica data, ora di Roma e durata.', UNCONNECTED: 'Google Calendar non è collegato o la connessione richiede verifica.',
+    UNCERTAIN: 'Esito Google da riconciliare. Verifica la sincronizzazione prima di riprovare.' }[error.code];
+}
+
+/** A legacy VIDEO is also a reservation to migrate through the appointment
+ * command; editing its next-action field may never create a second entry point. */
+export function assertVideoNextActionUnchanged(lead: { setterNextKind: string | null; nextActionDate: Date | null }, date: Date | null) {
+  if (lead.setterNextKind === 'VIDEO' && lead.nextActionDate?.getTime() !== date?.getTime()) throw new CalendarError('BUSY');
+}
 /** Pipeline forms declare their wall-clock zone. The locked persisted instant
  * remains exact when only notes/priority change, including the autumn overlap. */
 export function pipelineNextActionDate(raw: unknown, current: Date | null, timezone: unknown): Date | null {

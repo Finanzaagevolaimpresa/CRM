@@ -35,7 +35,7 @@ export async function recordWorkflowLeadStatusEvent(tx: Tx, leadId: string, audi
   return { kind: 'STATUS_CHANGED', leadId, referenceId: event.id };
 }
 
-async function effectiveAt(tx: Tx, source: AutomaticSource): Promise<Date | null> {
+export async function workflowOperationalEffectiveAt(tx: Tx, source: AutomaticSource): Promise<Date | null> {
   if (source.kind === 'APPOINTMENT_BOOKED') {
     const row = await tx.auditLog.findFirst({ where: { entityType: 'Lead', entityId: source.leadId,
       event: { in: ['lead_appointment_booked', 'lead_appointment_rescheduled'] },
@@ -64,7 +64,7 @@ export async function captureWorkflowOperationalEvent(tx: Tx, source: AutomaticS
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${rule.createdById} FOR SHARE`;
   const author = await currentRecordUpdateUser(tx, rule.createdById);
   if (!author || author.role !== 'admin' || !recordUpdatePermission(author, 'practice_communications.write') || !recordUpdatePermission(author, 'lead.read')) return { captured: 0 };
-  const occurredAt = await effectiveAt(tx, source);
+  const occurredAt = await workflowOperationalEffectiveAt(tx, source);
   // Activating or revising a rule never enrolls earlier operational events.
   if (!occurredAt || occurredAt < rule.updatedAt) return { captured: 0 };
   const resolved = await resolveWorkflowSource(tx, source);
@@ -100,6 +100,17 @@ export async function recoverWorkflowOperationalEvents(db: PrismaClient, session
     if (!authority?.enabled || authority.userId !== auth.actor.id) throw new Error('WORKFLOW_SENDER_AUTHORITY_REQUIRED');
     const rules = await tx.workflowAutomation.findMany({ where: { state: 'ACTIVE', event: { in: kinds }, createdById: auth.actor.id,
       ...(input.automationId ? { id: input.automationId } : {}) }, orderBy: { id: 'asc' }, take: 50 });
+    const sources = await recoverableWorkflowSources(tx,rules,limit);
+    await auth.finish(); return sources;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+  let captured = 0;
+  for (const source of sources) captured += (await captureWorkflowOperationalEventAfterCommit(db, source)).captured;
+  return { examined: sources.length, captured, providerCalls: 0 as const };
+}
+
+/** Bounded source query shared by human recovery and the service grant. The
+ * caller supplies an admitted rule/cutoff; the planner rechecks current scope. */
+export async function recoverableWorkflowSources(tx: Tx,rules: Array<{ id: string;event: string;updatedAt: Date }>,limit: number) {
     const selected: AutomaticSource[] = [];
     for (const rule of rules) {
       const remaining = limit - selected.length; if (!remaining) break;
@@ -142,9 +153,5 @@ export async function recoverWorkflowOperationalEvents(db: PrismaClient, session
       selected.push(...rows.map(row => ({ kind: rule.event as AutomaticSource['kind'], leadId: row.leadId,
         referenceId: row.referenceId, ...(row.referenceVersion ? { referenceVersion: row.referenceVersion } : {}), ...(row.origin ? { origin: row.origin } : {}) })));
     }
-    await auth.finish(); return selected;
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
-  let captured = 0;
-  for (const source of sources) captured += (await captureWorkflowOperationalEventAfterCommit(db, source)).captured;
-  return { examined: sources.length, captured, providerCalls: 0 as const };
+    return selected;
 }

@@ -7,7 +7,7 @@ const { assertLocalLinuxDocker, canonicalSnapshotBytes, posixRunArgs, safeSnapsh
 test('unit runner includes every native and POSIX test group without skip filters', () => {
   const files = unitTestFiles(process.cwd());
   assert.ok(files.native.length > 200);
-  assert.equal(files.posix.length, 8);
+  assert.equal(files.posix.length, 9);
   const args = posixRunArgs('sha256:' + 'a'.repeat(64), files.posix);
   assert.deepEqual(args.slice(-files.posix.length), files.posix);
   for (const required of ['none', '--read-only', 'ALL', 'no-new-privileges=true', '1000:1000']) assert.ok(args.includes(required));

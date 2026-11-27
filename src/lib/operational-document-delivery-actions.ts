@@ -8,6 +8,7 @@ import { assertTechnicalServerAction } from './technical-server-guards';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { PrivilegedAdmissionRequired, privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
 import { prepareOperationalProformaEmail, recordOperationalProformaArchive } from './operational-document-delivery';
+import { OperationalArchiveTimeError, resolveProformaArchiveTime } from './operational-document-time';
 
 type State = { error: string | null; stepUpRequired?: boolean };
 async function save(kind: 'EMAIL' | 'ARCHIVE', form: FormData): Promise<State> {
@@ -19,10 +20,12 @@ async function save(kind: 'EMAIL' | 'ARCHIVE', form: FormData): Promise<State> {
     const base = { commandId: form.get('commandId'), documentId: form.get('documentId'), contentHash: form.get('contentHash'), confirmed: form.get('confirmed') === 'on' };
     result = kind === 'EMAIL' ? await prepareOperationalProformaEmail(prisma, session, { ...base, mailboxId: form.get('mailboxId'), to: form.get('to'), subject: form.get('subject'), body: form.get('body') }, proof)
       : await recordOperationalProformaArchive(prisma, session, { ...base, folderId: form.get('folderId'), fileUrl: form.get('fileUrl'), pdfSha256: form.get('pdfSha256'),
-        evidence: form.get('evidence'), occurredAt: new Date(String(form.get('occurredAt'))).toISOString(), folderMembershipConfirmed: form.get('folderMembershipConfirmed') === 'on', accessConfirmed: form.get('accessConfirmed') === 'on' }, proof);
+        evidence: form.get('evidence'), occurredAt: resolveProformaArchiveTime(form.get('occurredAt'), form.get('occurredAtTimeZone'), form.get('occurredAtInstant')),
+        folderMembershipConfirmed: form.get('folderMembershipConfirmed') === 'on', accessConfirmed: form.get('accessConfirmed') === 'on' }, proof);
   } catch (error) {
     unstable_rethrow(error);
     if (error instanceof PrivilegedAdmissionRequired) return { error: error.formState.message, stepUpRequired: error.status === 'required' };
+    if (error instanceof OperationalArchiveTimeError) return { error: error.message };
     return { error: kind === 'EMAIL' ? 'Bozza non confermata. Verifica conferma proforma, autorità email, mittente, destinatario e risultato già registrato prima di ripetere.'
       : 'Evidenza non registrata. Verifica cartella attiva del cliente, link del file, hash PDF e data effettiva.' };
   }

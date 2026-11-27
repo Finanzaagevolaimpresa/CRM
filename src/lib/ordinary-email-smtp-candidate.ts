@@ -9,7 +9,7 @@ import { prepareOrdinaryEmail, type OrdinaryChannel } from './ordinary-email-can
  * retry, worker or activation. Only a trusted server service may supply these
  * dependencies after implementing the durable, audited personal-decision gate.
  * Neither a signed preview nor an M4 manual approval is a transport permit. */
-type Material = { snapshot: ApprovedMessageSnapshot; channel: OrdinaryChannel; materials: Map<string, Buffer>; preparedAt: Date };
+type Material = { snapshot: ApprovedMessageSnapshot; channel: OrdinaryChannel; materials: Map<string, Buffer>; preparedAt: Date; authority?: 'PERSONAL'|'WORKFLOW' };
 export type OrdinaryAttemptRequest = Readonly<{
   attemptId: string; intentHash: string; mimeHash: string; envelopeHash: string; channel: OrdinaryChannel;
 }>;
@@ -125,7 +125,7 @@ export async function transmitOrdinaryEmailCandidate(
     live(); z.string().uuid().parse(attemptId);
     // Rebuild from the versioned material before any await; callers never get
     // a reference to the private MIME/envelope used by this invocation.
-    const prepared = prepareOrdinaryEmail(material.snapshot, material.channel, material.materials, material.preparedAt);
+    const prepared = prepareOrdinaryEmail(material.snapshot, material.channel, material.materials, material.preparedAt, material.authority);
     const mime = prepared.mime.toString('ascii');
     request = Object.freeze({ attemptId, intentHash: prepared.intentHash, mimeHash: prepared.mimeHash,
       envelopeHash: canonicalSha256(prepared.envelope), channel: Object.freeze(prepared.intent.channel) });

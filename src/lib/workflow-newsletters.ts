@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { updateActor } from './record-updates';
-import { recordUpdateContext, recordUpdatePermission } from './record-update-context';
+import { recordUpdateContext, recordUpdatePermission, type currentRecordUpdateUser } from './record-update-context';
 import { leadVisibilityWhere } from './core-query-policy';
 import { canonicalSha256 } from './canonical-json';
 import { assertSyntheticCatalogDatabase } from './service-catalog-v2-persistence';
@@ -61,11 +61,18 @@ const recipientSnapshot = z.object({ email: z.string().email(), firstName: z.str
 export async function planWorkflowNewsletter(db: PrismaClient, session: AuthSession, raw: unknown, runtime: NewsletterRuntime) {
   const input = z.object({ id: z.string().uuid(), automationId: z.string().uuid() }).strict().parse(raw);
   await runtimeAllowed(db, runtime.synthetic);
+  return transaction(db,async tx => planWorkflowNewsletterInTransaction(tx,await admin(tx,session),input,runtime));
+}
+
+/** Shared immutable planner for a live human admission or a bounded service
+ * grant. It does not create a decision or call a transport. */
+export async function planWorkflowNewsletterInTransaction(tx: Tx,
+  auth: { actor: NonNullable<Awaited<ReturnType<typeof currentRecordUpdateUser>>>; finish: () => Promise<Date> },
+  input: { id: string; automationId: string },
+  runtime: Pick<NewsletterRuntime,'synthetic'|'unsubscribeUrl'|'qualificationReference'|'policyReference'>) {
   const unsubscribe = new URL(runtime.unsubscribeUrl);
   if (unsubscribe.protocol !== 'https:' || unsubscribe.username || unsubscribe.password || !runtime.qualificationReference.trim() || !runtime.policyReference.trim()
     || runtime.synthetic && !unsubscribe.hostname.endsWith('.test')) throw new Error('NEWSLETTER_RUNTIME_INVALID');
-  return transaction(db, async tx => {
-    const auth = await admin(tx, session);
     const existing = await tx.workflowNewsletterRun.findUnique({ where: { id: input.id } });
     if (existing) {
       if (existing.automationId !== input.automationId || existing.createdById !== auth.actor.id || existing.synthetic !== runtime.synthetic)
@@ -99,7 +106,6 @@ export async function planWorkflowNewsletter(db: PrismaClient, session: AuthSess
         history: json([{ event: duplicateEmail ? 'DUPLICATE_EMAIL' : rendered.ok ? 'PLANNED' : 'MISSING_FIELDS', at: (await auth.finish()).toISOString() }]) } });
     }
     await auth.finish(); return { id: run.id, replay: false };
-  });
 }
 
 async function recordBlocked(db: PrismaClient, session: AuthSession, id: string, decision: Decision | { reason: string }, ticket: unknown = null) {

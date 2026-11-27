@@ -32,5 +32,9 @@ test('i moduli documento non accettano modifiche o conferme prima che React sia 
     assert.match(html.slice(controls).split('>')[0], /disabled=""/);
     const names = [...html.matchAll(/<(?:select|textarea)\b[^>]*>/g)].map(([tag]) => tag.match(/aria-label="([^"]+)"/)?.[1]);
     assert.deepEqual(names, labels[index], 'Il nome accessibile non deve inglobare opzioni, testo iniziale o istruzioni');
+    if (index === 4) {
+      assert.match(html, /name="occurredAtTimeZone" value="Europe\/Rome"/);
+      assert.match(html, /Data e ora dell’archiviazione \(Europe\/Rome\)/);
+    }
   }
 });
