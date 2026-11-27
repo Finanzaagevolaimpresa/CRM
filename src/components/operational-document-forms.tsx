@@ -21,10 +21,10 @@ export function OperationalTemplateForm({ templateId: initialTemplateId, command
     <input type="hidden" name="expectedVersion" value={duplicateFrom ? 0 : current?.revision ?? 0}/>
     {duplicateFrom && <input type="hidden" name="sourceTemplateId" value={duplicateFrom}/>}
     <label className="block">Nome modello<input name="title" className={inputClass} value={title} onChange={event => { setTitle(event.target.value); setApproved(false); }} required minLength={3} maxLength={160}/></label>
-    <label className="block">Tipo<select name="kind" className={inputClass} value={kind} onChange={event => { setKind(event.target.value as DocumentTemplate['kind']); setApproved(false); }}>
+    <label className="block">Tipo<select name="kind" aria-label="Tipo" className={inputClass} value={kind} onChange={event => { setKind(event.target.value as DocumentTemplate['kind']); setApproved(false); }}>
       {Object.entries(documentKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
     </select></label>
-    <label className="block">Testo del modello<textarea name="body" className={inputClass} rows={14} maxLength={16000} required value={body} onChange={event => { setBody(event.target.value); setApproved(false); }}/></label>
+    <label className="block">Testo del modello<textarea name="body" aria-label="Testo del modello" className={inputClass} rows={14} maxLength={16000} required value={body} onChange={event => { setBody(event.target.value); setApproved(false); }}/></label>
     <p className="text-sm text-slate-600">Inserisci solo testo aziendale autorizzato e campi variabili. I dati dei clienti vengono inseriti esclusivamente nelle nuove bozze.</p>
     <fieldset className="rounded-xl border p-3"><legend>Campi necessari prima della conferma</legend><div className="grid gap-2 md:grid-cols-3">
       {documentFields.map(field => <label key={field}><input type="checkbox" name="required" value={field} checked={required.includes(field)} onChange={event => { setRequired(current => event.target.checked ? [...current, field] : current.filter(item => item !== field)); setApproved(false); }}/> {documentFieldLabels[field]} <code className="text-xs">{'{{' + field + '}}'}</code></label>)}
@@ -48,10 +48,10 @@ export function OperationalDraftForm({ commandId: initialCommandId, selection, s
     {selection.serviceRevisionId && <input type="hidden" name="serviceRevisionId" value={selection.serviceRevisionId}/>}
     {selection.contractId && <input type="hidden" name="contractId" value={selection.contractId}/>}
     <div className="grid gap-4 md:grid-cols-2">{documentFields.map(field => <label key={field} className="block">{documentFieldLabels[field]}
-      {candidates[field].length > 1 ? <><select className={inputClass} name={field} value={choices[field]} onChange={event => { setChoices(current => ({ ...current, [field]: event.target.value })); setTermsConfirmed(false); }} required>
+      {candidates[field].length > 1 ? <><select className={inputClass} name={field} aria-label={documentFieldLabels[field]} value={choices[field]} onChange={event => { setChoices(current => ({ ...current, [field]: event.target.value })); setTermsConfirmed(false); }} required>
         <option value="">Conflitto: scegli il dato da usare</option>{candidates[field].map(option => <option key={option.value} value={option.value}>{option.value} — {option.source}</option>)}
       </select><span className="text-sm text-amber-800">Le fonti differiscono: è necessaria una scelta esplicita.</span></> :
-        <><input className={inputClass} name={field} value={choices[field]} onChange={event => { setChoices(current => ({ ...current, [field]: event.target.value })); setTermsConfirmed(false); }} readOnly={candidates[field].length === 1} maxLength={5000}/>
+        <><input className={inputClass} name={field} aria-label={documentFieldLabels[field]} value={choices[field]} onChange={event => { setChoices(current => ({ ...current, [field]: event.target.value })); setTermsConfirmed(false); }} readOnly={candidates[field].length === 1} maxLength={5000}/>
           <span className="text-sm text-slate-600">{candidates[field][0]?.source ?? 'Dato mancante: puoi completarlo sul caso. La scheda originale resta invariata.'}</span></>}
     </label>)}</div>
     <label className="block"><input type="checkbox" name="termsConfirmed" checked={termsConfirmed} onChange={event => setTermsConfirmed(event.target.checked)}/> Ho verificato sul caso servizio, imponibile, importo IVA, totale e rate. Le integrazioni indicate sono corrette.</label>
