@@ -29,6 +29,9 @@ export function templateTokens(body: string): DocumentField[] {
   }
   return [...new Set(tokens)] as DocumentField[];
 }
+export function normalizeTemplateLineEndings(body: string): string {
+  return body.replace(/\r\n?/g, '\n');
+}
 export const documentTemplateSnapshot = z.object({ id: z.string().uuid(), revision: z.number().int().positive(),
   title: z.string().trim().min(3).max(160), kind: documentKind, body: z.string().trim().min(10).max(16000),
   required: z.array(z.enum(documentFields)).max(documentFields.length), state: z.enum(['DRAFT', 'PUBLISHED']),
@@ -40,7 +43,7 @@ export const documentTemplateSnapshot = z.object({ id: z.string().uuid(), revisi
 export type DocumentTemplate = z.infer<typeof documentTemplateSnapshot>;
 export const templateCommand = z.object({ commandId: z.string().uuid(), templateId: z.string().uuid(), expectedVersion: z.number().int().nonnegative(),
   operation: z.enum(['SAVE', 'PUBLISH', 'DUPLICATE']), title: z.string().trim().min(3).max(160), kind: documentKind,
-  body: z.string().trim().min(10).max(16000), required: z.array(z.enum(documentFields)).max(documentFields.length),
+  body: z.string().transform(normalizeTemplateLineEndings).pipe(z.string().trim().min(10).max(16000)), required: z.array(z.enum(documentFields)).max(documentFields.length),
   sourceTemplateId: z.string().uuid().optional(), approved: z.boolean(),
 }).strict();
 export const documentContextInput = z.object({ leadId: id.optional(), clientId: id.optional() }).strict()

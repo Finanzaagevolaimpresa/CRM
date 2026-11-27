@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { syntheticPerson } from '../selective-sharing/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { notificationCount } from '../notification-browser-helpers';
 
 const db = new PrismaClient(), origin = process.env.APP_ORIGIN ?? 'http://127.0.0.1:3059';
 test.afterAll(async () => { await db.$disconnect(); });
@@ -82,7 +83,9 @@ test('Setter books and moves, technical calendar hides lead details, and opening
     const task = await db.task.create({ data: { title: 'Richiamo sintetico browser ' + randomUUID(), assignedToId: actors[0].user.id,
       createdById: actors[0].user.id, dueAt: new Date(Date.now() - 60_000) } });
     await setter.goto('/notifications');
-    const before = (await (await setter.request.get('/api/notifications/count')).json()).count as number;
+    const before = await notificationCount(setter);
+    expect(before).toBeGreaterThan(0);
+    await expect(setter.locator('article[data-notification-id]')).toHaveCount(before);
     const notice = setter.locator('article').filter({ hasText: task.title });
     const id = await notice.getAttribute('data-notification-id');
     await notice.getByRole('button', { name: 'Apri', exact: true }).click();
@@ -92,10 +95,10 @@ test('Setter books and moves, technical calendar hides lead details, and opening
     await setter.reload();
     const read = setter.locator('article[data-notification-id="' + id + '"]');
     await expect(read).toBeVisible();
-    expect((await (await setter.request.get('/api/notifications/count')).json()).count).toBe(before - 1);
+    expect(await notificationCount(setter)).toBe(before - 1);
     await read.getByRole('button', { name: 'Apri', exact: true }).click();
     await expect(setter).toHaveURL(/\/tasks$/);
-    expect((await (await setter.request.get('/api/notifications/count')).json()).count).toBe(before - 1);
+    expect(await notificationCount(setter)).toBe(before - 1);
     await technical.setViewportSize({ width: 390, height: 844 });
     await technical.goto('/calendars?date=' + date);
     expect(await technical.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

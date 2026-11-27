@@ -9,7 +9,7 @@ import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-toke
 import { syntheticIntakeFixture } from './fixture';
 import { assignCommercialLeadInboxItem } from '../../src/lib/commercial-lead-inbox';
 import { readWorkflowAdministration, saveWorkflowRule, saveWorkflowTemplate, testWorkflowRule } from '../../src/lib/workflow-automations';
-import { enrollSyntheticWorkflowReceipt, readLeadWorkflowExecutions, reconcileSyntheticWorkflowExecution,
+import { enrollSyntheticWorkflowReceipt, readLeadWorkflowExecutions, readSyntheticWorkflowLeadSetup, reconcileSyntheticWorkflowExecution,
   runSyntheticWorkflowEnrollment, stopPendingWorkflowExecutions } from '../../src/lib/workflow-executions';
 
 const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
@@ -72,6 +72,9 @@ test('published versions, admin-only rules and stored qualification', { skip: !e
 test('receipt, enrollment and acceptance remain unique after concurrent replay; reassignment changes read access', { skip: !enabled }, async () => {
   const fixture = await rule(), intake = await received();
   assert.equal(intake.projection.state, 'PROJECTED_NEW');
+  const setup = await readSyntheticWorkflowLeadSetup(db, admin.session, intake.projection.leadId!);
+  assert(setup); assert(setup.rules.some(row => row.id === fixture.input.id));
+  assert(setup.receipts.some(row => row.id === intake.receipt.id));
   const results = await Promise.all([0, 1].map(() => enrollSyntheticWorkflowReceipt(db, admin.session, { automationId: fixture.input.id, receiptId: intake.receipt.id })));
   assert.equal(results[0].id, results[1].id); assert.equal(await db.workflowEnrollment.count({ where: { sourceReceiptId: intake.receipt.id } }), 1);
   const enrollmentId = results[0].id;

@@ -10,7 +10,7 @@ import { guardProjectResources } from './project-resource-guard';
 import { withSerializableTransaction } from './serializable';
 import { addDocumentCandidate, canUseOperationalDocuments, catalogAmounts, documentContextInput, documentDecisionCommand,
   documentTemplateModel, documentTemplateSnapshot, draftDocumentCommand, emptyDocumentCandidates, missingDocumentFields,
-  OperationalDocumentError, proformaCommand, proformaDedupKey, renderDocumentTemplate, resolveDocumentFields,
+  normalizeTemplateLineEndings, OperationalDocumentError, proformaCommand, proformaDedupKey, renderDocumentTemplate, resolveDocumentFields,
   storedDocumentSnapshot, templateCommand, validateDocumentAmounts, type DocumentContextInput, type DocumentTemplate,
   templateTokens, type DocumentCandidates, type DraftDocumentCommand } from './operational-document-contract';
 import { renderOperationalPdf } from './operational-document-pdf';
@@ -72,7 +72,7 @@ export async function saveOperationalTemplate(db: PrismaClient, claimed: AuthSes
     if (input.operation === 'DUPLICATE') {
       if (before || !input.sourceTemplateId || input.sourceTemplateId === input.templateId) deny();
       const source = (await loadTemplate(tx, input.sourceTemplateId)).current;
-      if (!source || source.body !== input.body || source.kind !== input.kind || hash(source.required) !== hash(input.required)) throw new OperationalDocumentError('STALE');
+      if (!source || normalizeTemplateLineEndings(source.body) !== input.body || source.kind !== input.kind || hash(source.required) !== hash(input.required)) throw new OperationalDocumentError('STALE');
       copiedFrom = source.id;
     }
     const after = documentTemplateSnapshot.parse({ id: input.templateId, revision: input.expectedVersion + 1, title: input.title,

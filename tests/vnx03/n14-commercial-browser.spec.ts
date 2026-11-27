@@ -329,7 +329,9 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, immediately opera
   await ownerWorkPage.getByRole('link', { name: 'Torna alla scheda', exact: true }).click();
   await expect(ownerWorkPage).toHaveURL(`${crmUrl}${leadHref}`);
   await ownerWorkPage.locator('input[name="nextActionNote"]').fill('PRELANCIO02 synthetic follow-up');
-  await ownerWorkPage.locator('input[name="nextActionDate"]').fill('2030-10-15T10:30');
+  // Preserve the original 10:30 UTC fixture through the explicitly Rome-local form.
+  await expect(ownerWorkPage.locator('input[name="nextActionTimezone"]')).toHaveValue('Europe/Rome');
+  await ownerWorkPage.getByLabel('Data e ora del prossimo passo (Roma)', { exact: true }).fill('2030-10-15T12:30');
   const nextActionReply = ownerWorkPage.waitForResponse((response) => response.request().method() === 'POST'
     && response.request().url() === `${crmUrl}${leadHref}` && Boolean(response.request().headers()['next-action']), { timeout: 30_000 });
   await ownerWorkPage.getByRole('button', { name: 'Salva aggiornamenti', exact: true }).click();
@@ -339,7 +341,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, immediately opera
   assertState('scheduled');
   await ownerWorkPage.reload();
   await expect(ownerWorkPage.locator('input[name="nextActionNote"]')).toHaveValue('PRELANCIO02 synthetic follow-up');
-  await expect(ownerWorkPage.locator('input[name="nextActionDate"]')).toHaveValue('2030-10-15T10:30');
+  await expect(ownerWorkPage.getByLabel('Data e ora del prossimo passo (Roma)', { exact: true })).toHaveValue('2030-10-15T12:30');
   await ownerWorkPage.goto(`${crmUrl}/leads`);
   const scheduledRow = ownerWorkPage.getByRole('row').filter({ hasText: 'VNX03 N14 Browser' });
   await expect(scheduledRow).toContainText('PRELANCIO02 synthetic follow-up');
@@ -351,7 +353,8 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, immediately opera
     recipientConfirmationAbsent: true, otherCommercialDenied: true,
     denialRowsAndAuditUnchanged: true, nextActionNoteAndDatePersisted: true,
     nextActionUtc: '2030-10-15T10:30:00.000Z', nextActionVisibleInLeadList: true,
-    dateScope: 'Synthetic UTC fixture; not a business SLA', snapshotSha256: scheduledSnapshot,
+    nextActionRome: '2030-10-15T12:30', inputTimezone: 'Europe/Rome',
+    dateScope: 'Synthetic UTC instant preserved through the Rome-local form; not a business SLA', snapshotSha256: scheduledSnapshot,
   });
 
   writeFileSync(join(evidenceDirectory, 'n14-browser.json'), `${JSON.stringify({

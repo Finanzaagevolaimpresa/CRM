@@ -305,7 +305,8 @@ async function main() {
     assert.equal(data.historicalAudits.length, 3);
     assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
 
-    assert.equal(data.ledger.at(-2)?.migration_name, '20261108110000_shared_operational_updates_v1');
+    assert.equal(data.ledger.at(-3)?.migration_name, '20261108110000_shared_operational_updates_v1');
+    assert.equal(data.ledger.at(-2)?.migration_name, '20261125120000_lead_setter_workflow_v1');
     assert.equal(data.ledger.at(-1)?.migration_name, '20261126120000_operational_flow_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);

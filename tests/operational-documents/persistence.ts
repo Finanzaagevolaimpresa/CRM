@@ -18,7 +18,14 @@ after(() => db.$disconnect());
 test('pubblicazione, copia e nuove bozze conservano modelli, clienti e fonti indipendenti', options, async () => {
   const f = await documentFixture(db), first = await f.create(), before = await db.adminRecordRevision.findUniqueOrThrow({ where: { commandId: f.publication.commandId } });
   const duplicate = { ...f.template, commandId: randomUUID(), templateId: randomUUID(), sourceTemplateId: f.template.templateId, operation: 'DUPLICATE', title: 'Copia sintetica' };
-  await saveOperationalTemplate(db, f.admin.session, duplicate, clientProof(f.admin));
+  // HTML multipart submissions normalize textarea line endings to CRLF.
+  const form = new FormData(); form.set('body', duplicate.body);
+  const submitted = await new Request('http://localhost', { method: 'POST', body: form }).formData();
+  const submittedBody = String(submitted.get('body')); assert(submittedBody.includes('\r\n'));
+  await saveOperationalTemplate(db, f.admin.session, { ...duplicate, body: submittedBody }, clientProof(f.admin));
+  assert.deepEqual(await saveOperationalTemplate(db, f.admin.session, duplicate, clientProof(f.admin)), { id: duplicate.templateId, replay: true });
+  await assert.rejects(saveOperationalTemplate(db, f.admin.session, { ...duplicate, commandId: randomUUID(), templateId: randomUUID(),
+    body: submittedBody + '\r\nModifica effettiva del testo.' }, clientProof(f.admin)), /STALE/);
   const changed = await db.lead.update({ where: { id: f.lead.id }, data: { email: 'second@invalid.test' } });
   const second = await f.create(); assert.notEqual(second.id, first.id);
   const a = await readOperationalDocument(db, f.owner.session, first.id), b = await readOperationalDocument(db, f.owner.session, second.id);

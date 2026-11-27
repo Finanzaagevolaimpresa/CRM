@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind exact candidate schema71 and preserve historical migrations
+      - name: Bind exact candidate schema78 and preserve historical migrations
         shell: bash
         run: |
           set -euo pipefail
@@ -54,7 +54,15 @@ jobs:
           grep -Fx '# pass 8' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
-          test "$(psql 'postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test' -Atc "SELECT to_regclass('public.\"MarketingPreferenceEvent\"') IS NULL")" = t
+          # Schema78 carries the R13 ledgers; the isolated test schema must not
+          # provision a preference, policy epoch or event in the public schema.
+          test "$(psql "${DATABASE_URL%%\?*}" -X -v ON_ERROR_STOP=1 -Atc '
+            SELECT (SELECT count(*) FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL),
+              (SELECT count(*) FROM public."MarketingPreferenceSubject"),
+              (SELECT count(*) FROM public."MarketingPreferenceEvent"),
+              (SELECT count(*) FROM public."MarketingPreferenceEpoch"),
+              (SELECT count(*) FROM pg_namespace WHERE starts_with(nspname, $$r13_marketing_$$))
+          ')" = '78|0|0|0|0'
       - name: Lint, unit tests, full typecheck and build with locked dependencies
         shell: bash
         run: |

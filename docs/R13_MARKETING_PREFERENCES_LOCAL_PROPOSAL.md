@@ -1,5 +1,9 @@
 # R13 — Preferenze marketing: proposta dormiente e collaudo R23
 
+## Aggiornamento candidato schema78 — 27 novembre 2026
+
+Il mandato `FAI-CRM-FLUSSO-OPERATIVO-20261126-R01` include il DDL R13 nella migration candidata `20261126120000_operational_flow_v1`, conservando la proposta e i suoi invarianti come riferimento. Le tre tabelle vengono create vuote; policy, chiave, epoch e runtime pubblico non sono provisionati. Il workflow verifica otto casi PostgreSQL in uno schema temporaneo e, alla fine, schema78 applicato, registri pubblici ancora vuoti e schema temporaneo rimosso. I riferimenti successivi a SQL separato dalla catena, schema49 e prove precedenti descrivono le consegne storiche; non autorizzano applicazioni in produzione.
+
 ## Confine finale PostgreSQL — correzione P1 del 5 ottobre 2026
 
 Il lock di una transazione Prisma può scadere mentre un callback esterno continua. L'adattatore PostgreSQL offre quindi soltanto `withContact`, per operazioni sul registro, e non implementa il coordinatore opzionale `withFinalHandoff`. Il servizio ne richiede la presenza prima di leggere l'ammissione o invocare un mittente: in sua assenza restituisce `HANDOFF_SERIALIZATION_UNAVAILABLE`. Non esiste un fallback alla transazione né un aumento del timeout presentato come garanzia di invio.

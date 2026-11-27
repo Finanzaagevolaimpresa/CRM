@@ -9,8 +9,8 @@ for (const width of [320, 768, 1440]) for (const scenario of ['positive', 'zero'
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(scenario === 'positive' ? '/' : `/?${scenario}`);
-    await expect(page.locator('[data-counter-final]')).toHaveCount(27);
-    for (const label of ['Entrati oggi', 'Da assegnare', 'Assegnati da contattare']) {
+    await expect(page.locator('[data-counter-final]')).toHaveCount(29);
+    for (const label of ['Entrati oggi', 'Da assegnare', 'Assegnati da contattare', 'Oggi', 'Proposte da confermare']) {
       await expect(page.locator('[aria-labelledby="counter-area-commerciale"]').getByRole('link', { name: new RegExp(label) })).toBeVisible();
     }
     const proof = await page.locator('[data-counter-final]').evaluateAll(nodes => nodes.map(node => ({

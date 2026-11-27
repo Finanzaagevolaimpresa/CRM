@@ -6,7 +6,7 @@ import { canonicalSha256 } from './canonical-json';
 import { updateActor } from './record-updates';
 import { recordUpdatePermission, recordUpdateContext, currentRecordUpdateUser } from './record-update-context';
 import { verifiedAcquisitionEvent } from './lead-acquisition-contract';
-import { assertSyntheticCatalogDatabase } from './service-catalog-v2-persistence';
+import { assertSyntheticCatalogDatabase, CatalogV2PreparationError } from './service-catalog-v2-persistence';
 import { renderWorkflowTemplate, workflowRuleInput, type WorkflowTemplate } from './workflow-automation-contract';
 import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
 import { workflowSourceStillCurrent, workflowSourceChoices } from './workflow-event-source';
@@ -426,7 +426,14 @@ export async function readLeadWorkflowExecutions(db: PrismaClient, session: Auth
 
 export async function readSyntheticWorkflowLeadSetup(db: PrismaClient, session: AuthSession, leadId: string) {
   if (process.env.APP_ENV !== 'test' || session.role !== 'admin') return null;
-  await syntheticDatabase(db);
+  try { await syntheticDatabase(db); }
+  catch (error) {
+    // An APP_ENV=test application can serve ordinary pages without opting into
+    // local synthetic commands. Hide only this optional form; command guards
+    // and failures of an explicitly qualified database remain authoritative.
+    if (error instanceof CatalogV2PreparationError && error.message === 'SERVICE_CATALOG_SYNTHETIC_CONFIGURATION_DENIED') return null;
+    throw error;
+  }
   return db.$transaction(async tx => {
     const auth = await actor(tx, session, true), context = await recordUpdateContext(tx, 'LEAD', leadId);
     if (!context.canRead(auth.actor)) throw new Error('WORKFLOW_DENIED');
