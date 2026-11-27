@@ -140,6 +140,7 @@ test('free/busy honors provider errors instead of treating unavailable data as f
 test('OAuth is dormant by default, rejects foreign callbacks and seals tokens to one user/purpose', () => {
   assert.equal(calendarOAuthConfig({}), null);
   const key = randomBytes(32), config = { FEATURE_INTEGRATIONS_ENABLED: 'true', GOOGLE_CALENDAR_INTEGRATION_MODE: 'enabled',
+    GOOGLE_CALENDAR_PILOT_USER_ID: 'ivo-synthetic',
     GOOGLE_CALENDAR_OAUTH_CLIENT_ID: 'synthetic-client', GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET: 'synthetic-secret',
     GOOGLE_CALENDAR_OAUTH_REDIRECT_URI: 'http://127.0.0.1:3059/settings/integrations/google-calendar/callback',
     GOOGLE_CALENDAR_TOKEN_KEY: key.toString('base64'), APP_ORIGIN: 'http://127.0.0.1:3059' };

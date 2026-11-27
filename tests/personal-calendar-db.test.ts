@@ -110,7 +110,7 @@ test('Notice click decreases count exactly once, preserves queue and read histor
 });
 
 test('OAuth callback rejects wrong recipient, consumes state once, encrypts per-user tokens and verifies primary calendar', { skip: !enabled }, async () => {
-  const config: CalendarOAuthConfig = { clientId: 'synthetic-client', clientSecret: 'synthetic-secret',
+  const config: CalendarOAuthConfig = { clientId: 'synthetic-client', clientSecret: 'synthetic-secret', pilotUserId: owner.user.id,
     redirectUri: 'http://127.0.0.1:3059/settings/integrations/google-calendar/callback', key: randomBytes(32) };
   const target = new URL(await beginGoogleCalendarConnection(db, owner.session, config));
   assert.equal(target.origin, 'https://accounts.google.com');
