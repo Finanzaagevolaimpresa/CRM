@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
 import { isTechnicalAccount } from './technical-confidentiality';
+import type { OrdinaryEmailReceipt } from './ordinary-email-receipt';
+
+export function attestedProformaReceipts(revision: number, receipts: readonly Pick<OrdinaryEmailReceipt, 'revision' | 'outcome' | 'recordedAt'>[]) {
+  return receipts.flatMap(row => row.revision === revision && row.outcome && row.recordedAt
+    ? [{ outcome: row.outcome, recordedAt: row.recordedAt.toISOString() }] : []);
+}
 
 export const documentTemplateModel = 'OperationalDocumentTemplate';
 export const documentFields = ['denominazione', 'indirizzo', 'partita_iva', 'codice_fiscale', 'email', 'telefono',

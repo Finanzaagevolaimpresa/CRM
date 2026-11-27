@@ -13,7 +13,7 @@ import { addDocumentCandidate, canUseOperationalDocuments, catalogAmounts, docum
   normalizeTemplateLineEndings, OperationalDocumentError, proformaCommand, proformaDedupKey, renderDocumentTemplate, resolveDocumentFields,
   storedDocumentSnapshot, templateCommand, validateDocumentAmounts, type DocumentContextInput, type DocumentTemplate,
   templateTokens, type DocumentCandidates, type DraftDocumentCommand } from './operational-document-contract';
-import { renderOperationalPdf } from './operational-document-pdf';
+import { proformaGenerationDeliveryNotice, renderOperationalPdf, renderOperationalProformaPdf } from './operational-document-pdf';
 
 type Tx = Prisma.TransactionClient;
 type Authority = Awaited<ReturnType<typeof updateActor>>;
@@ -282,10 +282,10 @@ export async function createOperationalProforma(db: PrismaClient, claimed: AuthS
     const snapshot = storedDocumentSnapshot.parse({ ...source.snapshot, fields, sources: { ...source.snapshot.sources, scadenza: 'Scadenza confermata sul caso' },
       sourceDocumentId: source.row.id, templateTitle: template.title, templateRevision: template.revision, templateBody: template.body, missing: [], conflicts: [] });
     const content = ['NOTA PROFORMA - documento non fiscale', '', renderDocumentTemplate(template.body, fields), '',
-      'Emissione fiscale e invio SdI: non eseguiti.', 'Invio al cliente: non eseguito.'].join('\n');
+      'Emissione fiscale e invio SdI: non eseguiti.', proformaGenerationDeliveryNotice].join('\n');
     const contentHash = hash({ content, snapshot });
     // Validate the downloadable representation before committing a proforma.
-    renderOperationalPdf({ title: 'Nota proforma', content, reference: input.commandId, status: 'Bozza da approvare · documento non fiscale' });
+    renderOperationalProformaPdf({ id: input.commandId, content });
     await tx.operationalDocument.create({ data: { id: input.commandId, actorId: auth.actor.id, sessionId: auth.registry.id,
       leadId: source.row.leadId, clientId: source.row.clientId, contractId: source.row.contractId, sourceDocumentId: source.row.id,
       templateCommandId: templateRow.commandId, kind: 'PROFORMA', sourceHash: hash({ source: source.row.contentHash, decision: decision.commandId, template: templateRow.afterHash }),

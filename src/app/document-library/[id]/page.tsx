@@ -39,7 +39,7 @@ async function Page({ params }: { params: Promise<{ id: string }> }) {
     {delivery && <Card title="Invio e ricevute">{delivery.email ? <>
       <p>Bozza email con PDF preparata il {formatDateTime(delivery.email.createdAt)}. Approvazione e invio seguono il percorso della posta aziendale.</p>
       {delivery.isAdmin && <Link className="font-bold underline" href={'/communications?' + new URLSearchParams({ kind: 'CLIENT', practice: row.clientId!, focus: delivery.email.messageId })}>Apri bozza, approvazioni e ricevute</Link>}
-      {delivery.email.native && <p>Stato verificato nella posta: {delivery.email.native.label}. Tentativi manuali: {delivery.email.native.attempts.length}; ricevute del canale: {delivery.email.native.receipts.length}.</p>}
+      {delivery.email.native && <p>Stato verificato nella posta: {delivery.email.native.label}. Tentativi manuali: {delivery.email.native.attempts.length}; ricevute del canale attestate per questa versione: {delivery.email.native.receipts.length}.</p>}
     </> : delivery.isAdmin && decision && row.clientId ? <ProformaEmailForm documentId={row.id} contentHash={row.contentHash} commandId={randomUUID()} email={snapshot.fields.email} mailboxes={delivery.mailboxes}/>
       : <p>Conferma l’anteprima della proforma. L’Admin autorizzato alla posta può preparare la bozza email con il PDF e sottoporla all’approvazione prevista.</p>}</Card>}
     {delivery && <Card title="Archivio Drive">{delivery.archives.map(item => <div className="mb-3" key={item.commandId}><a className="font-bold underline" href={item.url} target="_blank" rel="noopener noreferrer">Apri PDF archiviato</a><p>Archiviazione attestata dall’operatore il {formatDateTime(item.occurredAt)}. Evidenza: {item.evidence}</p></div>)}

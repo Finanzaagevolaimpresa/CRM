@@ -13,6 +13,7 @@ import { submitApprovedMessage } from '../../src/lib/approved-communications';
 import { previewDriveFolder, confirmDriveFolder } from '../../src/lib/drive-folder-library';
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
 import { canAccessFinancialDocument } from '../../src/lib/financial-document-access';
+import { proformaGenerationDeliveryNotice, renderOperationalProformaPdf } from '../../src/lib/operational-document-pdf';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled };
 let f: Awaited<ReturnType<typeof documentFixture>>, previousAuthority: OrdinaryEmailAuthority | null, mailboxId: string;
@@ -71,6 +72,8 @@ test('proforma confermata prepara una sola bozza nativa con esatto PDF finanziar
   const attachment = await db.document.findUniqueOrThrow({ where: { id: snapshot.attachments[0].documentId } });
   assert.equal(attachment.documentCategory, 'fattura'); assert.equal(await canAccessFinancialDocument(db, f.owner.session, attachment), false);
   const bytes = await readPrivateDocumentBounded(attachment.storagePath, 5_000_000);
+  assert(data.row.content.endsWith(proformaGenerationDeliveryNotice));
+  assert(bytes.equals(renderOperationalProformaPdf(data.row)));
   assert.equal(createHash('sha256').update(bytes).digest('hex'), snapshot.attachments[0].sha256); assert(bytes.subarray(0,5).equals(Buffer.from('%PDF-')));
   assert.equal(await db.communicationAttempt.count({ where: { messageId: first.messageId } }), 0);
   assert.equal(await db.ordinaryEmailAttempt.count({ where: { messageId: first.messageId } }), 0);
@@ -79,6 +82,8 @@ test('proforma confermata prepara una sola bozza nativa con esatto PDF finanziar
   assert.equal((await readOperationalDocumentDelivery(db, f.owner.session, data.row.id)).email?.native, null);
   await submitApprovedMessage(db, f.admin.session, { messageId: message.id, expectedRevision: 1, snapshotHash: message.versions[0].snapshotHash });
   assert.equal((await readOperationalDocumentDelivery(db, f.admin.session, data.row.id)).email?.native?.state, 'PENDING');
+  assert(bytes.equals(renderOperationalProformaPdf((await readOperationalDocument(db, f.admin.session, data.row.id)).row)));
+  assert.equal((await readOperationalDocumentDelivery(db, f.admin.session, data.row.id)).pdfSha256, snapshot.attachments[0].sha256);
   assert.equal(await db.communicationApproval.count({ where: { versionId: message.versions[0].id } }), 0);
 });
 test('proforma non confermata e operatore senza autorità posta non producono bozze', options, async () => {

@@ -6,8 +6,8 @@ import type { UpdateCredentials } from './record-updates';
 import { canonicalSha256 as hash } from './canonical-json';
 import { withSerializableTransaction } from './serializable';
 import { admitOperationalDocumentInTransaction } from './operational-documents';
-import { OperationalDocumentError } from './operational-document-contract';
-import { renderOperationalPdf } from './operational-document-pdf';
+import { attestedProformaReceipts, OperationalDocumentError } from './operational-document-contract';
+import { renderOperationalProformaPdf } from './operational-document-pdf';
 import { assertFinancialDriveFolderInTransaction, readDriveFolderInTransaction } from './drive-folder-library';
 import { parseDriveVideoLink as parseDriveFileLink } from './drive-video-contract';
 import { savePrivateDocumentFile } from './storage';
@@ -49,7 +49,7 @@ async function record(tx: Tx, actor: { id: string }, sessionId: string, input: {
     event: 'admin_record_changed', after: { commandId: input.commandId, action: operation, beforeHash, afterHash } } });
 }
 function pdf(row: { id: string; content: string }) {
-  const bytes = renderOperationalPdf({ title: 'Proforma', content: row.content, reference: row.id, status: 'Documento non fiscale · invio non eseguito' });
+  const bytes = renderOperationalProformaPdf(row);
   return { bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 async function confirmedProforma(tx: Tx, claimed: AuthSession, input: z.infer<typeof command>, proof: UpdateCredentials) {
@@ -125,7 +125,7 @@ export async function readOperationalDocumentDelivery(db: PrismaClient, claimed:
       const detail = await readPracticeCommunications(db, claimed, { kind: 'CLIENT', id: data.clientId }, 1, data.state.email.messageId);
       const message = detail.messages.find(row => row.id === data.state!.email!.messageId && row.snapshotHash === data.state!.email!.snapshotHash);
       if (message) native = { state: message.state, label: communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts), attempts: message.attempts.map(item => ({ state: item.state, createdAt: item.createdAt.toISOString() })),
-        receipts: message.ordinaryReceipts.map(item => ({ outcome: item.outcome, recordedAt: item.recordedAt?.toISOString() ?? null })) };
+        receipts: attestedProformaReceipts(message.currentRevision, message.ordinaryReceipts) };
     } catch { /* Native message/attachment admission remains authoritative. */ }
   }
   return { archives: data.archives, mailboxes: data.mailboxes, pdfSha256: data.pdfSha256, isAdmin: data.isAdmin,

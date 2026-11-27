@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canUseOperationalDocuments, catalogAmounts, documentFields, emptyDocumentCandidates, missingDocumentFields,
+import { attestedProformaReceipts, canUseOperationalDocuments, catalogAmounts, documentFields, emptyDocumentCandidates, missingDocumentFields,
   proformaDedupKey, renderDocumentTemplate, resolveDocumentFields, templateTokens, validateDocumentAmounts } from '../src/lib/operational-document-contract';
-import { renderOperationalPdf } from '../src/lib/operational-document-pdf';
+import { proformaGenerationDeliveryNotice, renderOperationalPdf, renderOperationalProformaPdf } from '../src/lib/operational-document-pdf';
+import type { OrdinaryEmailReceipt } from '../src/lib/ordinary-email-receipt';
 
 test('commerciale assegnato è candidato, profili tecnici e diniego individuale restano esclusi', () => {
   assert.equal(canUseOperationalDocuments({ role: 'commerciale', active: true }), true);
@@ -54,6 +55,25 @@ test('PDF passivo multipagina con xref corretto, euro e italiano; nessuna istruz
   offsets.forEach((offset, index) => assert.equal(pdf.slice(offset, offset + `${index + 1} 0 obj`.length), `${index + 1} 0 obj`));
   assert(!pdf.includes('/JavaScript')); assert(pdf.includes('\\200'));
   assert.throws(() => renderOperationalPdf({ ...input, content: '不支持' }), /PDF_CHARACTER/);
+  const proforma = { id: 'synthetic-proforma', content: 'Importo sintetico\n' + proformaGenerationDeliveryNotice };
+  assert(renderOperationalProformaPdf(proforma).equals(renderOperationalPdf({ title: 'Proforma', content: proforma.content,
+    reference: proforma.id, status: 'Documento non fiscale · invio non eseguito alla generazione' })));
+  const legacy = { ...proforma, content: 'Importo sintetico\nInvio al cliente: non eseguito.' };
+  assert(renderOperationalProformaPdf(legacy).equals(renderOperationalPdf({ title: 'Proforma', content: legacy.content,
+    reference: legacy.id, status: 'Documento non fiscale · invio non eseguito' })));
+});
+
+test('prenotazione e tentativo senza esito non sono ricevute; conta solo l’esito attestato della versione corrente', () => {
+  const at = new Date('2026-11-27T00:00:00.000Z');
+  const receipts: Pick<OrdinaryEmailReceipt, 'revision' | 'state' | 'outcome' | 'recordedAt'>[] = [
+    { revision: 2, state: 'RESERVED', outcome: null, recordedAt: null },
+    { revision: 2, state: 'CLAIMED', outcome: null, recordedAt: null },
+    { revision: 1, state: 'ACCEPTED', outcome: 'ACCEPTED', recordedAt: at },
+    { revision: 2, state: 'ACCEPTED', outcome: 'ACCEPTED', recordedAt: at },
+  ];
+  assert.deepEqual(attestedProformaReceipts(2, receipts.slice(0, 3)), []);
+  assert.deepEqual(attestedProformaReceipts(2, receipts), [{ outcome: 'ACCEPTED', recordedAt: at.toISOString() }]);
+  assert.equal(receipts.length, 4); assert.equal(receipts[0].state, 'RESERVED'); assert.equal(receipts[1].state, 'CLAIMED');
 });
 test('ogni campo ha uno slot distinto nel documento', () => {
   assert.equal(Object.keys(emptyDocumentCandidates()).length, documentFields.length);
