@@ -19,7 +19,7 @@ test "$(wc -l < "$FLOW_EVIDENCE/prefix-ledger")" -eq 77
 query "INSERT INTO \"Lead\" (id,\"firstName\",\"lastName\",\"updatedAt\") VALUES ('flow-schema-fixture','Sintetico','Preesistente',CURRENT_TIMESTAMP)"
 legacy() { query "SELECT to_jsonb(l) FROM \"Lead\" l WHERE id='flow-schema-fixture'"; }
 legacy > "$FLOW_EVIDENCE/legacy-before.json"
-node --import tsx scripts/operational-flow/schema77-personal-email-fixture.ts --seed
+node --import tsx tests/operational-flow/schema77-personal-email-fixture.ts --seed
 email_columns() { query "SELECT column_name,is_nullable,data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='OrdinaryEmailDecision' ORDER BY ordinal_position"; }
 email_columns > "$FLOW_EVIDENCE/personal-email-columns-before"
 email_constraints() { query "SELECT conname,pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.\"OrdinaryEmailDecision\"'::regclass ORDER BY conname"; }
@@ -39,14 +39,14 @@ legacy | cmp - "$FLOW_EVIDENCE/legacy-before.json"
 email_columns | cmp - "$FLOW_EVIDENCE/personal-email-columns-before"
 email_constraints | cmp - "$FLOW_EVIDENCE/personal-email-constraints-before"
 authority | cmp - "$FLOW_EVIDENCE/email-authority-before.json"
-node --import tsx scripts/operational-flow/schema77-personal-email-fixture.ts --verify
+node --import tsx tests/operational-flow/schema77-personal-email-fixture.ts --verify
 node node_modules/prisma/build/index.js migrate deploy > "$FLOW_EVIDENCE/migrate.log"
 ledger > "$FLOW_EVIDENCE/ledger"
 test "$(wc -l < "$FLOW_EVIDENCE/ledger")" -eq 78
 head -n 77 "$FLOW_EVIDENCE/ledger" | cmp - "$FLOW_EVIDENCE/prefix-ledger"
 legacy | cmp - "$FLOW_EVIDENCE/legacy-before.json"
 authority | cmp - "$FLOW_EVIDENCE/email-authority-before.json"
-node --import tsx scripts/operational-flow/schema77-personal-email-fixture.ts --verify
+node --import tsx tests/operational-flow/schema77-personal-email-fixture.ts --verify
 test "$(query 'SELECT count(*) FROM "MarketingPreferenceEpoch"')" = 0
 test "$(query 'SELECT count(*) FROM "WorkflowEnrollment"')" = 0
 for table in WorkflowServiceCredential WorkflowServiceGrant WorkflowServiceInvocation WorkflowServiceMessage WorkflowServiceNotice; do

@@ -97,7 +97,7 @@ Nessun worker, scheduler, cron o provider viene attivato. Non viene creato un nu
 
 ## Comandi di qualifica e ambito delle prove
 
-La revisione del servizio è in qualificazione. Questa guida descrive comandi e copertura, non assegna un esito PASS alle esecuzioni in corso e non trasferisce i risultati della consegna precedente al nuovo candidato.
+Questa guida descrive comandi e copertura. Gli esiti appartengono alle evidenze della consegna e della CI sul commit esatto; i risultati di un candidato precedente non qualificano una nuova versione.
 
 Prove pure e degli ingressi CLI:
 

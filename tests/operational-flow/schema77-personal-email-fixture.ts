@@ -9,7 +9,7 @@ import { emptyCommunicationRecipientSelection } from '../../src/lib/communicatio
 import type { OrdinaryChannel } from '../../src/lib/ordinary-email-candidate';
 import { checkPersistedOrdinaryDecision, confirmOrdinaryDecision, previewOrdinaryDecision, type OrdinaryDecisionCurrentState } from '../../src/lib/ordinary-email-decision';
 import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
-import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../../tests/db/ai-orchestrator-db-test-guard';
+import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 
 // This public, unusable test key only signs historical synthetic material in
 // memory. It is never registered in the application or written to the evidence.
