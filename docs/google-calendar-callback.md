@@ -14,7 +14,9 @@ Il documento elimina la query dalla propria voce di cronologia e invia i soli
 campi canonici in POST allo stesso percorso. CSP con nonce, nessuna risorsa
 esterna, referrer limitato alla sola origine e no-store proteggono il passaggio; gli errori del provider
 non sono riportati. Con JavaScript disabilitato resta il pulsante esplicito.
-La pagina di trasporto usa `strict-origin`: un form con `no-referrer` invierebbe
+La pagina di trasporto imposta nel solo documento `strict-origin` mediante
+meta referrer, mantenendo l'header generale `no-referrer`: un form privo di
+questa impostazione invierebbe
 `Origin: null`, impedendo al controllo CSRF esistente di verificare l'origine.
 Path e query restano esclusi dal referrer anche nel percorso manuale.
 Dinieghi e redirect finale mantengono `no-referrer`.
@@ -36,7 +38,8 @@ La modifica non crea appuntamenti, invitati, worker o invii.
 Il workflow `Calendar callback cross-site` usa lo stesso test browser contro
 due checkout: la baseline PR264 immutabile e la testa candidata. Il provider
 sintetico è su `127.0.0.1`, il CRM su `localhost`: sono siti distinti, non
-soltanto porte diverse. Il test verifica il GET senza cookie Strict, il POST
+soltanto porte diverse. Il test legge l'origine del documento del provider
+effettivamente caricato e verifica il GET senza cookie Strict, il POST
 con la stessa sessione, PKCE, consumo singolo e lettura della disponibilità.
 Le prove successive coprono annullamento, sessione assente o revocata, altra
 sessione dello stesso utente, state errato/scaduto, replay, errore del provider,

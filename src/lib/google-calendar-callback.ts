@@ -54,7 +54,7 @@ function page(content: string, status: number, submit = false) {
   return new Response('<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="referrer" content="' + referrerPolicy + '">'
     + '<title>Collegamento Google Calendar · FAI</title></head><body><main>' + content + '</main>'
     + '<script nonce="' + nonce + '">' + script + '</script></body></html>', { status, headers: {
-      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', 'Referrer-Policy': referrerPolicy,
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', 'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
       'Content-Security-Policy': "default-src 'none'; script-src 'nonce-" + nonce + "'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     } });

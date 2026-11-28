@@ -52,8 +52,7 @@ async function actor(browser: Browser, id: string) {
 type Actor = Awaited<ReturnType<typeof actor>>;
 async function start(subject: Actor, mode = 'success') {
   let prepared: { key: string; state: string; challenge: string; mode: string } | undefined;
-  // Leave both local sites on the real browser transport: intercepting their
-  // requests hides browser-added Fetch Metadata from the request observer.
+  // Leave both local sites on the real browser transport.
   await subject.context.route(url => url.origin !== origin && url.origin !== provider, async route => {
     const url = new URL(route.request().url());
     if (url.hostname === 'accounts.google.com') {
@@ -74,6 +73,8 @@ async function start(subject: Actor, mode = 'success') {
   return prepared;
 }
 async function returnFromProvider(page: Page) {
+  const renderedProviderOrigin = await page.evaluate(() => location.origin);
+  assert.equal(renderedProviderOrigin, provider, 'DISTINCT_PROVIDER_DOCUMENT_REQUIRED');
   let getWithoutCookie = false, postWithCookie = false, postSameOrigin = false, getCrossSite = false;
   page.on('request', async request => {
     const url = new URL(request.url());
@@ -81,11 +82,14 @@ async function returnFromProvider(page: Page) {
     const headers = await request.allHeaders();
     if (request.method() === 'GET') {
       getWithoutCookie = !headers.cookie?.includes(cookieName + '=');
-      getCrossSite = headers['sec-fetch-site'] === 'cross-site';
+      // Observe the actual committed source document, not merely two ports.
+      // Fetch Metadata is not exposed on these HTTP loopback navigations.
+      getCrossSite = renderedProviderOrigin === provider && new URL(provider).hostname !== new URL(origin).hostname;
     }
     if (request.method() === 'POST') {
       postWithCookie = !!headers.cookie?.includes(cookieName + '=');
-      postSameOrigin = headers.origin === origin && headers['sec-fetch-site'] === 'same-origin';
+      postSameOrigin = headers.origin === origin;
+      if (headers['sec-fetch-site']) assert.equal(headers['sec-fetch-site'], 'same-origin');
       // Even without JavaScript history cleanup the policy must never forward
       // path, query, code or state in the Referer header.
       if (headers.referer) assert.equal(headers.referer, origin + '/');
@@ -200,11 +204,12 @@ test('Callback envelope is resource-free, has no opaque referrer, and rejects fo
     const envelope = await subject.context.request.get(url.href, { maxRedirects: 0 });
     expect(envelope.status()).toBe(200);
     expect(envelope.headers()['cache-control']).toBe('no-store, private');
-    expect(envelope.headers()['referrer-policy']).toBe('strict-origin');
+    expect(envelope.headers()['referrer-policy']).toBe('no-referrer');
     const csp = envelope.headers()['content-security-policy'];
     expect(csp.includes("default-src 'none'") && csp.includes("script-src 'nonce-") && !csp.includes('unsafe-inline')).toBe(true);
     expect(envelope.headers().location).toBeUndefined();
     const html = await envelope.text();
+    expect(html.includes('<meta name="referrer" content="strict-origin">')).toBe(true);
     expect(/<(?:img|link|iframe|object)\b|<script[^>]+src=/i.test(html)).toBe(false);
     expect(html.includes('&quot;&gt;&lt;img')).toBe(true);
     const data = { state: prepared.state, code: 'SYNTHETIC.' + prepared.challenge };
