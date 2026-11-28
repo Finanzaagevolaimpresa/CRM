@@ -4,7 +4,7 @@
 [[ "$(hostname)" != fai-crm-prod-02 && "${GITHUB_REPOSITORY:-}" == Finanzaagevolaimpresa/CRM ]]
 declare -F stop_app start_app wait_healthy >/dev/null
 [[ -d "${CALENDAR_RETURN_ARTIFACT_DIR:?}" && -d "$evidence" ]]
-[[ "$head" != 5055b107fed3d35d2a62e5cad273bd60a1c1f884 ]]
+[[ "$head" != 0eb4c878bb70d3e377572fe46fc6567a6e1c538f ]]
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$candidate_id" ]]
 export R05_EVIDENCE_DIR="$evidence"
 export CALENDAR_RETURN_PRIVATE_FILE="$RUNNER_TEMP/$prefix-calendar-return-private.json"
@@ -16,10 +16,10 @@ export CALENDAR_RETURN_CANDIDATE_IMAGE_ID="$candidate_id"
 # Check its original archive bytes and receipt before Docker sees the archive.
 node --import tsx tests/personal-calendar/return-state.ts archive
 docker load --input "$CALENDAR_RETURN_ARTIFACT_DIR/release-images.tar.gz" > "$evidence/calendar-return-load.log"
-calendar_return_image='sha256:bdb93253dc3c725a144b280040eed704f6671da602b7e30d50d791f3076ab7e2'
+calendar_return_image='sha256:880b7e2e8f2e35b1a92b1b757e3dfabdef8a2d1a40e17df0648b1f7fe0a14f7e'
 [[ "$(docker image inspect -f '{{.Id}}' "$calendar_return_image")" == "$calendar_return_image" ]]
-[[ "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$calendar_return_image")" == 5055b107fed3d35d2a62e5cad273bd60a1c1f884 ]]
-[[ "$(docker image inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.source-tree"}}' "$calendar_return_image")" == ec07c32529e86869c877cf57b3542fb68a3fd736 ]]
+[[ "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$calendar_return_image")" == 0eb4c878bb70d3e377572fe46fc6567a6e1c538f ]]
+[[ "$(docker image inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.source-tree"}}' "$calendar_return_image")" == 5855bb3a84a4aba214715d9a2d27f3eea4464608 ]]
 # Loading the historical pair can reuse a historical compatibility tag. Restore
 # only these two tags owned by this qualification; image IDs remain immutable.
 docker tag "$candidate_id" "$candidate_image"
@@ -65,13 +65,16 @@ calendar_return_probe() {
 # Separate from the earlier intentional-revocation scenario: this append-only
 # synthetic receipt authorizes registry continuity, and both cookies stay live.
 node --import tsx tests/personal-calendar/return-state.ts prepare
+stop_app
+start_app "$candidate_id" registry controlled internal enabled
+wait_healthy
 calendar_return_probe candidate-before
 stop_app
-start_app "$calendar_return_image" registry controlled internal
+start_app "$calendar_return_image" registry controlled internal enabled
 wait_healthy
-calendar_return_probe pr263-return
+calendar_return_probe pr264-return
 stop_app
-start_app "$candidate_id" registry controlled internal
+start_app "$candidate_id" registry controlled internal enabled
 wait_healthy
 calendar_return_probe candidate-resumed
 node --import tsx tests/personal-calendar/return-state.ts finish "$evidence/calendar-return-summary.json"

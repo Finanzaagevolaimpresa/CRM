@@ -82,13 +82,10 @@ async function exchange(config: CalendarOAuthConfig, fields: Record<string, stri
   if (!parsed.success) throw new CalendarError('UNCONNECTED');
   return parsed.data;
 }
-export async function completeGoogleCalendarConnection(db: PrismaClient, claimed: AuthSession, raw: unknown,
-  configured = calendarOAuthConfig(), transport: typeof fetch = fetch) {
-  const config = requireConfig(configured);
-  const { state, code } = z.object({ state: z.string().regex(/^[A-Za-z0-9_-]{43}$/), code: z.string().min(1).max(4096) }).strict().parse(raw);
+async function claimCalendarState(db: PrismaClient, claimed: AuthSession, state: string, config: CalendarOAuthConfig) {
   // Commit the single-use claim before exchanging a code. An uncertain exchange
   // requires a new consent, never a blind retry with the same authorization code.
-  const verifier = await withSerializableTransaction(db, async tx => {
+  return withSerializableTransaction(db, async tx => {
     const auth = await updateActor(tx, claimed); admit(auth.actor, config);
     const row = await tx.googleCalendarOAuthState.findUnique({ where: { stateHash: digest(state) } });
     if (!row || row.userId !== auth.actor.id || row.sessionId !== auth.registry.id || row.consumedAt || row.expiresAt <= new Date()) throw new CalendarError('DENIED');
@@ -97,6 +94,16 @@ export async function completeGoogleCalendarConnection(db: PrismaClient, claimed
     await auth.finish();
     return decryptCalendarSecret(row.verifierCiphertext, `state:${auth.actor.id}:${auth.registry.id}`, config.key);
   });
+}
+export async function cancelGoogleCalendarConnection(db: PrismaClient, claimed: AuthSession, rawState: unknown, configured = calendarOAuthConfig()) {
+  const config = requireConfig(configured), state = z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(rawState);
+  await claimCalendarState(db, claimed, state, config);
+}
+export async function completeGoogleCalendarConnection(db: PrismaClient, claimed: AuthSession, raw: unknown,
+  configured = calendarOAuthConfig(), transport: typeof fetch = fetch) {
+  const config = requireConfig(configured);
+  const { state, code } = z.object({ state: z.string().regex(/^[A-Za-z0-9_-]{43}$/), code: z.string().min(1).max(4096) }).strict().parse(raw);
+  const verifier = await claimCalendarState(db, claimed, state, config);
   const token = await exchange(config, { code, code_verifier: verifier, redirect_uri: config.redirectUri, grant_type: 'authorization_code' }, transport);
   if (!token.refresh_token || !token.scope || scopes.some(scope => !token.scope!.split(' ').includes(scope))) throw new CalendarError('UNCONNECTED');
   const options: RequestInit = { headers: { Authorization: 'Bearer ' + token.access_token }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) };
