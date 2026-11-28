@@ -121,6 +121,9 @@ test('other profiles remain own-only; technical assignments and office retain th
         expect(await page.content()).not.toContain('AGENDA_PRATICA_ALTRUI');
         expect((await page.request.get('/assignments?kind=Lead')).status()).toBe(404);
         await page.goto('/technical-office');
+        await expect(page.getByRole('heading', { name: 'Ufficio Tecnico', exact: true })).toBeVisible();
+        expect(await page.content()).not.toContain('AGENDA_PRATICA_ALTRUI');
+        await page.getByRole('link', { name: 'Lista pratiche', exact: true }).click();
         await expect(page.locator('main')).toContainText('Pratica agenda assegnata');
         expect(await page.content()).not.toContain('AGENDA_PRATICA_ALTRUI');
         expect(await page.content()).not.toContain(agendaPrivateMarker);
