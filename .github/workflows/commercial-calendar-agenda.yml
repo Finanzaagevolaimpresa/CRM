@@ -1,0 +1,97 @@
+name: Commercial calendar agenda
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: commercial-agenda-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  agenda:
+    name: Weekly agenda, role boundaries and technical office
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-agenda-ci, POSTGRES_DB: fai_crm_test }
+        ports: ['127.0.0.1:15481:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-agenda-ci@127.0.0.1:15481/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      TZ: UTC
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      NEXT_TELEMETRY_DISABLED: '1'
+      INTERNAL_SESSION_MODE: registry
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-agenda-ci-stepup-000000000000
+      AUTH_SECRET: synthetic-agenda-ci-auth-000000000000
+      AUTH_COOKIE_NAME: fai_agenda_test
+      APP_ORIGIN: http://localhost:3063
+      COMMERCIAL_LEAD_INBOX_MODE: enforced
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      FEATURE_INTEGRATIONS_ENABLED: 'true'
+      GOOGLE_CALENDAR_INTEGRATION_MODE: enabled
+      GOOGLE_CALENDAR_PILOT_USER_ID: f0000000-2026-4000-8000-000000000301
+      CALENDAR_SETTER_USER_ID: f0000000-2026-4000-8000-000000000302
+      GOOGLE_CALENDAR_OAUTH_CLIENT_ID: synthetic-agenda-client
+      GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET: synthetic-agenda-secret
+      GOOGLE_CALENDAR_OAUTH_REDIRECT_URI: http://localhost:3063/settings/integrations/google-calendar/callback
+      GOOGLE_CALENDAR_TOKEN_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bind exact source and isolated database
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          mkdir "$RUNNER_TEMP/agenda-evidence"
+          echo "AGENDA_EVIDENCE=$RUNNER_TEMP/agenda-evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/agenda-documents" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$RUNNER_TEMP/agenda-evidence/source-binding.json"
+          psql "${DATABASE_URL%%\?*}" -X -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npx prisma migrate deploy > "$RUNNER_TEMP/agenda-evidence/test-schema.log"
+      - name: Rome weeks and preserved calendar permissions
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/calendar-week.test.ts tests/personal-calendar-policy.test.ts tests/personal-calendar.test.ts tests/technical-role-profile-compatibility.test.ts | tee "$AGENDA_EVIDENCE/unit.tap"
+          grep -qx '# fail 0' "$AGENDA_EVIDENCE/unit.tap"
+          grep -qx '# skipped 0' "$AGENDA_EVIDENCE/unit.tap"
+      - name: Real application and synthetic browser roles
+        run: |
+          set -euo pipefail
+          node --import tsx tests/calendar-agenda/provision.ts
+          node --import tsx tests/operational-flow/prepare-browser.ts
+          npx playwright install --with-deps chromium
+          NODE_ENV=production npm run build > "$AGENDA_EVIDENCE/build.log" 2>&1
+          NODE_ENV=production NODE_OPTIONS="--require=$PWD/tests/calendar-agenda/google-simulator.cjs" node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3063 > "$AGENDA_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 10 http://localhost:3063/login > /dev/null; then break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$AGENDA_EVIDENCE/browser.json" npx playwright test --config tests/calendar-agenda/playwright.config.ts --reporter=line,json --output "$AGENDA_EVIDENCE/browser"
+          node -e 'const fs=require("node:fs"),p=process.env.AGENDA_EVIDENCE,{stats:s}=require(p+"/browser.json");if(s.expected!==3||s.skipped||s.unexpected||s.flaky)process.exit(1);const rows=fs.readFileSync(p+"/provider-boundary.jsonl","utf8").trim().split("\n").map(JSON.parse);if(!rows.some(r=>r.event==="SYNTHETIC_FREEBUSY")||!rows.some(r=>r.event==="SYNTHETIC_FREEBUSY_UNAVAILABLE")||rows.some(r=>!["INSTALLED","SYNTHETIC_FREEBUSY","SYNTHETIC_FREEBUSY_UNAVAILABLE"].includes(r.event)))process.exit(1);fs.writeFileSync(p+"/result.json",JSON.stringify({status:"PASS",browserTests:3,skipped:0,realProviderCalls:0,syntheticOnly:true}))'
+          git rev-parse HEAD HEAD^{tree} > "$AGENDA_EVIDENCE/source.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: commercial-agenda-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/agenda-evidence
+          if-no-files-found: error
+          retention-days: 14

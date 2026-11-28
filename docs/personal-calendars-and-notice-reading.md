@@ -8,6 +8,8 @@
 
 ## Calendari
 
+La [griglia settimanale](commercial-calendar-agenda.md) dispone gli impegni CRM per giorno, con orario e nome del contatto quando autorizzato. I blocchi Google restano anonimi nel livello di disponibilità. La navigazione conserva il referente selezionato e usa settimane lunedì–domenica in Europe/Rome.
+
 Ogni referente salva le proprie fasce in **Calendari → Le mie fasce**. L’Admin e la singola Setter autorizzata possono scegliere tutti i referenti attivi e consultare calendario, fasce e occupazioni; le fasce selezionate sono in sola lettura e l’editor modifica sempre soltanto le proprie. La Setter è identificata da `CALENDAR_SETTER_USER_ID`, un ID CRM stabile e singolo, con ruolo commerciale e permesso `lead.read` correnti, fuori dal perimetro tecnico. Senza questa configurazione nessun altro commerciale ottiene la vista generale. Un parametro `user` fuori perimetro viene rifiutato lato server.
 
 Il calendario include i richiami e le videochiamate già registrati nel CRM. Consultare gli orari di un referente non concede accesso alle sue schede: nomi e collegamenti Lead seguono i permessi esistenti, mentre gli altri impegni mostrano solo gli orari. Il profilo tecnico conserva il proprio calendario senza nomi o schede Lead. Per il calendario Google collegato la vista mostra soltanto libero/occupato, senza dettagli degli eventi; una lettura non riuscita è indicata come disponibilità non verificabile, mai come fascia libera.
