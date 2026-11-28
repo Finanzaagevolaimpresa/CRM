@@ -12,6 +12,11 @@ export async function middleware(request: NextRequest) {
   // Exact public opt-out surface; its own runtime remains default-off and
   // exposes no CRM session, navigation or record. Descendants stay private.
   if (pathname === '/preferenze-email' || pathname === '/preferenze-email/') return NextResponse.next();
+  // This exact Calendar return first commits a resource-free document. Its
+  // same-origin POST independently requires the original active pilot session.
+  // The general session cookie remains Strict; descendants stay private.
+  if (pathname === '/settings/integrations/google-calendar/callback'
+    && (request.method === 'GET' || request.method === 'POST')) return NextResponse.next();
   if (publicPaths.some((p) => pathname.startsWith(p)) || pathname.startsWith('/_next')) {
     return NextResponse.next();
   }

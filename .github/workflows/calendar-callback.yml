@@ -1,0 +1,134 @@
+name: Calendar callback cross-site
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: calendar-callback-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  browser:
+    name: Strict callback — ${{ matrix.phase }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { phase: before, directory: baseline }
+          - { phase: after, directory: candidate }
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-calendar-ci, POSTGRES_DB: fai_crm_test }
+        ports: ['127.0.0.1:15479:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-calendar-ci@127.0.0.1:15479/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      TZ: UTC
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      NEXT_TELEMETRY_DISABLED: '1'
+      INTERNAL_SESSION_MODE: registry
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-flow-ci-explicit-stepup-000000000000
+      AUTH_SECRET: synthetic-flow-ci-local-login-000000000000
+      AUTH_COOKIE_NAME: fai_callback_test
+      APP_ORIGIN: http://localhost:3061
+      COMMERCIAL_LEAD_INBOX_MODE: enforced
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      FEATURE_INTEGRATIONS_ENABLED: 'true'
+      GOOGLE_CALENDAR_INTEGRATION_MODE: enabled
+      GOOGLE_CALENDAR_PILOT_USER_ID: f0000000-2026-4000-8000-000000000101
+      CALENDAR_SETTER_USER_ID: f0000000-2026-4000-8000-000000000102
+      GOOGLE_CALENDAR_OAUTH_CLIENT_ID: synthetic-calendar-ci-client
+      GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET: synthetic-calendar-ci-secret
+      GOOGLE_CALENDAR_OAUTH_REDIRECT_URI: http://localhost:3061/settings/integrations/google-calendar/callback
+      GOOGLE_CALENDAR_TOKEN_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      WORKFLOW_NATIVE_PREPARATION_MODE: disabled
+      WORKFLOW_SERVICE_EXECUTION_MODE: disabled
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: candidate
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.phase == 'before'
+        with:
+          path: baseline
+          ref: 0eb4c878bb70d3e377572fe46fc6567a6e1c538f
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version-file: candidate/.nvmrc, cache: npm, cache-dependency-path: candidate/package-lock.json }
+      - name: Bind source and isolated synthetic database
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/callback-evidence"
+          echo "FLOW_EVIDENCE=$RUNNER_TEMP/callback-evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/callback-documents" >> "$GITHUB_ENV"
+          if [ '${{ matrix.phase }}' = before ]; then
+            test "$(git rev-parse HEAD)" = 0eb4c878bb70d3e377572fe46fc6567a6e1c538f
+            cp -R ../candidate/tests/calendar-callback tests/calendar-callback
+            echo "CALENDAR_CALLBACK_EXPECT_BASELINE=1" >> "$GITHUB_ENV"
+            echo "CALENDAR_CALLBACK_BASELINE_HEAD=0eb4c878bb70d3e377572fe46fc6567a6e1c538f" >> "$GITHUB_ENV"
+          else
+            test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          fi
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/callback-evidence/source.txt"
+          test "$(find prisma/migrations -name migration.sql | wc -l)" = 78
+          psql "${DATABASE_URL%%\?*}" -X -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+      - run: npm ci
+      - name: Prepare schema and role fixtures in the isolated database
+        run: |
+          set -euo pipefail
+          npm run prisma:migrate:deploy > "$FLOW_EVIDENCE/schema.log" 2>&1
+          node --import tsx tests/personal-calendar/perimeter-fixture.ts
+          node --import tsx tests/operational-flow/prepare-browser.ts
+      - name: Full browser return from a distinct site with Strict session
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium
+          NODE_ENV=production npm run build > "$FLOW_EVIDENCE/build.log" 2>&1
+          NODE_ENV=production NODE_OPTIONS="--require=$PWD/tests/calendar-callback/google-simulator.cjs" \
+            node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3061 > "$FLOW_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 10 http://localhost:3061/api/health > /dev/null; then break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          node node_modules/@playwright/test/cli.js test --config tests/calendar-callback/playwright.config.ts --output "$RUNNER_TEMP/callback-browser"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const p=process.env.FLOW_EVIDENCE, r=JSON.parse(fs.readFileSync(p+"/browser-result.json"));
+            const before=process.env.CALENDAR_CALLBACK_EXPECT_BASELINE==="1";
+            if(r.status!=="passed" || r.tests.length!==10 || r.tests.filter(x=>x.status==="passed").length!==(before?1:10))process.exit(1);
+            if(r.tests.some(x=>x.status!=="passed" && !(before && x.status==="skipped")))process.exit(1);
+            const events=fs.readFileSync(p+"/simulator.jsonl","utf8").trim().split("\n").map(JSON.parse);
+            if(!events.some(x=>x.event==="INSTALLED") || events.some(x=>x.event==="EXTERNAL_REQUEST_BLOCKED"))process.exit(1);
+            const proof=JSON.parse(fs.readFileSync(p+"/cross-site-proof.json"));
+            if(!proof.distinctSites || !proof.strictCookie || !proof.getWithoutCookie || !proof.getCrossSite)process.exit(1);
+            if(before ? proof.outcome!=="REPRODUCED_LOGIN_FAILURE" : proof.outcome!=="CONNECTED" || !proof.pkceVerified || !proof.availabilityRead)process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calendar-callback-${{ matrix.phase }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/callback-evidence
+          if-no-files-found: error
+          retention-days: 14

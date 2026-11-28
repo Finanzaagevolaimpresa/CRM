@@ -4,7 +4,7 @@ import { before, after, test } from 'node:test';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { syntheticPerson, syntheticSession } from './selective-sharing/fixtures';
-import { beginGoogleCalendarConnection, completeGoogleCalendarConnection, connectedCalendarAdapter,
+import { beginGoogleCalendarConnection, cancelGoogleCalendarConnection, completeGoogleCalendarConnection, connectedCalendarAdapter,
   decryptCalendarSecret, type CalendarOAuthConfig } from '../src/lib/google-calendar-oauth';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1';
@@ -93,6 +93,18 @@ test('A correctly configured pilot preserves single-use session-bound OAuth and 
   const adapter = await connectedCalendarAdapter(db, person.user.id, config, google.transport);
   assert(adapter.owns(person.user.id, 'synthetic-calendar-' + person.user.id));
   assert.equal(google.calls.length, 3); // token, identity and primary-calendar reads only; no event or refresh.
+});
+
+test('Cancellation uses the original pilot session and consumes the attempt exactly once without credentials', options, async () => {
+  const { person, config } = await fixture(), input = await start(person, config), google = fakeGoogle(person);
+  const second = await syntheticSession(db, person.user);
+  await assert.rejects(cancelGoogleCalendarConnection(db, second.session, input.state, config));
+  await assert.rejects(cancelGoogleCalendarConnection(db, person.session, input.state, { ...config, pilotUserId: 'another-pilot' }));
+  await cancelGoogleCalendarConnection(db, person.session, input.state, config);
+  await assert.rejects(cancelGoogleCalendarConnection(db, person.session, input.state, config));
+  await assert.rejects(completeGoogleCalendarConnection(db, person.session, input, config, google.transport));
+  assert.equal(google.calls.length, 0);
+  assert.deepEqual(await counts([person.user.id]), [1, 0, 0, 0]);
 });
 
 test('Current pilot revocation before callback cannot consume a state or exchange its code', options, async () => {

@@ -15,7 +15,17 @@ function exported(node: ts.Node) {
 }
 function guarded(body: ts.ConciseBody | undefined, name: string, value: string): boolean {
   if (!body || !ts.isBlock(body)) return false;
-  const first = body.statements[0];
+  let first = body.statements[0];
+  // Calendar returns a constant, resource-free denial even when the ceiling
+  // rejects a context. The guard is still the first operation in both methods,
+  // and the catch can only return the closed failure response.
+  if (value === '/settings/integrations/google-calendar/callback' && first && ts.isTryStatement(first)
+    && body.statements.length === 1 && !first.finallyBlock && first.catchClause?.block.statements.length === 1) {
+    const failure = first.catchClause.block.statements[0];
+    if (ts.isReturnStatement(failure) && failure.expression && ts.isCallExpression(failure.expression)
+      && ts.isIdentifier(failure.expression.expression) && failure.expression.expression.text === 'calendarCallbackFailure')
+      first = first.tryBlock.statements[0];
+  }
   if (!first || !ts.isExpressionStatement(first) || !ts.isAwaitExpression(first.expression)) return false;
   const call = first.expression.expression;
   return ts.isCallExpression(call) && ts.isIdentifier(call.expression) && call.expression.text === name

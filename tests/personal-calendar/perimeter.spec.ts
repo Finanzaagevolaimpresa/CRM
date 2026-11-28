@@ -12,7 +12,7 @@ async function contextFor(browser: Browser, userId: string, googleRequests: stri
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } }), session = await syntheticSession(db, user);
   const context = await browser.newContext({ baseURL: origin });
   await context.addCookies([{ name: process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session', value: session.token, url: origin,
-    httpOnly: true, sameSite: 'Lax', expires: session.session.expiresAt }]);
+    httpOnly: true, sameSite: 'Strict', expires: session.session.expiresAt }]);
   await context.route(url => googleHosts.has(url.hostname), async route => {
     googleRequests.push(route.request().url());
     await route.abort('blockedbyclient');
@@ -144,18 +144,20 @@ test('Only the pilot can prepare consent; forged actions and callbacks never con
     expect(authorization.searchParams.has('client_secret')).toBe(false);
     const state = authorization.searchParams.get('state'); assert(state);
     for (const context of others) {
-      const response = await context.request.get('/settings/integrations/google-calendar/callback?state=' + encodeURIComponent(state) + '&code=SYNTHETIC_CODE_NOT_FOR_PROVIDER', { maxRedirects: 0 });
-      expect(response.status()).toBe(303);
-      expect(response.headers().location).toMatch(/\/calendars\?connection=error$/);
+      const response = await context.request.post('/settings/integrations/google-calendar/callback', {
+        form: { state, code: 'SYNTHETIC_CODE_NOT_FOR_PROVIDER' }, headers: { Origin: origin, 'Sec-Fetch-Site': 'same-origin' }, maxRedirects: 0 });
+      expect(response.status()).toBe(403);
+      expect(response.headers().location).toBeUndefined();
       expect(response.headers()['cache-control']).toBe('no-store, private');
       expect(response.headers()['referrer-policy']).toBe('no-referrer');
     }
-    const cancelled = await pilotContext.request.get('/settings/integrations/google-calendar/callback?error=access_denied&state=' + encodeURIComponent(state), { maxRedirects: 0 });
-    expect(cancelled.status()).toBe(303); expect(cancelled.headers().location).toMatch(/\/calendars\?connection=error$/);
+    const cancelled = await pilotContext.request.post('/settings/integrations/google-calendar/callback', {
+      form: { state, cancelled: 'true' }, headers: { Origin: origin, 'Sec-Fetch-Site': 'same-origin' }, maxRedirects: 0 });
+    expect(cancelled.status()).toBe(400); expect(cancelled.headers().location).toBeUndefined();
     expect(requests).toHaveLength(1);
     const ids = [fixture.pilotId, fixture.setterId, fixture.adminId, fixture.otherId, fixture.technicalId];
     expect(await db.googleCalendarCredential.count({ where: { userId: { in: ids } } })).toBe(0);
-    expect(await db.googleCalendarOAuthState.count({ where: { userId: fixture.pilotId, consumedAt: { not: null } } })).toBe(0);
+    expect(await db.googleCalendarOAuthState.count({ where: { userId: fixture.pilotId, consumedAt: { not: null } } })).toBe(1);
     expect((await db.personalCalendar.findUniqueOrThrow({ where: { userId: fixture.pilotId } })).mode).toBe('LOCAL');
   } finally { await Promise.all(contexts.map(context => context.close())); }
 });
