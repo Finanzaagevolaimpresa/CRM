@@ -40,6 +40,15 @@ jobs:
       COMMERCIAL_LEAD_INBOX_MODE: enforced
       LOGIN_THROTTLE_MODE: disabled
       SECURITY_HEADERS_MODE: report-only
+      # Isolated Calendar perimeter: synthetic identities and credentials only.
+      FEATURE_INTEGRATIONS_ENABLED: 'true'
+      GOOGLE_CALENDAR_INTEGRATION_MODE: enabled
+      GOOGLE_CALENDAR_PILOT_USER_ID: f0000000-2026-4000-8000-000000000101
+      CALENDAR_SETTER_USER_ID: f0000000-2026-4000-8000-000000000102
+      GOOGLE_CALENDAR_OAUTH_CLIENT_ID: synthetic-calendar-ci-client
+      GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET: synthetic-calendar-ci-secret
+      GOOGLE_CALENDAR_OAUTH_REDIRECT_URI: http://localhost:3059/settings/integrations/google-calendar/callback
+      GOOGLE_CALENDAR_TOKEN_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
@@ -61,7 +70,10 @@ jobs:
       - name: Role boundaries, unique receipts, preference races, calendar conflicts and PDF
         run: |
           set -euo pipefail
-          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/operational-documents/persistence.ts tests/operational-documents/delivery.ts tests/personal-calendar-db.test.ts tests/workflow/persistence.ts tests/workflow/native-preparation-persistence.ts tests/workflow/newsletter-persistence.ts tests/workflow/newsletter-native-persistence.ts tests/workflow/withdrawal-persistence.ts tests/workflow/operational-events-persistence.ts tests/workflow/operational-hooks-persistence.ts tests/workflow/service-execution-persistence.ts tests/operational-flow/persistence.ts | tee "$FLOW_EVIDENCE/database.tap"
+          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/personal-calendar-policy.test.ts tests/calendar-provider-guard.test.ts tests/personal-calendar.test.ts | tee "$FLOW_EVIDENCE/calendar-unit.tap"
+          grep -qx '# fail 0' "$FLOW_EVIDENCE/calendar-unit.tap"
+          grep -qx '# skipped 0' "$FLOW_EVIDENCE/calendar-unit.tap"
+          node --import tsx --test --test-concurrency=1 --test-reporter=tap tests/operational-documents/persistence.ts tests/operational-documents/delivery.ts tests/personal-calendar-db.test.ts tests/personal-calendar-perimeter-db.test.ts tests/workflow/persistence.ts tests/workflow/native-preparation-persistence.ts tests/workflow/newsletter-persistence.ts tests/workflow/newsletter-native-persistence.ts tests/workflow/withdrawal-persistence.ts tests/workflow/operational-events-persistence.ts tests/workflow/operational-hooks-persistence.ts tests/workflow/service-execution-persistence.ts tests/operational-flow/persistence.ts | tee "$FLOW_EVIDENCE/database.tap"
           grep -qx '# fail 0' "$FLOW_EVIDENCE/database.tap"
           grep -qx '# cancelled 0' "$FLOW_EVIDENCE/database.tap"
           grep -qx '# skipped 0' "$FLOW_EVIDENCE/database.tap"
@@ -69,10 +81,11 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx tests/operational-documents/provision.ts
+          node --import tsx tests/personal-calendar/perimeter-fixture.ts
           node --import tsx tests/operational-flow/prepare-browser.ts
           npx playwright install --with-deps chromium
           NODE_ENV=production npm run build > "$FLOW_EVIDENCE/build.log" 2>&1
-          NODE_ENV=production node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3059 > "$FLOW_EVIDENCE/app.log" 2>&1 &
+          NODE_ENV=production NODE_OPTIONS="--require=$PWD/tests/personal-calendar/google-transport-guard.cjs" node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3059 > "$FLOW_EVIDENCE/app.log" 2>&1 &
           app_pid=$!
           trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 60); do
@@ -83,6 +96,7 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_NAME="$FLOW_EVIDENCE/documents.json" npx playwright test --config tests/operational-documents/playwright.config.ts --reporter=line,json --output "$FLOW_EVIDENCE/document-browser"
           PLAYWRIGHT_JSON_OUTPUT_NAME="$FLOW_EVIDENCE/calendars.json" npx playwright test --config tests/personal-calendar/playwright.config.ts --reporter=line,json --output "$FLOW_EVIDENCE/calendar-browser"
           node -e 'for(const f of ["documents","calendars"]){const {stats:s}=require(process.env.FLOW_EVIDENCE+"/"+f+".json");if(!s.expected||s.skipped||s.unexpected||s.flaky)process.exit(1)}'
+          node -e 'const fs=require("node:fs"),p=process.env.FLOW_EVIDENCE,r=fs.readFileSync(p+"/calendar-provider-guard.jsonl","utf8").trim().split("\n").map(JSON.parse);if(!r.some(x=>x.event==="GOOGLE_FETCH_GUARD_INSTALLED")||r.some(x=>x.event!=="GOOGLE_FETCH_GUARD_INSTALLED"))process.exit(1);fs.writeFileSync(p+"/calendar-provider-boundary.json",JSON.stringify({synthetic:true,guardInstalled:true,backendGoogleAttempts:0,providerConsentPerformed:false}))'
           cp generated/operational-flow/proforma-sintetica.pdf "$FLOW_EVIDENCE/"
           cp generated/operational-flow/evidence.json "$FLOW_EVIDENCE/end-to-end.json"
           git rev-parse HEAD HEAD^{tree} > "$FLOW_EVIDENCE/source.txt"

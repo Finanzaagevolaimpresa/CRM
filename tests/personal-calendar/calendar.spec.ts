@@ -1,16 +1,23 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
-import { syntheticPerson } from '../selective-sharing/fixtures';
+import { syntheticPerson, syntheticSession } from '../selective-sharing/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { notificationCount } from '../notification-browser-helpers';
+import { readCalendarPerimeterFixture } from './perimeter-fixtures';
 
 const db = new PrismaClient(), origin = process.env.APP_ORIGIN ?? 'http://127.0.0.1:3059';
 test.afterAll(async () => { await db.$disconnect(); });
 test('Setter books and moves, technical calendar hides lead details, and opening a notice marks exactly one read', async ({ browser }, info) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const fixture = readCalendarPerimeterFixture();
+  const setterUser = await db.user.findUniqueOrThrow({ where: { id: fixture.setterId } });
+  expect(setterUser.id).toBe(process.env.CALENDAR_SETTER_USER_ID);
+  expect(setterUser.active).toBe(true);
+  expect(setterUser.deletedAt).toBeNull();
+  expect(setterUser.role).toBe('commerciale');
   const actors = await Promise.all([
-    syntheticPerson(db, 'Setter calendario browser', 'commerciale'), syntheticPerson(db, 'Ivo calendario browser', 'commerciale'),
+    syntheticSession(db, setterUser).then(session => ({ user: setterUser, ...session })), syntheticPerson(db, 'Ivo calendario browser', 'commerciale'),
     syntheticPerson(db, 'Tecnico calendario browser', 'consulente'), syntheticPerson(db, 'Admin calendario browser', 'admin'),
   ]);
   const contexts = await Promise.all(actors.map(async actor => {
@@ -44,6 +51,9 @@ test('Setter books and moves, technical calendar hides lead details, and opening
       await expect(panel.getByText(/Salvato nel CRM/)).toBeVisible();
     }
     await technical.goto('/calendars?date=' + date + '&user=' + actors[1].user.id);
+    await expect(technical.getByRole('heading', { name: 'Calendari', exact: true })).toHaveCount(0);
+    expect((await technical.request.get('/calendars?date=' + date + '&user=' + actors[1].user.id)).status()).toBe(404);
+    await technical.goto('/calendars?date=' + date);
     await expect(technical.getByText('Dettagli riservati al referente della scheda.')).toBeVisible();
     await expect(technical.locator('main a[href^="/leads/"]')).toHaveCount(0);
     expect(await technical.content()).not.toContain(secret);
