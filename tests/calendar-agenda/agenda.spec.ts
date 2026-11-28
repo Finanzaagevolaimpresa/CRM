@@ -8,7 +8,7 @@ import { calendarWeek } from '../../src/lib/calendar-week';
 const db = new PrismaClient(), origin = process.env.APP_ORIGIN ?? 'http://localhost:3063';
 async function contextFor(browser: Browser, id: string) {
   const user = await db.user.findUniqueOrThrow({ where: { id } }), session = await syntheticSession(db, user);
-  const context = await browser.newContext({ baseURL: origin, viewport: { width: 1600, height: 1100 } });
+  const context = await browser.newContext({ baseURL: origin, locale: 'it-IT', viewport: { width: 1600, height: 1100 } });
   await context.addCookies([{ name: process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session', value: session.token, url: origin,
     httpOnly: true, sameSite: 'Strict', expires: session.session.expiresAt }]);
   await context.route(url => !['localhost','127.0.0.1','[::1]'].includes(url.hostname), route => route.abort('blockedbyclient'));
@@ -33,6 +33,8 @@ test('commercial week opens the authorized named Lead, keeps Google anonymous, a
     const appointment = grid.locator('article').filter({ hasText: 'Ada Esempio' });
     await expect(appointment).toHaveCount(1); await expect(appointment).toContainText('09:00 – 09:45');
     await expect(appointment).toContainText('Officina Dimostrativa');
+    await expect(appointment).toContainText('Salvato nel CRM');
+    await expect(grid).not.toContainText('Google non collegato');
     await expect(grid.getByText('Bruno Prova', { exact: true })).toBeVisible();
     await expect(grid.locator('article[data-state="CANCELLED"]')).toContainText('Annullato');
     await expect(grid.locator('article[data-state="COMPLETED"]')).toContainText('Svolto');
@@ -49,7 +51,7 @@ test('commercial week opens the authorized named Lead, keeps Google anonymous, a
     await page.goto('/calendars?date=' + agendaDate);
     await page.getByRole('link', { name: 'Settimana successiva →', exact: true }).click();
     await expect(page.locator('input[name="date"]')).toHaveValue('2030-06-10');
-    await expect(page.getByRole('heading', { name: 'Nessun appuntamento', exact: true })).toBeVisible();
+    await expect(page.getByText('Nessun appuntamento', { exact: true })).toBeVisible();
     await expect(page.locator('[data-calendar-entry]')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('agenda-empty-week.png'), fullPage: true });
     await page.getByRole('link', { name: 'Settimana successiva →', exact: true }).click();
@@ -123,7 +125,7 @@ test('other profiles remain own-only; technical assignments and office retain th
         expect(await page.content()).not.toContain('AGENDA_PRATICA_ALTRUI');
         expect(await page.content()).not.toContain(agendaPrivateMarker);
         expect((await page.request.get('/technical-office/practices/agenda-practice-foreign')).status()).toBe(404);
-      } else await expect(page.getByRole('heading', { name: 'Nessun appuntamento', exact: true })).toBeVisible();
+      } else await expect(page.getByText('Nessun appuntamento', { exact: true })).toBeVisible();
     }
   } finally { await Promise.all(contexts.map(context => context.close())); }
 });

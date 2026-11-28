@@ -42,7 +42,7 @@ async function CalendarsPage({ searchParams }: { searchParams: Promise<{ user?: 
   const managed = new Set(calendar?.appointments.filter(row => row.status === 'BOOKED').map(row => row.leadId) ?? []);
   const entries: CalendarAgendaEntry[] = [
     ...(calendar?.appointments ?? []).map(row => ({ startsAt: row.startsAt, endsAt: row.endsAt, status: row.status,
-      kind: calendarAppointmentLabel(row.status), syncLabel: calendarSyncLabels[row.syncState] ?? 'Da verificare', ...calendarContact(visible.get(row.leadId)) })),
+      kind: calendarAppointmentLabel(row.status), syncLabel: row.syncState === 'LOCAL' ? 'Salvato nel CRM' : calendarSyncLabels[row.syncState] ?? 'Da verificare', ...calendarContact(visible.get(row.leadId)) })),
     ...legacy.filter(row => row.nextActionDate && !managed.has(row.id)).map(row => ({ startsAt: row.nextActionDate!, endsAt: null,
       status: 'NEXT_ACTION', kind: calendarLegacyLabel(row.setterNextKind), syncLabel: null, ...calendarContact(visible.get(row.id)) })),
   ];
