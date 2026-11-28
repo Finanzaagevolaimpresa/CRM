@@ -12,8 +12,12 @@ ammette ora GET e POST attraverso il middleware. Il GET non scambia codici,
 non crea credenziali e non apre la scheda CRM: restituisce un documento isolato.
 Il documento elimina la query dalla propria voce di cronologia e invia i soli
 campi canonici in POST allo stesso percorso. CSP con nonce, nessuna risorsa
-esterna, no-referrer e no-store proteggono il passaggio; gli errori del provider
+esterna, referrer limitato alla sola origine e no-store proteggono il passaggio; gli errori del provider
 non sono riportati. Con JavaScript disabilitato resta il pulsante esplicito.
+La pagina di trasporto usa `strict-origin`: un form con `no-referrer` invierebbe
+`Origin: null`, impedendo al controllo CSRF esistente di verificare l'origine.
+Path e query restano esclusi dal referrer anche nel percorso manuale.
+Dinieghi e redirect finale mantengono `no-referrer`.
 
 Il POST controlla origine, Fetch Metadata, formato e dimensione del corpo,
 sessione attiva e vincolo del pilota. Il servizio esistente ricontrolla l'attore,
@@ -62,3 +66,4 @@ si limita al collegamento e alla disponibilità, senza eventi o invitati.
 
 Riferimenti: [Google OAuth Web Server](https://developers.google.com/identity/protocols/oauth2/web-server),
 [SameSite e sito del documento](https://httpwg.org/http-extensions/draft-ietf-httpbis-rfc6265bis.html).
+[Effetto della Referrer Policy su Origin](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Referrer-Policy#effect_on_the_origin_header).

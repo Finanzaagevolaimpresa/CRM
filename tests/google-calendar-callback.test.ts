@@ -20,7 +20,7 @@ test('Callback bridge escapes opaque values, uses only a nonce and a fixed same-
   const response = calendarCallbackBridge({ state, code: '\"><script src="https://foreign.invalid">\'&' }), html = await response.text();
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'no-store, private');
-  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(response.headers.get('referrer-policy'), 'strict-origin');
   assert.equal(response.headers.get('location'), null);
   assert.equal(response.headers.get('set-cookie'), null);
   assert(html.includes('&quot;&gt;&lt;script src=&quot;https://foreign.invalid&quot;&gt;&#39;&amp;'));
@@ -40,6 +40,7 @@ test('Denials have no opaque values, no resources, no redirect and no session co
     assert(!html.includes(state));
     assert.equal(response.headers.get('location'), null);
     assert.equal(response.headers.get('set-cookie'), null);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
   }
 });
 

@@ -2,7 +2,7 @@ import { test, expect, type Browser, type Page } from '@playwright/test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { syntheticSession } from '../selective-sharing/fixtures';
@@ -52,7 +52,9 @@ async function actor(browser: Browser, id: string) {
 type Actor = Awaited<ReturnType<typeof actor>>;
 async function start(subject: Actor, mode = 'success') {
   let prepared: { key: string; state: string; challenge: string; mode: string } | undefined;
-  await subject.context.route('**/*', async route => {
+  // Leave both local sites on the real browser transport: intercepting their
+  // requests hides browser-added Fetch Metadata from the request observer.
+  await subject.context.route(url => url.origin !== origin && url.origin !== provider, async route => {
     const url = new URL(route.request().url());
     if (url.hostname === 'accounts.google.com') {
       assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
@@ -63,8 +65,7 @@ async function start(subject: Actor, mode = 'success') {
       attempts.set(key, prepared);
       return route.fulfill({ status: 302, headers: { location: provider + '/authorize?attempt=' + key } });
     }
-    if (url.origin !== origin && url.origin !== provider) return route.abort();
-    return route.continue();
+    return route.abort();
   });
   await subject.page.goto(origin + '/calendars');
   await subject.page.getByRole('button', { name: 'Collega il mio Google Calendar', exact: true }).click();
@@ -85,7 +86,15 @@ async function returnFromProvider(page: Page) {
     if (request.method() === 'POST') {
       postWithCookie = !!headers.cookie?.includes(cookieName + '=');
       postSameOrigin = headers.origin === origin && headers['sec-fetch-site'] === 'same-origin';
+      // Even without JavaScript history cleanup the policy must never forward
+      // path, query, code or state in the Referer header.
+      if (headers.referer) assert.equal(headers.referer, origin + '/');
     }
+    appendFileSync(join(evidence, 'callback-transport.jsonl'), JSON.stringify({ method: request.method(),
+      cookiePresent: !!headers.cookie?.includes(cookieName + '='),
+      fetchSite: ['cross-site', 'same-site', 'same-origin', 'none'].includes(headers['sec-fetch-site']) ? headers['sec-fetch-site'] : 'missing',
+      origin: headers.origin === origin ? 'expected' : headers.origin === 'null' ? 'null' : headers.origin ? 'other' : 'missing',
+      referrerSafe: !headers.referer || headers.referer === origin + '/' }) + '\n');
   });
   await page.getByRole('link', { name: 'Rientra nel CRM' }).click();
   return () => ({ getWithoutCookie, getCrossSite, postWithCookie, postSameOrigin });
@@ -181,7 +190,7 @@ test('Other roles cannot start OAuth or complete a pilot callback after a contex
   } finally { await pilot.context.close(); }
 });
 
-test('Callback envelope is resource-free, no-referrer, nonce-restricted and rejects forged posts', async ({ browser }) => {
+test('Callback envelope is resource-free, has no opaque referrer, and rejects forged posts', async ({ browser }) => {
   test.skip(baseline, 'Before-fix reproduction only');
   const subject = await actor(browser, readCalendarPerimeterFixture().pilotId);
   try {
@@ -191,7 +200,7 @@ test('Callback envelope is resource-free, no-referrer, nonce-restricted and reje
     const envelope = await subject.context.request.get(url.href, { maxRedirects: 0 });
     expect(envelope.status()).toBe(200);
     expect(envelope.headers()['cache-control']).toBe('no-store, private');
-    expect(envelope.headers()['referrer-policy']).toBe('no-referrer');
+    expect(envelope.headers()['referrer-policy']).toBe('strict-origin');
     const csp = envelope.headers()['content-security-policy'];
     expect(csp.includes("default-src 'none'") && csp.includes("script-src 'nonce-") && !csp.includes('unsafe-inline')).toBe(true);
     expect(envelope.headers().location).toBeUndefined();

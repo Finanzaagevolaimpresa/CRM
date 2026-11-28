@@ -123,6 +123,18 @@ pg_id="$(docker inspect -f '{{.Id}}' "$pg")"
 pg_started="$(docker inspect -f '{{.State.StartedAt}}' "$pg")"
 start_app() {
   local image="$1" session_mode="$2" engagement_mode="$3" feature_mode="$4"
+  local calendar_mode="${5:-disabled}" integrations=false
+  local calendar_args=()
+  if [[ "$calendar_mode" == enabled ]]; then
+    [[ "${CI:-}" == true && "${GITHUB_ACTIONS:-}" == true && "$(hostname)" != fai-crm-prod-02 ]]
+    integrations=true
+    calendar_args=(-e GOOGLE_CALENDAR_PILOT_USER_ID=calendar-return-pilot-synthetic
+      -e CALENDAR_SETTER_USER_ID=calendar-return-setter-synthetic
+      -e GOOGLE_CALENDAR_OAUTH_CLIENT_ID=synthetic-calendar-return-client
+      -e GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET=synthetic-calendar-return-secret
+      -e GOOGLE_CALENDAR_OAUTH_REDIRECT_URI="$PRACTICE_READINESS_BROWSER_ORIGIN/settings/integrations/google-calendar/callback"
+      -e GOOGLE_CALENDAR_TOKEN_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=)
+  else [[ "$calendar_mode" == disabled ]]; fi
   docker run -d --name "$app" --network "$prefix" --label fai.synthetic=r05 \
     -v "$prefix-documents:/var/lib/fai-crm/documents" \
     -e LOCAL_DOCUMENT_STORAGE_ROOT=/var/lib/fai-crm/documents \
@@ -134,9 +146,9 @@ start_app() {
     -e LOGIN_THROTTLE_MODE=disabled -e PRIVILEGED_ACCESS_MODE=enforced -e SECURITY_HEADERS_MODE=report-only \
     -e PRIVILEGED_STEP_UP_SECRET="$PRIVILEGED_STEP_UP_SECRET" -e PRIVILEGED_STEP_UP_KEY_VERSION=1 \
     -e COMMERCIAL_LEAD_INBOX_MODE=enforced -e WEBSITE_LEAD_MODE=disabled \
-    -e GOOGLE_CALENDAR_INTEGRATION_MODE=disabled -e WORKFLOW_NATIVE_PREPARATION_MODE=disabled \
+    -e GOOGLE_CALENDAR_INTEGRATION_MODE="$calendar_mode" "${calendar_args[@]}" -e WORKFLOW_NATIVE_PREPARATION_MODE=disabled \
     -e WORKFLOW_SERVICE_EXECUTION_MODE=disabled -e WORKFLOW_MARKETING_WITHDRAWAL_MODE=disabled \
-    -e FEATURE_INTEGRATIONS_ENABLED=false -e FEATURE_AI_WORKER_ENABLED=false -e FEATURE_AI_DISPATCH_ENABLED=false \
+    -e FEATURE_INTEGRATIONS_ENABLED="$integrations" -e FEATURE_AI_WORKER_ENABLED=false -e FEATURE_AI_DISPATCH_ENABLED=false \
     -e FEATURE_AI_EGRESS_ENABLED=false -e AI_EXTERNAL_PROVIDERS_ENABLED=false -e AI_ORCHESTRATOR_WORKER_ENABLED=0 -e AI_PROVIDER=mock \
     -e TZ=UTC "$image" >/dev/null
   node scripts/pr140/ci-loopback-forwarder.mjs "$(bridge_ip "$app")" 13000 3000 "$tls_key" "$tls_cert" &
@@ -301,7 +313,7 @@ run_browser resume-shared-recovery tests/pr140-release/playwright.config.ts shar
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-resume.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
-# Load the already qualified PR263 artifact and prove live-session continuity
+# Load the already qualified PR264 artifact and prove live-session continuity
 # across candidate -> exact previous image -> candidate, without revocation.
 source scripts/calendar-perimeter/qualify-return.sh
 

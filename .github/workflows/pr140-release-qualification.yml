@@ -54,12 +54,12 @@ jobs:
       - name: Install locked qualification tools
         run: npm ci && npx playwright install --with-deps chromium
       - name: Bind isolated return artifact path
-        run: printf 'CALENDAR_RETURN_ARTIFACT_DIR=%s\n' "$RUNNER_TEMP/calendar-return-pr263" >> "$GITHUB_ENV"
-      - name: Download the exact qualified PR263 image artifact
+        run: printf 'CALENDAR_RETURN_ARTIFACT_DIR=%s\n' "$RUNNER_TEMP/calendar-return-pr264" >> "$GITHUB_ENV"
+      - name: Download the exact qualified PR264 image artifact
         uses: actions/download-artifact@v4
         with:
-          artifact-ids: '15197050184'
-          run-id: '45994851134'
+          artifact-ids: '15244100405'
+          run-id: '46095542402'
           repository: Finanzaagevolaimpresa/CRM
           github-token: ${{ github.token }}
           path: ${{ env.CALENDAR_RETURN_ARTIFACT_DIR }}

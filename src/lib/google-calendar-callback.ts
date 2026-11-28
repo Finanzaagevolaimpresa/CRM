@@ -42,15 +42,19 @@ export async function readCalendarCallbackForm(request: Request): Promise<Calend
 
 function page(content: string, status: number, submit = false) {
   const nonce = randomBytes(24).toString('base64');
+  // no-referrer makes the Origin of an HTML form POST "null". On the
+  // transport document disclose at most the origin (never path/query), so the
+  // existing exact-Origin CSRF guard remains effective. Denials send nothing.
+  const referrerPolicy = submit ? 'strict-origin' : 'no-referrer';
   // First commit a document on the CRM origin, erase the sensitive query from
   // its history entry, then submit to the exact same endpoint. Strict session
   // cookies are available only on this new same-origin navigation.
   const script = "history.replaceState(null,'','" + calendarCallbackPath + "');"
     + (submit ? "document.getElementById('calendar-return').submit();" : '');
-  return new Response('<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">'
+  return new Response('<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="referrer" content="' + referrerPolicy + '">'
     + '<title>Collegamento Google Calendar · FAI</title></head><body><main>' + content + '</main>'
     + '<script nonce="' + nonce + '">' + script + '</script></body></html>', { status, headers: {
-      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', 'Referrer-Policy': 'no-referrer',
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', 'Referrer-Policy': referrerPolicy,
       'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
       'Content-Security-Policy': "default-src 'none'; script-src 'nonce-" + nonce + "'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     } });

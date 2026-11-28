@@ -6,18 +6,18 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import type { PrismaClient } from '@prisma/client';
 
 const recovery = Object.freeze({
-  commit: '5055b107fed3d35d2a62e5cad273bd60a1c1f884',
-  tree: 'ec07c32529e86869c877cf57b3542fb68a3fd736',
-  imageId: 'sha256:bdb93253dc3c725a144b280040eed704f6671da602b7e30d50d791f3076ab7e2',
-  archiveSha256: '91743e861fca7767be42bd193f97759e4e8b6ef8fb299fa36aa3210f982af2e5',
-  artifactId: 15197050184, runId: 45994851134,
+  commit: '0eb4c878bb70d3e377572fe46fc6567a6e1c538f',
+  tree: '5855bb3a84a4aba214715d9a2d27f3eea4464608',
+  imageId: 'sha256:880b7e2e8f2e35b1a92b1b757e3dfabdef8a2d1a40e17df0648b1f7fe0a14f7e',
+  archiveSha256: '04678b103a9d195816d8d97725c51c34cfe5c7ed0e990498969b0311e69f5cfe',
+  artifactId: 15244100405, runId: 46095542402,
 });
-const phases = ['candidate-before', 'pr263-return', 'candidate-resumed'] as const;
+const phases = ['candidate-before', 'pr264-return', 'candidate-resumed'] as const;
 type Phase = typeof phases[number];
 type Actor = { userId: string; sessionId: string; name: string; email: string; cookie: string };
-type PrivateState = { protocol: 'CALENDAR_RETURN_PRIVATE_V1'; actors: Actor[]; ledgerSha256: string; sessionsSha256: string };
+type PrivateState = { protocol: 'CALENDAR_RETURN_PRIVATE_V1'; actors: Actor[]; ledgerSha256: string; sessionsSha256: string; calendarSha256: string };
 type PhaseProof = { phase: Phase; imageId: string; authenticatedRequests: number; ledgerSha256: string; sessionsSha256: string;
-  calendarOff: true; serviceGatesOff: true; sameAuthSecret: true; documentSha256: string; databaseId: string; databaseStarted: string;
+  calendarPilotEnabled: true; calendarSha256: string; serviceGatesOff: true; sameAuthSecret: true; documentSha256: string; databaseId: string; databaseStarted: string;
   deniedPaths: string[]; denialDestination: '/dashboard'; sameCookieAfterDenials: true };
 const deniedPaths = ['/settings/users', '/settings/roles'];
 
@@ -54,12 +54,12 @@ function state(): PrivateState {
   const value = privateRead(fixturePath()) as PrivateState;
   assert.equal(value.protocol, 'CALENDAR_RETURN_PRIVATE_V1');
   assert(Array.isArray(value.actors) && value.actors.length === 2);
-  hash64(value.ledgerSha256); hash64(value.sessionsSha256);
+  hash64(value.ledgerSha256); hash64(value.sessionsSha256); hash64(value.calendarSha256);
   const tokens = new Set<string>(), sessions = new Set<string>();
   for (const actor of value.actors) {
-    assert.match(actor.userId, /^calendar-return-[a-f0-9-]{36}$/);
+    assert.match(actor.userId, /^calendar-return-(?:[a-f0-9-]{36}|pilot-synthetic)$/);
     assert.match(actor.sessionId, /^[a-f0-9-]{36}$/);
-    assert.match(actor.email, /^calendar-return-[a-f0-9-]{36}@invalid\.test$/);
+    assert.match(actor.email, /^calendar-return-(?:[a-f0-9-]{36}|pilot-synthetic)@invalid\.test$/);
     assert.match(actor.name, /^Calendar return synthetic (admin|commerciale) /);
     assert.match(actor.cookie, /^v1\.[A-Za-z0-9_-]{43}$/);
     tokens.add(actor.cookie); sessions.add(actor.sessionId);
@@ -78,8 +78,9 @@ function runtime(value: unknown, expected: string) {
     const key = item.slice(0, at); assert(!env.has(key)); env.set(key, item.slice(at + 1));
   }
   assert.equal(env.get('INTERNAL_SESSION_MODE'), 'registry');
-  assert.equal(env.get('GOOGLE_CALENDAR_INTEGRATION_MODE'), 'disabled');
-  assert.equal(env.get('FEATURE_INTEGRATIONS_ENABLED'), 'false');
+  assert.equal(env.get('GOOGLE_CALENDAR_INTEGRATION_MODE'), 'enabled');
+  assert.equal(env.get('FEATURE_INTEGRATIONS_ENABLED'), 'true');
+  for (const [key, value] of Object.entries(syntheticCalendarEnvironment())) assert.equal(env.get(key), value);
   for (const gate of ['WORKFLOW_NATIVE_PREPARATION_MODE', 'WORKFLOW_SERVICE_EXECUTION_MODE', 'WORKFLOW_MARKETING_WITHDRAWAL_MODE']) {
     assert.equal(env.get(gate), 'disabled');
   }
@@ -87,6 +88,19 @@ function runtime(value: unknown, expected: string) {
   assert.equal(env.get('AUTH_SECRET'), process.env.AUTH_SECRET);
   assert.equal(env.get('AUTH_COOKIE_NAME'), process.env.AUTH_COOKIE_NAME);
   return expected;
+}
+function syntheticCalendarEnvironment() {
+  return { GOOGLE_CALENDAR_PILOT_USER_ID: 'calendar-return-pilot-synthetic',
+    CALENDAR_SETTER_USER_ID: 'calendar-return-setter-synthetic',
+    GOOGLE_CALENDAR_OAUTH_CLIENT_ID: 'synthetic-calendar-return-client',
+    GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET: 'synthetic-calendar-return-secret',
+    GOOGLE_CALENDAR_OAUTH_REDIRECT_URI: process.env.PRACTICE_READINESS_BROWSER_ORIGIN + '/settings/integrations/google-calendar/callback',
+    GOOGLE_CALENDAR_TOKEN_KEY: Buffer.alloc(32).toString('base64') };
+}
+async function calendarState(db: PrismaClient) {
+  return digest(await Promise.all([db.personalCalendar.findMany({ orderBy: { id: 'asc' } }),
+    db.googleCalendarCredential.findMany({ orderBy: { userId: 'asc' } }),
+    db.googleCalendarOAuthState.findMany({ orderBy: { stateHash: 'asc' } })]));
 }
 async function stdinJson() {
   const chunks: Buffer[] = []; let bytes = 0;
@@ -120,6 +134,7 @@ async function verifyState(db: PrismaClient, value: PrivateState) {
   }
   assert.equal(await ledger(db), value.ledgerSha256, 'Migration ledger changed during return');
   assert.equal(await sessions(db), value.sessionsSha256, 'Live session, revocation, expiry or user epoch changed during return');
+  assert.equal(await calendarState(db), value.calendarSha256, 'Calendar configuration, encrypted credentials or OAuth attempts changed during return');
 }
 async function prepare(db: PrismaClient) {
   const { createRegistryLoginSession, REGISTRY_ACTIVATION_ENTITY, REGISTRY_ACTIVATION_RECEIPT } = await import('../../src/lib/internal-session-registry');
@@ -127,7 +142,8 @@ async function prepare(db: PrismaClient) {
   assert.equal(await db.auditLog.count({ where: { entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry' } }), 0);
   const actors: Actor[] = [];
   for (const role of ['admin', 'commerciale'] as const) {
-    const id = 'calendar-return-' + randomUUID(), name = `Calendar return synthetic ${role} ${randomUUID()}`;
+    const id = role === 'commerciale' ? 'calendar-return-pilot-synthetic' : 'calendar-return-' + randomUUID(),
+      name = `Calendar return synthetic ${role} ${randomUUID()}`;
     await db.user.create({ data: { id, name, email: id + '@invalid.test', role, active: true, passwordHash: 'UNUSABLE-SYNTHETIC-NO-LOGIN' } });
     const token = createRegistrySessionToken();
     const session = await createRegistryLoginSession(db, { userId: id, tokenDigest: await digestRegistrySessionToken(token.bytes) });
@@ -135,13 +151,24 @@ async function prepare(db: PrismaClient) {
   }
   await db.auditLog.create({ data: { actorId: actors[0].userId, event: REGISTRY_ACTIVATION_RECEIPT,
     entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry', after: { enabled: true, version: 1, mode: 'registry', synthetic: true } } });
+  const pilot = actors[1], { encryptCalendarSecret } = await import('../../src/lib/google-calendar-oauth'), key = Buffer.alloc(32);
+  // Deliberately unusable synthetic credentials; no provider request or event.
+  // LOCAL prevents a read-only page from attempting a live availability call.
+  await db.personalCalendar.create({ data: { userId: pilot.userId, mode: 'LOCAL', availability: [] } });
+  await db.googleCalendarCredential.create({ data: { userId: pilot.userId, googleSubject: 'SYNTHETIC_RETURN_SUBJECT',
+    accessTokenCiphertext: encryptCalendarSecret('SYNTHETIC_RETURN_ACCESS', 'access:' + pilot.userId, key),
+    refreshTokenCiphertext: encryptCalendarSecret('SYNTHETIC_RETURN_REFRESH', 'refresh:' + pilot.userId, key),
+    expiresAt: new Date(Date.now() + 3600_000), scopes: 'openid' } });
+  await db.googleCalendarOAuthState.create({ data: { userId: pilot.userId, sessionId: pilot.sessionId,
+    stateHash: digest(randomUUID()), expiresAt: new Date(Date.now() + 600_000),
+    verifierCiphertext: encryptCalendarSecret('SYNTHETIC_RETURN_VERIFIER', 'state:' + pilot.userId + ':' + pilot.sessionId, key) } });
   const value: PrivateState = { protocol: 'CALENDAR_RETURN_PRIVATE_V1', actors,
-    ledgerSha256: await ledger(db), sessionsSha256: await sessions(db) };
+    ledgerSha256: await ledger(db), sessionsSha256: await sessions(db), calendarSha256: await calendarState(db) };
   privateWrite(fixturePath(), value); await verifyState(db, value);
 }
 async function probe(db: PrismaClient, phase: Phase) {
   assert(phases.includes(phase)); const value = state(); await verifyState(db, value);
-  const imageId = runtime(await stdinJson(), phase === 'pr263-return' ? recovery.imageId : process.env.CALENDAR_RETURN_CANDIDATE_IMAGE_ID!);
+  const imageId = runtime(await stdinJson(), phase === 'pr264-return' ? recovery.imageId : process.env.CALENDAR_RETURN_CANDIDATE_IMAGE_ID!);
   const origin = new URL(process.env.PRACTICE_READINESS_BROWSER_ORIGIN!);
   assert.equal(origin.protocol, 'https:'); assert.equal(origin.hostname, '127.0.0.1'); assert.equal(origin.port, '13000');
   assert.equal(origin.username, ''); assert.equal(origin.password, ''); assert.equal(origin.pathname, '/');
@@ -165,7 +192,7 @@ async function probe(db: PrismaClient, phase: Phase) {
     const actor = value.actors[1]; assert(actor.name.startsWith('Calendar return synthetic commerciale '));
     const context = await browser.newContext();
     await context.addCookies([{ name: process.env.AUTH_COOKIE_NAME!, value: actor.cookie,
-      url: origin.toString(), httpOnly: true, secure: true, sameSite: 'Lax' }]);
+      url: origin.toString(), httpOnly: true, secure: true, sameSite: 'Strict' }]);
     const page = await context.newPage();
     for (const path of deniedPaths) {
       await page.goto(new URL(path, origin).toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -180,7 +207,7 @@ async function probe(db: PrismaClient, phase: Phase) {
   const databaseId = process.env.CALENDAR_RETURN_DATABASE_ID!; hash64(databaseId);
   const databaseStarted = process.env.CALENDAR_RETURN_DATABASE_STARTED!; assert(Number.isFinite(Date.parse(databaseStarted)));
   const proof: PhaseProof = { phase, imageId, authenticatedRequests: 2, ledgerSha256: value.ledgerSha256,
-    sessionsSha256: value.sessionsSha256, calendarOff: true, serviceGatesOff: true, sameAuthSecret: true,
+    sessionsSha256: value.sessionsSha256, calendarPilotEnabled: true, calendarSha256: value.calendarSha256, serviceGatesOff: true, sameAuthSecret: true,
     documentSha256, databaseId, databaseStarted, deniedPaths, denialDestination: '/dashboard', sameCookieAfterDenials: true };
   privateWrite(fixturePath() + '.' + phase + '.json', proof);
 }
@@ -204,7 +231,8 @@ function finish(path: string) {
     const row = results[index]; assert.equal(row.phase, phases[index]); assert.equal(row.authenticatedRequests, 2);
     assert.equal(row.imageId, index === 1 ? recovery.imageId : process.env.CALENDAR_RETURN_CANDIDATE_IMAGE_ID);
     assert.equal(row.ledgerSha256, current.ledgerSha256); assert.equal(row.sessionsSha256, current.sessionsSha256);
-    assert.equal(row.calendarOff, true); assert.equal(row.serviceGatesOff, true); assert.equal(row.sameAuthSecret, true);
+    assert.equal(row.calendarPilotEnabled, true); assert.equal(row.calendarSha256, current.calendarSha256);
+    assert.equal(row.serviceGatesOff, true); assert.equal(row.sameAuthSecret, true);
     assert.deepEqual(row.deniedPaths, deniedPaths); assert.equal(row.denialDestination, '/dashboard'); assert.equal(row.sameCookieAfterDenials, true);
     for (const key of ['documentSha256', 'databaseId', 'databaseStarted'] as const) assert.equal(row[key], results[0][key]);
   }
@@ -215,14 +243,15 @@ function finish(path: string) {
   for (const [key, value] of Object.entries(recovery)) assert.equal(artifact[key], value);
   assert.equal(basename(path), 'calendar-return-summary.json');
   assert.equal(resolve(path), join(realpathSync(process.env.R05_EVIDENCE_DIR!), 'calendar-return-summary.json'));
-  privateWrite(path, { protocol: 'FAI_CALENDAR_PERIMETER_RETURN78_V1', status: 'PASS',
+  privateWrite(path, { protocol: 'FAI_CALENDAR_CALLBACK_RETURN78_V1', status: 'PASS',
     candidateCommit, candidateTree, candidateImageId: results[0].imageId,
     recoveryCommit: recovery.commit, recoveryTree: recovery.tree, recoveryImageId: recovery.imageId,
     candidateImage: results[0].imageId, returnCommit: recovery.commit, returnImage: recovery.imageId,
     schema: 78, liveSessionsPreserved: true, ledgerUnchanged: true, databaseNotRestarted: true, documentsPreserved: true,
-    calendarOffDuringReturn: true, serviceGatesOff: true, sameAuthSecret: true, sameCookiesVerified: true,
+    calendarPilotEnabledThroughout: true, encryptedCredentialsPreserved: true, oauthAttemptsPreserved: true,
+    calendarSha256: current.calendarSha256, serviceGatesOff: true, sameAuthSecret: true, sameCookiesVerified: true,
     executedImages: true, documentsUnchanged: true, registryContinuityPreserved: true, existingSessionsPreserved: true,
-    calendarOffOnReturn: true, roleDenialsPreserved: true, roleDenialPaths: deniedPaths,
+    calendarConfigurationUnchanged: true, roleDenialsPreserved: true, roleDenialPaths: deniedPaths,
     roleDenialDestination: '/dashboard', roleDenialNavigations: 6,
     authenticatedRequests: 6, dedicatedLiveSessions: 2, sessionsSha256: current.sessionsSha256,
     ledgerSha256: current.ledgerSha256, documentSha256: results[0].documentSha256,
@@ -241,12 +270,16 @@ function selfTest() {
   const previousSecret = process.env.AUTH_SECRET, previousCookie = process.env.AUTH_COOKIE_NAME;
   try {
     process.env.AUTH_SECRET = 'PUBLIC-SYNTHETIC-SELF-TEST-NOT-A-CREDENTIAL'; process.env.AUTH_COOKIE_NAME = 'synthetic_cookie';
-    const env = ['INTERNAL_SESSION_MODE=registry', 'GOOGLE_CALENDAR_INTEGRATION_MODE=disabled', 'FEATURE_INTEGRATIONS_ENABLED=false',
+    const env = ['INTERNAL_SESSION_MODE=registry', 'GOOGLE_CALENDAR_INTEGRATION_MODE=enabled', 'FEATURE_INTEGRATIONS_ENABLED=true',
       'WORKFLOW_NATIVE_PREPARATION_MODE=disabled', 'WORKFLOW_SERVICE_EXECUTION_MODE=disabled', 'WORKFLOW_MARKETING_WITHDRAWAL_MODE=disabled',
-      'AUTH_SECRET=' + process.env.AUTH_SECRET, 'AUTH_COOKIE_NAME=synthetic_cookie'];
+      'AUTH_SECRET=' + process.env.AUTH_SECRET, 'AUTH_COOKIE_NAME=synthetic_cookie',
+      ...Object.entries(syntheticCalendarEnvironment()).map(([key, value]) => key + '=' + value)];
     runtime({ imageId: recovery.imageId, environment: env }, recovery.imageId); count++;
     for (const key of ['GOOGLE_CALENDAR_INTEGRATION_MODE', 'WORKFLOW_NATIVE_PREPARATION_MODE', 'WORKFLOW_SERVICE_EXECUTION_MODE', 'WORKFLOW_MARKETING_WITHDRAWAL_MODE', 'AUTH_SECRET']) {
-      assert.throws(() => runtime({ imageId: recovery.imageId, environment: env.map(value => value.startsWith(key + '=') ? key + '=enabled' : value) }, recovery.imageId)); count++;
+      assert.throws(() => runtime({ imageId: recovery.imageId, environment: env.map(value => value.startsWith(key + '=') ? key + '=unexpected' : value) }, recovery.imageId)); count++;
+    }
+    for (const key of Object.keys(syntheticCalendarEnvironment())) {
+      assert.throws(() => runtime({ imageId: recovery.imageId, environment: env.map(value => value.startsWith(key + '=') ? key + '=unexpected' : value) }, recovery.imageId)); count++;
     }
     assert.throws(() => runtime({ imageId: recovery.imageId, environment: [...env, env[0]] }, recovery.imageId)); count++;
     assert.throws(() => runtime({ imageId: 'sha256:' + '0'.repeat(64), environment: env }, recovery.imageId)); count++;
